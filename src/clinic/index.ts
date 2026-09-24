@@ -167,11 +167,13 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
   const offInput = attachInput(host, rig, tap, (x, y) => { hover = { x, y }; });
 
   // ---------------------------------------------------------------- door
+  // A soft bell for arrivals, at most once every 8 s so a busy morning does not ring nonstop.
+  let lastChime = -Infinity;
   actors.door = {
     x: 0, z: 0,
     onCross(entering, first) {
       office.openDoor(now);
-      if (first && entering) audio.play('door_chime', { volume: 0.7 });
+      if (first && entering && now - lastChime > 8) { lastChime = now; audio.play('door_chime', { volume: 0.4 }); }
     },
   };
 
@@ -242,6 +244,10 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
         overlays.mood(p.id, a.x, y + 0.05, a.z, 'angry');
       } else if ((p.state === 'toDesk' || p.state === 'checkout' || p.state === 'exiting') && p.quality !== null) {
         overlays.mood(p.id, a.x, y + 0.05, a.z, (p.mood ?? 'ok') as Mood);
+      }
+      // case badge (DESIGN 5.5): a dot over any seated patient, waiting or in the chair
+      if (a.settle > 0.6 && (a.settlePose === 'sit' || a.settlePose === 'recline')) {
+        overlays.badge(p.id, a.x, y + 0.42, a.z, p.caseType);
       }
     }
     // name tags for the selected operatory
