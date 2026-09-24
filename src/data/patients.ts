@@ -101,9 +101,16 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     firstNames: ['Linda', 'Barb', 'Marty', 'Fran', 'Stu', 'Deb'],
     lines: ['So anyway, my neighbour...', 'Did I tell you about my cruise?', 'Mmhm mm hmm mmm.', 'Wait, one more thing.'],
   },
+  pirate: {
+    id: 'pirate', label: 'Pirate', blurb: 'Sailed in on the evening tide. Smells of rum and barnacles.',
+    dirt: D(0.5, 0.7, 6, 1.4, 2), traits: T(80, 0.9), tipRate: 0.3, patience: 40, difficulty: 1.4, reviewWeight: 2, whitening: 0.05,
+    missing: [3, 6], deepChance: 0, weight: { t1: 2, t2: 3, t3: 3, t4: 4 },
+    firstNames: ['Captain Plankbeard', 'Salty Sue', 'One-Eyed Morgan', 'Barnacle Bill', 'Peg-Leg Petra', 'Cutlass Carl'],
+    lines: ['Arr, mind me gold tooth!', 'Seven seas and never a floss.', 'Found a doubloon yet, matey?', 'Yo ho... ow.'],
+  },
 };
 
-export const PATIENT_ARCHETYPES: ArchetypeId[] = ['regular', 'coffee', 'kid', 'nervous', 'gagger', 'smoker', 'senior', 'influencer', 'athlete', 'chatty'];
+export const PATIENT_ARCHETYPES: ArchetypeId[] = ['regular', 'coffee', 'kid', 'nervous', 'gagger', 'smoker', 'senior', 'influencer', 'athlete', 'chatty', 'pirate'];
 
 export const LAST_NAMES = ['Molar', 'Brushwell', 'Gumm', 'Enamel', 'Crowne', 'Pearl', 'Flossman', 'Bright', 'Canino', 'Plaque', 'Smiley', 'Chompers', 'Toothaker', 'Minty', 'Bicuspid', 'Rinse', 'Nashley', 'Grinwald'];
 

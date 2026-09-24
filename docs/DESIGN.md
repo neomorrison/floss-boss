@@ -60,7 +60,8 @@ Hygiene school practical. Two guided cleanings on "Dennis the Dummy" (a training
 You work at **Bright Smiles Dental**, owned by **Dr. Ruth Canal**. The employer clinic is a T2 layout with 4 operatories; 3 are run by NPC colleagues (display only, their revenue is not yours), one is **your chair**.
 
 - Shift size: 4 patients (level 1 to 3), 5 (level 4 to 6), 6 (level 7+). Appointment i at `510 + i * floor(450 / n)` minutes.
-- A patient in your chair waits for you. Start it hands-on (full pay + tips) or **Quick clean** (auto quality, no tip, half XP, 60 game minutes of clock).
+- A patient in your chair waits for you. Start it hands-on (full pay + tips), or **Quick clean** once you hold Bronze mastery of that patient's case (5.9: 50% wage, no tip, no XP, 60 game minutes of clock).
+- Every patient brings a case (5.5), 0 to 2 twists and a bonus (5.6). The shift avoids repeating a case type back to back, and a new case type is introduced with the "New case" card.
 - Pay per patient: `rate(title) * (0.4 + 0.8 * quality) + tip`. rate: Staff Hygienist $75, Senior Hygienist $95 (level 4), Lead Hygienist $120 (level 7).
 - Graduation: Dr. Canal pays a $250 signing bonus (enough for Floss Picks right away).
 - Tip: `fee * tipRate(archetype) * max(0, (quality - 0.6) / 0.4) * (1 + 0.5 * speedBonus) * tipMult(skills)`, `fee = 120`, `speedBonus = clamp((par - seconds) / par, 0, 1)`.
@@ -110,56 +111,99 @@ Slots: `scaler`, `polisher`, `floss`, `suction`, `rinse`. Tier 1 is owned from t
 
 Extras (one-off): Magnifying Loupes $800 (camera zoom x1.25, dirt outline on hover), LED Headlamp $400 (brighter light, plaque easier to see), Disclosing Solution $250 (toggle: plaque dyed bright magenta), Patient Headphones $500 (comfort drain -25%). Consumable: Numbing Gel $15 each (gum damage -50% for one patient). While the toggle is on and you have gel, one is used on each hands-on patient (starting the same patient again does not use a second).
 
-## 5. The hands-on clean (`src/clean`)
+## 5. The hands-on clean (`src/clean`): cases, not chores
 
-### 5.1 Mouth
-28 teeth (no wisdom teeth), upper arch indices 0 to 13 left to right as seen by the player, lower 14 to 27. Types per arch position: `M M P P C I I I I C P P M M` (molar, premolar, canine, incisor). Teeth sit on the shared arch curve in `src/core/mouth.ts`. Missing teeth leave a gap (seniors).
+Playtest verdict on v1 (2026-09-24): painting dirt off 28 teeth was tedious, a perfect tooth was out of reach because plaque hid where no camera could see, rinse had no job, floss was a swipe, and every patient felt the same. v2 turns each patient into a **case**: a short checklist of clear objectives on a handful of marked teeth, with its own mechanic, plus a twist and a bonus. Satisfaction comes from frequent completions (chunk pops, tooth snaps, checklist ticks), a finishing ritual (polish, rinse, suction) and a before/after reveal.
 
-Camera looks into a wide-open cartoon mouth framed by lips. Views: Front, Left, Right, Upper, Lower (buttons + swipe/drag on empty space to orbit within limits, pinch/wheel to zoom). A mini-map of 28 teeth colored by dirt lets you tap a tooth to focus it.
+### 5.1 Mouth and camera
+28 teeth (no wisdom teeth), upper arch indices 0 to 13 left to right as seen by the player, lower 14 to 27. Types per arch position: `M M P P C I I I I C P P M M`. Teeth sit on the arch curve in `src/core/mouth.ts`. Missing teeth leave a gap.
+Views: Front, Left, Right, Upper, Lower, orbit by dragging the lips/cheeks, two fingers or the right mouse button, pinch/wheel zoom. Tapping a tooth on the mini-map frames it without the cheek in the way (the back molars use the side view at distance). The camera never enters the lip plane. On touch the tool works 40 px above the fingertip with a small reticle so the finger does not hide the work.
 
-### 5.2 Dirt model (pure logic in `src/clean/dirt.ts`)
-Each tooth has a grid in tooth-local cylindrical space: `u` around the tooth (0.5 = facing out toward the lips/cheek, 0 and 1 = the back, tongue side), `v` from gumline (0) to biting edge (1). Grid `DIRT_GU x DIRT_GV = 32 x 24`. Layers per cell (0..1): `plaque`, `stain`, `polish`. Only cells with `u` in [0.18, 0.82] or `v >= 0.86` (the biting surface of premolars and molars) can hold dirt: the reachable region.
-
-Spawn (seeded, from `CleanSetup.dirt`):
-- Plaque: soft yellow film, concentrated near the gumline (`v < 0.35`) and the sides (`u` near 0.22 and 0.78). Total coverage fraction ~ `dirt.plaque * 0.45`.
-- Stain: brown blotches on the outward face (`u` in 0.35..0.65) and molar biting surfaces. Coverage ~ `dirt.stain * 0.35`. Coffee and smokers get front-tooth bands.
-- Tartar: `dirt.tartarCount` discrete deposits `{tooth, u, v, size, hp}` at the gumline (`v` 0.03..0.25), weighted toward lower front incisors and upper molars. `hp = size * TARTAR_HP (1.0)`.
-- Debris: `dirt.debrisCount` food bits lodged in gaps between neighbouring teeth `{gap, kind, hp}`. kinds: popcorn, spinach, seed, candy.
-- Loose bits: created when tartar pops (1 to 3 each); they drop onto the tongue/lower arch and count as mess until rinsed and suctioned.
-- Water level 0..1: rises from ultrasonic, air polisher, water flosser and rinse; drained by suction. Above 0.6 the lower teeth are harder to see and comfort drains.
+### 5.2 Scope: marked problem teeth
+`CleanSetup.problemTeeth` lists the teeth that carry the case's dirt (count from `problemToothCount(level)` in `src/data/cases.ts`: 4 at level 1 up to 9). They are outlined on the mini-map and get a soft glow ring in the mouth until snapped. Every other present tooth only shows faint cosmetic dirt and is not scored.
+- Dirt spawns only where a view can see it: the outward face (`u` 0.3..0.7) and the biting surface of premolars and molars. Nothing on hidden sides.
+- Early mouths are light: level 1 is about 1 tartar chunk per problem tooth, plaque bands on half of them, stains on two. Amounts grow with level (DESIGN 6 difficulty) and case.
+- **Tooth snap**: when a problem tooth has no tartar left and its remaining plaque and stain are at most 15% of what it started with, it snaps clean: leftover specks fade, a sparkle ring, and `tooth_done` plays at a pitch that rises with each snapped tooth this clean. The mini-map chip turns white with a check. Snapping is what "perfect" means: no pixel hunting.
 
 ### 5.3 Tools
-Pointer ray hits a tooth mesh: the hit gives `(tooth, u, v)` via the mesh UV (cylindrical UVs computed at load time from vertex positions). Tools act inside an elliptical brush in (u, v).
-- **Scaler** (hand tiers): damage is proportional to **stroke distance** (you must scrape, not hold). Tartar: `hp -= tartarPower * strokeLen * 6`. Plaque: `-= plaquePower * strokeLen * 3` per cell. Each hit spawns flakes, a crunch sound with pitch jitter and a small hitch. At `hp <= 0` the chunk pops: flies off with spin and gravity, crack sound, sparkle, loose bits, combo +1.
-- **Ultrasonic** (scaler tiers 4 and 5): time based while touching; buzz loop; vibrates the deposit; water rises.
-- **Polisher**: time based, slow spin even when still, faster when moving. Removes plaque and stain; raises `polish` only on cells whose plaque and stain are below 0.15. Polished cells sparkle.
-- **Floss**: drag across a gap (a swipe that crosses the gap midpoint on screen) removes one debris hp per swipe times floss power. Also removes interproximal plaque. Popped debris flies out.
-- **Suction**: hold anywhere in the mouth: drains water, collects loose bits within its radius (slurp).
-- **Rinse**: hold to spray: water rises, loose bits in the spray get washed into the water (they then vanish when suctioned).
-- **Reassure** button (12 s cooldown): `comfort += 12 * reassureMult`.
+The pointer ray hits a tooth; the hit gives `(tooth, u, v)`. Tools act in a brush around it.
+- **Scaler** (hand tiers): damage by stroke distance (scrape, do not hold), capped stroke speed. Deposits crack in visible stages (hairline cracks, bigger cracks, pop). Aim assist: on the gum within 0.32 units of a deposit, the scaler scrapes the deposit instead of the gum. A deposit takes about 0.8 s with the Sickle Scaler and 0.4 s with the Titanium Scaler.
+- **Ultrasonic** (tiers 4, 5): time based while held, always faster than every hand scaler (Ultrasonic about 0.3 s per deposit, Piezo about 0.2 s). Buzz, spray, water rises.
+- **Polisher**: time based, faster when moving (movement speed decays when the pointer stops). Removes plaque and stain, raises shine. **Wrap assist**: holding the cup on one tooth also polishes a band around the whole crown at the same height (40% rate, rising to 70% after 1 s on the same tooth), shown as a soft ring, so hidden sides never block a snap. Polishing leaves gritty pink **prophy paste** on the cells it touched.
+- **Floss** (string, picks): see 5.4.
+- **Water flosser** (floss tier 3): point at a gap or bracket and hold; no hooking.
+- **Rinse**: hold to spray a wide cone: washes paste off teeth (the big shine reveal), floats loose bits and popped debris off the tongue into the water, raises the water.
+- **Suction**: hold: drains water and removes only floating bits. Bits resting on the tongue must be rinsed first. So the finish is always scrape, polish, rinse, suction.
+- **Case tools** appear in the tool bar only in their case: **Gel brush** (whitening gel, sealants: paints the outward face or biting surface of the tooth under it, with the same wrap assist) and **UV lamp** (whitening cure).
+- **Reassure** (in the sleepy twist the button reads **Nudge**): +8 comfort, 18 s cooldown.
+- Gum slip: scaler or ultrasonic on gum tissue for 0.15 s: comfort `-8 * gumRisk * gumSensitivity * (1 - gumSkill)` per second, red flash, wince, "Ow".
 
-Gum contact: when the active tool is scaler/ultrasonic and the ray hits gum tissue (or a tooth cell with `v < 0.02`) for 0.15 s, comfort drops `8 * gumRisk * gumSensitivity * (1 - gumSkill)` per second of contact, gums flash red, the patient winces, "Ow" bubble.
+### 5.4 Floss
+1. With floss selected, gaps that matter (debris, objectives) show glowing markers.
+2. Press within 0.45 units of a gap to **hook** the floss into it. The string is drawn between two hands on the outward side and follows the gap's axis (the teeth's long axis, projected to the screen). On braces the floss must be **threaded** first: hold still at the gap or bracket for 0.6 s (a ring fills).
+3. Pointer motion is split into along-axis and cross-axis parts. Cross-axis motion is blocked: the string presses against the tooth, bows, creaks (`floss_creak`) and does not move. You cannot drag floss through a tooth.
+4. Pushing toward the gum builds **contact pressure**; the string bows tighter. At full pressure it **snaps through** the contact point (`floss_thwip`, a small camera nudge).
+5. Below the contact, **saw**: each reversal of along-axis direction with enough travel is a stroke. Strokes remove debris hp (times floss power) and the plaque between those teeth; debris pops out with a spin.
+6. Pull back past the contact to **zip** out (`floss_zip`), or release to unhook.
 
-### 5.4 Comfort, gag, fidget, chat
-- Comfort 0..100, starts at `traits.comfortStart`. Passive drain `0.35 * comfortDrain * (1 - headphones 0.25) * (1 - smallTalk 0.2)` per second. Water level > 0.6: `-3/s`.
-- Gag (gagger trait): continuous work on a molar for more than `2.5 s (+2 with Gag Guru)`: gag event, jaws close for 1.2 s (tools disabled, camera shake), comfort -15.
-- Fidget (kids): the mouth drifts slightly (small sine sway), amplitude `traits.fidget`.
-- Chatty: every 18 to 30 s the patient "has a question": jaws close for 2 s, speech bubble with a line, comfort +3.
-- Comfort 0: the patient walks out. Result `quit = 'walkout'`, quality capped at 0.25.
-- Portrait in the HUD shows happy (comfort > 60), neutral (30..60) or pain (< 30 or just hurt).
+### 5.5 Cases (`CleanSetup.caseType`, catalog in `src/data/cases.ts`)
+Each case builds a checklist of 3 to 5 objectives (`CleanObjective { id, label, progress, done }`) shown in the HUD, ticking with `check`. Unlock levels and odds per archetype are in `CASES`.
+- **Routine**: Pop the tartar (n). Clear plaque on the marked teeth. Polish out the stains. Floss out the food (n, if any). Rinse and suction.
+- **Sugar Bug Attack** (candy): cartoon sugar bugs (`sugar_bug` model) crawl over plaque on problem teeth; every 6 s a live bug spreads a new plaque patch around itself; any scaler or polisher touch squashes one (`squish`, a small goo splat) and bugs sidle away when the tool comes within 0.6 units. Objectives: Squash the sugar bugs (n). Floss out the gummies (n). Clear plaque. From level 3: Seal the molars (4) with the gel brush on the biting surfaces. Rinse and suction.
+- **Whitening**: enamel starts at `startShade` (a shade guide from 1 brightest to 16 darkest). Polish the stains on the front teeth. Paint gel on the 12 front teeth (arch positions 4 to 9 of each arch). Cure with the UV lamp: each gel-coated tooth under the lamp brightens one shade per 1.2 s (`shade_tick`), the shade meter climbs toward `targetShade`; more than 4 s nonstop on one tooth zings (comfort -5, "Ooh, cold"), so keep the lamp moving. Rinse off the gel and suction. `shadeGain` = shades gained. Owner phase: needs the Whitening Lamp in that operatory, otherwise the visit is routine.
+- **Braces Check**: brackets (`bracket` model) and a wire on arch positions 2 to 11. Cells under a bracket are not reachable; polisher or scaler on a bracket clinks and does nothing there. Food wedged under the wire at brackets: thread the floss at the bracket (hold 0.6 s), then saw; or the water flosser. Objectives: Clear the food from the brackets (n). Clear plaque around the brackets. Pop the tartar. Rinse and suction.
+- **Pirate Visit** (pirate archetype, rare): 3 to 6 missing teeth. One incisor or canine is gold (`goldTooth`): Buff the gold tooth (polish to full shine, `gold_ting` and a star glint). Barnacles (`tartar_barnacle`, 2x hp, shell crack stages, `shell_crack`). Seaweed strands (`debris_seaweed`) in gaps: floss them out. `treasure`: a doubloon (`doubloon`) is wedged in one molar gap, only visible from a side view; floss it out for a coin spin and `coin_clink` (the treasure bonus). Rinse and suction.
+- **Deep Cleaning**: `pockets` stretches of angry red, puffy gumline on problem teeth. Hold the scaler on a pocket for 0.8 s to open it (`pocket_open`): the gum there darkens and hidden tartar slides up into view. Scrape it out; once a pocket's tartar is gone the gum heals from red to healthy pink with a sparkle. Comfort drains 1.5x (numbing gel matters). Objectives: Open the gum pockets (n). Scrape out the hidden tartar (n). Pop the visible tartar. Rinse and suction. Owner phase: needs Deep Cleaning Certification, otherwise routine.
+- **"New case"**: the first time a case type appears (`firstOfCase`) the intro card shows its `tip` and waits for a tap; afterwards the intro shows the checklist for about 2 s and dismisses itself (tap to skip).
 
-### 5.5 Scoring (`scoreClean` in `src/clean/dirt.ts`)
-Fractions removed (0..1): `tartar` (hp removed / total hp), `plaque`, `stain`, `debris`, `polish` (mean polish over the reachable region of present teeth), `mess` (loose bits left / bits created, blended with final water level).
+**Spawn contract (sim fills, clean interprets; starting values, L = player level).** `DirtProfile` in v2: `tartarCount` = visible deposits spread over the problem teeth, `tartarSize` = mean hp multiplier, `plaque` = share of problem teeth with a plaque band (0..1, band thickness grows with it), `stain` = share of problem teeth with stains, `debrisCount` = food bits in gaps beside problem teeth (braces: at brackets). Case extras live in `special`.
+
+| case | problem teeth | tartar n x size | plaque | stain | debris | special |
+|---|---|---|---|---|---|---|
+| routine | problemToothCount(L) | round(problem x (1 + 0.1(L-1))), cap 2x; size 1.0 to 1.3 | 0.5 + 0.05(L-1), cap 0.9 | archetype stain x 0.6 | 1 + L/3 | |
+| candy | problemToothCount(L) | 2 x 0.7 | 0.7 | 0.1 | 2 to 4 (gummies) | sugarBugs 3 + floor(L/2), max 8; sealants 4 from L3 |
+| whitening | 4 to 6 front teeth | 2 x 1.0 | 0.3 | 0.9 | 0 | startShade 11 to 15 (coffee, smoker darker), targetShade = max(1, start - 6 to 8) |
+| braces | problemToothCount(L) within positions 2..11 | 3 x 1.0 | 0.7 | 0.2 | 3 to 5 (at brackets) | braces true |
+| pirate | problemToothCount(L) | 2 x 1.0 | 0.4 | 0.6 | 0 | barnacles 3 to 5, seaweed 2 to 3, goldTooth a present incisor/canine, treasure 70% of visits |
+| deep | problemToothCount(L) | 3 to 5 x 1.2 | 0.6 | 0.3 | 1 | pockets 2 to 4 (each hides 1 to 2 deposits) |
+
+### 5.6 Twists and bonus
+`twists` (0 to 2; see `TWISTS` for unlock levels) are shown on the chair card and the intro:
+- **Chatty**: every 18 to 30 s the jaw closes for 2 s with a speech bubble (+3 comfort).
+- **Fidgety**: the mouth sways; amplitude reduced by Kid Whisperer.
+- **Gag Reflex**: more than 2.5 s (+2 with Gag Guru) of nonstop work on a molar triggers a gag (jaw snaps shut 1.2 s, comfort -15). A warning builds first: past 60% of the limit the portrait turns uneasy, "Hng...", and a ring pulses around it.
+- **Sensitive Gums**: gum slips cost double; gums near problem teeth glow faintly red.
+- **Hiccups**: every 10 to 16 s a "hic" bubble appears, 0.8 s later the mouth jolts; a scaler stroke touching the gum during the jolt counts as a slip. Lift the tool when you see "hic".
+- **Sleepy**: every 20 to 30 s the patient dozes and the jaw closes over 4 s (snore). Past 60% closed the lower arch cannot be reached. Nudge wakes them.
+
+`bonus` (one per patient, optional, see `BONUSES`): No gum slips, Finish under par, Pop a 4-chunk combo, Snap every marked tooth, Find the doubloon (pirate only). Met: bonus star animation, tips +25%.
+
+### 5.7 Comfort
+Comfort 0..100 from `traits.comfortStart`. Passive drain `0.35 * comfortDrain * (headphones 0.75) * (small talk 0.8) * (deep 1.5)` per second; water above 0.6: -3/s. Reassure/Nudge +8 per 18 s cannot outpace a nervous patient forever. Comfort 0: walkout, quality capped at 0.25. Portrait: happy above 60, neutral 30..60, pain below 30 or just hurt, wow on a big pop or a tooth snap.
+
+### 5.8 Scoring
 ```
-clean   = 0.35*tartar + 0.25*plaque + 0.20*stain + 0.10*debris + 0.10*polish - 0.10*mess
-quality = clamp(0.82*clean + 0.18*(comfort/100), 0, 1)       (walkout: min(quality, 0.25))
+objective progress: each 0..1 (count objectives = done/total; area objectives = removed/initial on problem teeth,
+                    a snapped tooth counts as 1; "Rinse and suction" = 1 when paste, floating and resting bits are 0 and water < 0.1)
+clean   = mean(objective progress)
+quality = clamp(0.8*clean + 0.2*comfort/100, 0, 1)            (walkout: min(quality, 0.25))
 stars   = quality >= 0.92 ? 5 : >= 0.80 ? 4 : >= 0.65 ? 3 : >= 0.45 ? 2 : 1
-par     = (25 + 3.2*tartarCount*tartarSize + 30*plaque + 25*stain + 4*debrisCount) * parMult
+perfect = every objective done and the bonus met
+par     = (20 + 2.6*tartarHp + 5*problemTeeth + 4*debris + case extra) * parMult
+          case extra: whitening 25, candy 10, braces 15, pirate 20, deep 25
 ```
-The player presses **Done** whenever they like. A tooth that reaches zero dirt gets a sparkle and a ding; a perfect clean (clean >= 0.97) triggers the "Sparkling Smile" finale.
+The legacy fractions (`tartar`, `plaque`, `stain`, `debris`, `polish`, `mess`) are still reported for stats. **Done** below 80% clean asks "Finish at 62%?" (Keep cleaning, Finish). Done and Enter are ignored until the scene has loaded. The tutorial's last step is "Clean the rest, then press Done" and the Done pulse waits for 70%.
 
-### 5.6 Juice checklist
-Crunch with pitch jitter, chunk pop with spin and gravity, flake particles, combo counter ("Tartar x5"), tooth-clean ding and sparkle, polish shimmer, water ripple, slurp, portrait reactions, speech bubbles, screen hitch on big chunks (off with reduced motion), `navigator.vibrate(8)` where supported, final star count-up with coins flying to the cash counter.
+### 5.9 Mastery and Quick clean
+- Every hands-on clean of 3+ stars adds 1 to `player.mastery[caseType]`. Tiers at 3 / 10 / 25 (`MASTERY_TIERS`): Bronze unlocks **Quick clean** for that case type; Silver +10% hands-on pay on that case; Gold +20% tips on that case. A tier-up gets its own celebration on the result screen, and the Goals screen has a **Cases** tab with a badge per case.
+- **Quick clean** (employee phase: delegate the patient to a colleague) needs Bronze on that patient's case. It pays 50% of the wage part, no tip, **no XP**, and does not count for mastery, streaks or goals. Locked, the button shows "Bronze needed: 1/3".
+- Owner phase: your chair's autopilot keeps working (the team does the work), but earns no XP. Each hands-on clean you do as the owner adds +4% demand at that location the next day (max +20%), and that patient's review counts double ("The owner cleaned my teeth").
+
+### 5.10 Reward moments
+Before/after: the scene snapshots the Front view (small JPEG) right after loading and again at the end; the result screen shows a draggable before/after slider. Also: chunk pops with crack stages, tooth snap chime scale, checklist ticks, combo text, rinse reveal shine wave, gold glint, coin spin, shade meter, bonus star, mastery badge on tier-up.
+
+### 5.11 Juice checklist
+Crunch with pitch jitter, crack stages and pop with spin and gravity, flakes, sparkle, combo counter, tooth snap ring and rising chime, polish shimmer, paste smear then rinse reveal, water ripple, slurp, floss bow and snap, squish splat, lamp glow, portrait reactions, speech bubbles, hitch on big chunks (off with reduced motion), `navigator.vibrate(8)` where supported.
 
 ## 6. Patients (`src/data/patients.ts`)
 

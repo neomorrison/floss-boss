@@ -6,7 +6,14 @@
 
 export type ArchetypeId =
   | 'mannequin' | 'regular' | 'coffee' | 'kid' | 'nervous' | 'gagger'
-  | 'smoker' | 'senior' | 'influencer' | 'athlete' | 'chatty';
+  | 'smoker' | 'senior' | 'influencer' | 'athlete' | 'chatty' | 'pirate';
+
+/** What kind of job a patient brings (docs/DESIGN.md 5). Drives objectives, special mechanics and pay. */
+export type CaseType = 'routine' | 'whitening' | 'pirate' | 'candy' | 'braces' | 'deep';
+/** Per-patient complications layered on a case. */
+export type TwistId = 'chatty' | 'gagger' | 'fidget' | 'sensitive' | 'hiccups' | 'sleepy';
+/** Optional stretch goal per patient. */
+export type BonusId = 'noSlips' | 'fast' | 'combo' | 'spotless' | 'treasure';
 
 export type ServiceId = 'cleaning' | 'deep';
 export type AddonId = 'fluoride' | 'sealant' | 'xray' | 'whitening' | 'exam' | 'filling';
@@ -78,10 +85,30 @@ export interface CleanModifiers {
   gagDelay: number;        // seconds added, gag guru: 2
 }
 
+/** Case-specific content of a clean (zero / false / null when unused). */
+export interface CaseSpecial {
+  goldTooth: number | null;  // pirate: tooth index rendered in gold, to buff to a shine
+  braces: boolean;           // brackets + wire on the outward faces of arch positions 2..11
+  startShade: number;        // shade guide 1 (brightest) .. 16 (darkest); tints the enamel
+  targetShade: number;       // whitening: goal shade (0 when not whitening)
+  sugarBugs: number;         // candy: bugs to squash
+  sealants: number;          // candy: molars to seal
+  pockets: number;           // deep: gum pockets hiding tartar
+  treasure: boolean;         // pirate: a doubloon wedged in a molar gap
+  barnacles: number;         // pirate: tough barnacle deposits
+  seaweed: number;           // pirate: seaweed strands in gaps
+}
+
 export interface CleanSetup {
   seed: number;
   patientId: string;
   patient: { name: string; archetype: ArchetypeId; portrait: string };  // portrait = image key (see data/assets.ts portraitUrl)
+  caseType: CaseType;
+  twists: TwistId[];
+  bonus: BonusId | null;
+  problemTeeth: number[];   // teeth carrying the case's dirt; every other present tooth is near-clean and unscored
+  special: CaseSpecial;
+  firstOfCase: boolean;     // the player has never had this case type: show the "New case" explainer
   service: ServiceId;
   missingTeeth: number[];   // tooth indices 0..27
   dirt: DirtProfile;
@@ -105,8 +132,17 @@ export interface CleanResult {
   bestCombo: number;
   gumHits: number;
   gags: number;
-  perfect: boolean;    // clean >= 0.97
+  perfect: boolean;    // every objective done and the bonus met
+  caseType: CaseType;
+  objectives: CleanObjective[];
+  bonusMet: boolean;
+  treasure: boolean;   // pirate doubloon found
+  shadeGain: number;   // whitening: shade steps gained (0 otherwise)
+  before: string | null;  // small JPEG data URL of the Front view at the start (before/after slider)
+  after: string | null;
 }
+
+export interface CleanObjective { id: string; label: string; progress: number; done: boolean }
 
 // ------------------------------------------------------------------ clinic
 
@@ -140,6 +176,8 @@ export interface DayPatient {
   fee: number;                // total billed
   tip: number;
   isPlayerPatient: boolean;   // employee phase: patient for your chair
+  caseType: CaseType;
+  twists: TwistId[];
   mood: 'happy' | 'ok' | 'grumpy' | 'angry';
 }
 
@@ -280,6 +318,7 @@ export interface PlayerState {
   tools: Record<ToolSlot, number>;   // owned max tier per slot (you always use the best owned)
   extras: ExtraId[];
   numbingGel: number;          // consumable count
+  mastery: Partial<Record<CaseType, number>>;   // hands-on cleans of 3+ stars per case type (DESIGN 5.9)
   useGel: boolean;
   title: string;
 }
@@ -343,6 +382,8 @@ export interface HandsOnPayout {
   levelUps: number;
   addons: AddonId[];    // add-ons billed after the clean (owner)
   lines: string[];      // result screen flavour ("Dr. Canal is impressed")
+  treasure: number;     // pirate doubloon bonus paid
+  mastery: { caseType: CaseType; count: number; tier: 0 | 1 | 2 | 3; tierUp: boolean } | null;
 }
 
 export interface OfflineReport { hours: number; credit: number }

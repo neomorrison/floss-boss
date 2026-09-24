@@ -15,6 +15,8 @@ export const MOUTH_MODELS = [
   'gum_upper', 'gum_lower', 'tongue', 'mouth_frame',
   'tartar_a', 'tartar_b', 'tartar_c',
   'debris_popcorn', 'debris_spinach', 'debris_seed', 'debris_candy',
+  // cases (DESIGN 5): pirate barnacles, seaweed and doubloon, candy-kid sugar bugs, braces brackets
+  'tartar_barnacle', 'debris_seaweed', 'doubloon', 'sugar_bug', 'bracket',
 ] as const;
 
 // Tools shown in the clean scene and as shop thumbnails (art-mouth builder).
@@ -22,7 +24,7 @@ export const TOOL_MODELS = [
   'tool_scaler', 'tool_curette', 'tool_titanium', 'tool_ultrasonic', 'tool_piezo',
   'tool_polisher', 'tool_cordless', 'tool_airpolisher',
   'tool_floss', 'tool_flosspick', 'tool_waterflosser',
-  'tool_suction', 'tool_hve', 'tool_syringe',
+  'tool_suction', 'tool_hve', 'tool_syringe', 'tool_gelbrush', 'tool_uvlamp',
   'extra_headlamp', 'extra_disclosing', 'extra_headphones', 'extra_loupes',
 ] as const;
 
@@ -61,6 +63,9 @@ export const SFX_KEYS = [
   'scrape_1', 'scrape_2', 'scrape_3', 'crunch_pop', 'crack_big', 'flake', 'ultrasonic_loop', 'polish_loop',
   'suction_loop', 'rinse_loop', 'floss_snap', 'debris_pop', 'tooth_ding', 'sparkle', 'gag', 'ow', 'mmhm',
   'giggle', 'chatter', 'reassure', 'combo', 'perfect', 'star', 'splash',
+  // cases
+  'squish', 'floss_creak', 'floss_thwip', 'floss_zip', 'lamp_loop', 'gel_paint', 'gold_ting', 'arr',
+  'pocket_open', 'shade_tick', 'check', 'hiccup', 'snore', 'coin_clink', 'shell_crack', 'tooth_done',
   // clinic and UI
   'door_chime', 'cash', 'coins', 'ui_click', 'ui_tab', 'purchase', 'level_up', 'hire', 'error', 'day_end',
   'review_good', 'review_bad', 'notify',
