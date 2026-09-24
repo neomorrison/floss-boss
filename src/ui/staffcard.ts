@@ -1,19 +1,89 @@
 // Staff card: portrait, stats, traits, morale, salary vs ask, assignment, train, raise, fire.
 // staffBlock() is shared by the Staff panel grid and the card modal.
 import { money } from '../core/format';
-import { TRAINING_COST } from '../core/constants';
 import { store } from '../core/store';
-import type { Candidate, Clinic, Staff } from '../core/types';
+import type { Candidate, Clinic, PerkId, Staff } from '../core/types';
+import { PERKS } from '../data/manager';
 import { ROLES, TRAITS } from '../data/staff';
 import * as sim from '../sim';
-import { h } from './dom';
-import { act, activeClinic, canAfford, isOwner } from './game';
+import { caseTile } from './casebits';
+import { h, replay } from './dom';
+import { confetti, sfx } from './fx';
+import { act, activeClinic, activeIndex, canAfford, isOwner } from './game';
 import { icon } from './icons';
 import { liveModal, select } from './live';
 import { courseState } from './logic';
-import { confirmModal } from './modal';
+import * as mgr from './mgr';
+import { caseShort, rangeLabel, specialtyOf } from './mgrlogic';
+import { confirmModal, openModal } from './modal';
 import { staffPortrait } from './portrait';
+import { toast } from './toasts';
 import { bar, btn, chip, statRow } from './widgets';
+
+export const PERK_ICON: Record<PerkId, string> = {
+  whiteningPro: 'caseWhitening', kidMagnet: 'caseCandy', bracesWhiz: 'caseBraces', deepDiver: 'caseDeep', pirateWhisperer: 'casePirate',
+  speedDemon: 'bolt', gentleHands: 'hand', mentor: 'graduation', ironLungs: 'lungs', upsellStar: 'receipt',
+};
+
+/** Perk chips (tap explains, touch has no hover) and specialist badges. */
+export function perkChips(st: Pick<Staff, 'perks'>): HTMLElement | null {
+  const perks = (st.perks ?? []).filter((p) => PERKS[p]);
+  if (!perks.length) return null;
+  const spec = specialtyOf(perks, PERKS);
+  return h('div.row.row-wrap.gap-6.staff-perks',
+    ...spec.map((ct) => h('span.specialist', { title: `Gets ${caseShort(ct).toLowerCase()} patients first` }, caseTile(ct, 20), `${caseShort(ct)} specialist`)),
+    ...perks.filter((p) => !PERKS[p].caseType).map((p) => {
+      const b = h('button.chip.chip-btn.chip-grape.perk-chip', { type: 'button', title: PERKS[p].text }, icon(PERK_ICON[p] ?? 'sparkle'), PERKS[p].name);
+      b.addEventListener('click', (e) => { e.stopPropagation(); sfx('ui_click'); toast({ text: PERKS[p].name, sub: PERKS[p].text, kind: 'info', icon: PERK_ICON[p] ?? 'sparkle', key: 'perk-info' }); });
+      return b;
+    }),
+  );
+}
+
+/** The two offered perks as big buttons. `after` runs once a perk is picked. */
+export function perkChooser(idx: number, st: Staff, after?: () => void): HTMLElement | null {
+  const offer = (st.pendingPerks ?? []).filter((p) => PERKS[p]);
+  if (!offer.length) return null;
+  return h('div.perk-offer',
+    h('div.perk-offer-head', icon('sparkle'), h('b', `Level ${st.level}: choose a perk`)),
+    h('div.perk-options', ...offer.map((p) => {
+      const d = PERKS[p];
+      const b = h('button.perk-option', { type: 'button', 'data-perk': p },
+        d.caseType ? caseTile(d.caseType, 40) : h('span.perk-icon', icon(PERK_ICON[p] ?? 'sparkle')),
+        h('span.perk-text', h('b', d.name), h('span', d.text), d.caseType ? h('span.perk-spec', `${caseShort(d.caseType)} specialist`) : null),
+      );
+      b.addEventListener('click', () => {
+        const r = mgr.pickPerk(store.state, idx, st.id, p);
+        if (!r.ok) { sfx('error'); toast({ text: r.reason, kind: 'bad', key: 'perk' }); replay(b, 'anim-shake'); return; }
+        sfx('perk_pick');
+        confetti(b, 36);
+        // same key as the "leveled up" toast: the answer replaces the question
+        toast({ text: `${st.name.split(' ')[0]} picked ${d.name}`, sub: d.text, kind: 'good', icon: PERK_ICON[p] ?? 'sparkle', key: `perk-${st.id}` });
+        store.commit();
+        after?.();
+      });
+      return b;
+    })),
+  );
+}
+
+/** Perk choice card for a staff member (toast "Ava leveled up: choose a perk"). */
+export function openPerkChoice(staffId: string): void {
+  const f = findStaff(staffId);
+  if (!f || f.index < 0 || !f.staff.pendingPerks?.length) return;
+  const st = f.staff;
+  const m = openModal({
+    eyebrow: f.clinic.name,
+    title: `${st.name} leveled up`,
+    icon: 'sparkle',
+    size: 'md',
+    cls: 'modal-perk',
+    body: h('div.col.gap-14',
+      h('div.row.gap-14', staffPortrait(st, 64, '', ROLES[st.role].scrubs), h('div.grow', h('div.bold', `${ROLES[st.role].name}, level ${st.level}`), h('div.small.muted', 'Pick one. The other one is gone for good.'))),
+      perkChooser(f.index, st, () => m.close()),
+    ),
+  });
+}
 
 export function roleTone(role: Staff['role']): 'mint' | 'sky' | 'grape' | 'gum' | 'sun' {
   return ({ hygienist: 'mint', receptionist: 'sky', assistant: 'grape', dentist: 'gum', manager: 'sun' } as const)[role];
@@ -93,11 +163,13 @@ export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: 
     h('div.grow',
       h('div.staff-name', st.name),
       h('div.row.row-wrap.gap-6', chip(role.name, roleTone(st.role)), chip(`Level ${st.level}`, ''),
-        course === 'away' ? chip('Training', 'sun', 'graduation') : course === 'booked' ? chip('Training tomorrow', 'sun', 'graduation') : null),
+        course === 'away' ? chip('Training', 'sun', 'graduation') : course === 'booked' ? chip('Training tomorrow', 'sun', 'graduation') : null,
+        typeof st.tempUntilDay === 'number' ? chip(tempLabel(st.tempUntilDay, s.day), 'sky', 'clock') : null),
     ),
     opts.onOpen ? h('button.icon-btn', { type: 'button', 'aria-label': 'Details', onClick: opts.onOpen }, icon('chevronRight')) : null,
   );
   const traits = st.traits.length ? h('div.row.row-wrap.gap-6', ...traitChips(st.traits)) : null;
+  const offer = idx >= 0 ? perkChooser(idx, st) : null;
   const morale = h('div.staff-morale', h('span.staff-face', { class: st.morale < 30 ? 'bad' : st.morale >= 60 ? 'good' : '' }, icon(moraleFace(st.morale))),
     h('div.grow', h('div.row.row-between.tiny.bold.faint', h('span', 'Morale'), h('span', String(Math.round(st.morale)))), bar(st.morale / 100, st.morale < 30 ? 'coral' : st.morale < 60 ? 'sun' : '', 'sm')));
   const pay = h('div.staff-pay',
@@ -105,14 +177,18 @@ export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: 
     h('div', h('div.tiny.bold.faint', 'Asks'), h('div.num', { class: lowPay ? 'bad' : '' }, `${money(st.ask)}/day`)),
     h('div', h('div.tiny.bold.faint', 'Today'), h('div.num', `${st.patientsToday}`)),
   );
-  const canRaise = st.salary < st.ask;
-  const actions = h('div.staff-actions',
-    btn('Train', { variant: 'soft', size: 'sm', icon: 'graduation', sub: money(TRAINING_COST), disabled: off || !canAfford(TRAINING_COST), title: course === 'booked' ? 'Booked on a course tomorrow' : off ? 'Away training today' : canAfford(TRAINING_COST) ? 'Skill +8, off for a day' : 'Not enough cash', onClick: () => act(() => sim.train(store.state, idx, st.id), { success: `${st.name} is off training tomorrow` }) }),
+  const temp = typeof st.tempUntilDay === 'number';
+  const trainCost = mgr.trainingCost(s);
+  const canRaise = st.salary < st.ask && !temp;
+  const actions = temp ? h('div.small.muted', 'Temporary help. Leaves on their own.') : h('div.staff-actions',
+    btn('Train', { variant: 'soft', size: 'sm', icon: 'graduation', sub: money(trainCost), disabled: off || !canAfford(trainCost), title: course === 'booked' ? 'Booked on a course tomorrow' : off ? 'Away training today' : canAfford(trainCost) ? 'Skill up, off for a day' : 'Not enough cash', onClick: () => act(() => sim.train(store.state, idx, st.id), { success: `${st.name} is off training tomorrow` }) }),
     canRaise ? btn('Raise', { variant: 'sun', size: 'sm', icon: 'trendUp', sub: `to ${money(st.ask)}`, onClick: () => act(() => sim.setSalary(store.state, idx, st.id, st.ask), { sound: 'cash', success: `${st.name} is happy with the raise` }) }) : null,
     btn('Fire', { variant: 'ghost', size: 'sm', icon: 'door', class: 'btn-fire', onClick: () => fireFlow(idx, st) }),
   );
-  return h('div.staff-card', { class: { 'is-compact': !!opts.compact, 'is-low-morale': st.morale < 30 } },
+  return h('div.staff-card', { class: { 'is-compact': !!opts.compact, 'is-low-morale': st.morale < 30, 'has-perk-offer': !!offer }, 'data-staff': st.id },
     head,
+    offer,
+    perkChips(st),
     traits,
     statBars(st),
     h('div.staff-xp', h('span.tiny.bold.faint', `XP ${st.xp}/${need}`), bar(st.xp / need, 'xp', 'sm')),
@@ -123,26 +199,74 @@ export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: 
   );
 }
 
+const revealing = new Set<string>();
+
+/** Candidate stats: exact once interviewed, else the range the application suggests. */
+function candidateStats(c: Candidate): HTMLElement {
+  if (mgr.isInterviewed(c)) {
+    const el = statBars(c);
+    if (revealing.has(c.id)) el.classList.add('is-reveal');
+    return el;
+  }
+  const row = (label: string, key: 'skill' | 'speed' | 'bedside', tone: string) => {
+    const r = c.range?.[key];
+    const lo = r ? Math.max(0, Math.min(r[0], r[1])) : 0;
+    const hi = r ? Math.min(100, Math.max(r[0], r[1])) : 100;
+    return h('div.stat-row.is-range', h('span', label),
+      h('div.bar.bar-sm.bar-range', { class: tone }, h('i', { style: { left: `${lo}%`, width: `${Math.max(3, hi - lo)}%` } })),
+      h('span.num', rangeLabel(r, c[key])));
+  };
+  const rows = c.role === 'hygienist'
+    ? [row('Skill', 'skill', ''), row('Speed', 'speed', 'sky'), row('Bedside', 'bedside', 'gum')]
+    : [row('Skill', 'skill', '')];
+  return h('div.col.gap-4', ...rows);
+}
+
+function tempLabel(until: number, day: number): string {
+  const n = Math.max(0, until - day + 1);
+  return n <= 1 ? 'Temporary: last day' : `Temporary: ${n} days left`;
+}
+
 export function candidateBlock(cand: Candidate, onHire: () => void, hireLabel = 'Hire'): HTMLElement {
   const role = ROLES[cand.role];
   const s = store.state;
   const left = cand.expiresDay - s.day;
-  return h('div.staff-card.is-candidate',
+  const known = mgr.isInterviewed(cand);
+  const cost = mgr.interviewCost(s);
+  const reveal = revealing.has(cand.id);
+  if (reveal) setTimeout(() => revealing.delete(cand.id), 1400);
+  const interviewBtn = known ? null : btn('Interview', {
+    variant: 'soft', icon: 'mic', block: true, sub: cost > 0 ? money(cost) : 'Free', sound: null,
+    disabled: cost > 0 && !canAfford(cost), title: cost > 0 && !canAfford(cost) ? 'Not enough cash' : undefined,
+    onClick: () => {
+      if (act(() => mgr.interview(store.state, cand.id, activeIndex()), { sound: null })) {
+        revealing.add(cand.id);
+        sfx('interview');
+      }
+    },
+  });
+  return h('div.staff-card.is-candidate', { class: { 'is-unknown': !known, 'is-reveal': reveal }, 'data-cand': cand.id },
     h('div.staff-head',
       staffPortrait(cand, 64, '', role.scrubs),
       h('div.grow',
         h('div.staff-name', cand.name),
-        h('div.row.row-wrap.gap-6', chip(role.name, roleTone(cand.role)), left <= 0 ? chip('Last day', 'coral') : chip(`${left + 1} days left`, '')),
+        h('div.row.row-wrap.gap-6', chip(role.name, roleTone(cand.role)), left <= 0 ? chip('Leaves tonight', 'coral') : chip(`${left + 1} days left`, ''),
+          known && cand.range ? chip('Interviewed', 'mint', 'check') : null),
       ),
     ),
-    cand.traits.length ? h('div.row.row-wrap.gap-6', ...traitChips(cand.traits)) : h('div.small.faint', 'No special traits'),
-    statBars(cand),
+    known
+      ? cand.traits.length ? h('div.row.row-wrap.gap-6.cand-traits', ...traitChips(cand.traits)) : h('div.small.faint.cand-traits', 'No special traits')
+      : h('div.row.row-wrap.gap-6', h('span.chip.chip-unknown', icon('question'), 'Traits unknown')),
+    candidateStats(cand),
     h('div.staff-pay',
       h('div', h('div.tiny.bold.faint', 'Asks'), h('div.num', `${money(cand.ask)}/day`)),
       h('div', h('div.tiny.bold.faint', 'Hiring fee'), h('div.num', money(cand.ask))),
     ),
     h('div.small.muted', role.blurb),
-    btn(hireLabel, { variant: 'primary', icon: 'userPlus', block: true, disabled: !canAfford(cand.ask), title: canAfford(cand.ask) ? '' : 'Not enough cash', onClick: onHire }),
+    h('div.cand-actions',
+      interviewBtn,
+      btn(hireLabel, { variant: 'primary', icon: 'userPlus', block: true, disabled: !canAfford(cand.ask), title: canAfford(cand.ask) ? '' : 'Not enough cash', onClick: onHire }),
+    ),
   );
 }
 

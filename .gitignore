@@ -3,6 +3,7 @@ dist
 out
 *.log
 .DS_Store
-art/raw
+art/audio/raw
 art/blender/*.blend1
+__pycache__
 .claude

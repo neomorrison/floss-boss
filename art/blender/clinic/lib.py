@@ -516,6 +516,38 @@ class Part:
             Matrix.Translation(-Vector(pivot))
         bmesh.ops.transform(self.bm, matrix=mm, verts=vs)
 
+    def warp_since(self, mark, fn):
+        """Move every vertex added since `mark` to fn(Vector) (a flag wave, a bend)."""
+        self.bm.verts.ensure_lookup_table()
+        for i in range(mark, len(self.bm.verts)):
+            v = self.bm.verts[i]
+            v.co = Vector(fn(v.co.copy()))
+
+    def text(self, body, size, loc, m, depth=0.02, rot=(90, 0, 0), align='CENTER', res=2, spacing=1.0):
+        """Extruded text from Blender's built-in font. Built in the XY plane (reading along +X, extruded along Z,
+        centered on the extrusion), so the default rot=(90, 0, 0) stands it up facing -Y at `loc` (baseline
+        center when align is CENTER)."""
+        cu = bpy.data.curves.new('_txt', 'FONT')
+        cu.body = body
+        cu.size = size
+        cu.extrude = depth / 2
+        cu.align_x = align
+        cu.resolution_u = res
+        cu.space_character = spacing
+        ob = bpy.data.objects.new('_txt', cu)
+        link(ob)
+        dg = bpy.context.evaluated_depsgraph_get()
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        tmp = bmesh.new()
+        tmp.from_mesh(me)
+        ev.to_mesh_clear()
+        bpy.data.objects.remove(ob)
+        bpy.data.curves.remove(cu)
+        bmesh.ops.remove_doubles(tmp, verts=tmp.verts, dist=1e-5)
+        bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
+        self._emit(tmp, m, True, _mat4(loc, rot))
+
     # -- output
     def finish(self, origin=(0, 0, 0), parent=None, smooth_angle=61.0, mesh_name=None):
         """Make the object. Vertices are stored relative to `origin` (world), which becomes the pivot."""
@@ -575,6 +607,21 @@ def world_bbox(objs=None):
     P = world_points(objs)
     mn, mx = P.min(axis=0), P.max(axis=0)
     return Vector(mn.tolist()), Vector(mx.tolist())
+
+
+def scale_hierarchy(root, s):
+    """Uniformly scale a node tree about the world origin without giving any node a scale: mesh data and node
+    offsets are scaled instead, so joints keep identity transforms (the rig contract)."""
+    bpy.context.view_layer.update()
+
+    def walk(ob):
+        ob.location = ob.location * s
+        if ob.type == 'MESH':
+            ob.data.transform(Matrix.Scale(s, 4))
+        for c in ob.children:
+            walk(c)
+    walk(root)
+    bpy.context.view_layer.update()
 
 
 def recenter_xy():

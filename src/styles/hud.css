@@ -377,3 +377,11 @@
   .chair-card .chair-portrait { --pz: 48px !important; }
   .chair-name { font-size: 18px; }
 }
+/* phone, owner: cash, rating and the level badge share the first row (the XP bar lives in Skills) */
+@media (max-width: 640px) {
+  .hud.is-owner .hud-lvl-body { display: none; }
+  .hud.is-owner .hud-level { padding: 6px; flex: none; }
+}
+.hud-day { white-space: nowrap; }
+.hud-focus { color: var(--gum-d); }
+@media (max-width: 640px) { .hud-focus { display: none; } }

@@ -41,9 +41,9 @@
 
 /* ------------------------------------------------------------ tools */
 .tool-slot + .tool-slot { margin-top: 6px; }
-.tool-row { display: flex; gap: 12px; padding: 4px 2px 10px; margin: 0 -2px; }
+.tool-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; padding: 4px 0 10px; }
 .tool-card {
-  position: relative; flex: 0 0 210px;
+  position: relative; min-width: 0;
   display: flex; flex-direction: column; gap: 8px;
   padding: 14px; border-radius: var(--r-lg);
   background: var(--surface); border: 2px solid var(--line);
@@ -84,25 +84,29 @@
 /* ------------------------------------------------------------ skills */
 .skills-note { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .skills-note .icon { width: 18px; height: 18px; color: var(--teal); }
-.skill-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
-.skill-col { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-xl); background: var(--surface-2); border: 2px solid var(--line); }
-.skill-col-head { display: flex; align-items: center; gap: 12px; padding: 4px 4px 8px; }
-.skill-col-head h3 { font-size: 22px; }
-.skill-col-icon { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; color: #fff; flex: none; }
-.skill-col-icon .icon { width: 26px; height: 26px; }
+.skill-cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.skill-col { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--r-xl); background: var(--surface-2); border: 2px solid var(--line); min-width: 0; }
+.skill-col-head { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+.skill-col-head h3 { font-size: 20px; line-height: 1.1; }
+.skill-col-blurb { padding: 0 2px 4px; }
+.skill-col-icon { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; color: #fff; flex: none; }
+.skill-col-icon .icon { width: 24px; height: 24px; }
 .skill-col[data-branch='technique'] .skill-col-icon { background: var(--teal); box-shadow: 0 3px 0 #075551; }
 .skill-col[data-branch='bedside'] .skill-col-icon { background: var(--gum); box-shadow: 0 3px 0 #B83D6B; }
 .skill-col[data-branch='business'] .skill-col-icon { background: var(--sun-d); box-shadow: 0 3px 0 var(--sun-dd); }
+.skill-col[data-branch='management'] .skill-col-icon { background: var(--grape); box-shadow: 0 3px 0 #5B47C9; }
 .skill-node {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px; border-radius: var(--r-lg);
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px; border-radius: var(--r-lg);
   background: var(--surface); border: 2px solid var(--line);
   position: relative;
 }
-.skill-dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--ink-4); border: 2px solid var(--line-2); }
-.skill-dot .icon { width: 20px; height: 20px; }
-.skill-name { font-family: var(--font-display); font-weight: 800; font-size: 16.5px; line-height: 1.15; }
-.skill-text { font-size: 13px; color: var(--ink-2); line-height: 1.3; }
+.skill-node.is-child::before { content: ''; position: absolute; left: 29px; top: -10px; width: 2px; height: 8px; background: var(--line-2); border-radius: 2px; }
+.skill-dot { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--ink-4); border: 2px solid var(--line-2); }
+.skill-dot .icon { width: 18px; height: 18px; }
+.skill-name { font-family: var(--font-display); font-weight: 800; font-size: 16px; line-height: 1.15; }
+.skill-text { font-size: 12.5px; color: var(--ink-2); line-height: 1.3; }
+.skill-learn { width: 100%; margin-top: 8px; }
 .skill-needs, .skill-after { display: flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 12px; font-weight: 800; color: var(--ink-3); }
 .skill-needs .icon { width: 13px; height: 13px; }
 .skill-node.is-learned { border-color: var(--mint); background: linear-gradient(120deg, var(--mint-ll), #fff 70%); }
@@ -263,9 +267,10 @@ button.office-op:hover { transform: translateY(-2px); border-color: var(--mint);
 
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 1100px) {
-  .skill-cols { grid-template-columns: 1fr 1fr; }
-  .skill-col[data-branch='business'] { grid-column: span 2; }
   .price-row { grid-template-columns: 200px 1fr 190px; }
+}
+@media (max-width: 979px) {
+  .skill-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 1000px) {
   .panel { top: calc(var(--safe-t) + 156px); }
@@ -285,8 +290,13 @@ button.office-op:hover { transform: translateY(-2px); border-color: var(--mint);
   .panel-cash, .panel-points { height: 38px; padding: 0 10px; }
   .panel-cash .num, .panel-points .num { font-size: 17px; }
   .skill-cols { grid-template-columns: 1fr; }
-  .skill-col[data-branch='business'] { grid-column: auto; }
-  .tool-card { flex-basis: 184px; padding: 12px; }
+  .tool-row { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+  .tool-card { padding: 12px 10px; }
+  .tool-top .thumb { --tz: 76px !important; }
+  .tool-name { font-size: 16px; }
+  .tool-blurb { font-size: 12.5px; }
+  .tool-stats { padding: 6px 8px; }
+  .tool-stat { font-size: 12px; gap: 4px; }
   .staff-summary { grid-template-columns: 1fr; gap: 8px; }
   .price-row { grid-template-columns: 1fr auto; grid-template-areas: 'name fee' 'slider slider'; gap: 4px 10px; padding: 10px 14px; }
   .price-name { grid-area: name; }

@@ -31,25 +31,9 @@ Median bot = hands-on quality 0.85, 100 s real time per cleaning, buys the cheap
 | Second location | 4 to 5 h |
 | Floss Boss title (5 locations or $5M valuation) | 8 to 12 h, idle-friendly |
 
-Last `npm run balance` (median of 9 seeds, v2 rules). Bots clean hands-on at 100 s plus 15 s of hub time per clean, use 2x while they have hands-on work and 4x otherwise, and as owners clean 3 patients a day at T1, 2 at T2, 1 from T3 on. After that quota they Quick clean, but only cases they hold Bronze on: any other case they clean hands-on. A case the bot has not reached Bronze on goes 0.08 quality worse (learning curve), and the bot meets the bonus with probability `1.6 (q - 0.6)`.
+The v3 targets in 10.8 replace this table where they differ. Last `npm run balance` (median of 5 seeds, v3 rules, full output in `out/sim/balance-final.txt`): the table and checks are in 10.8.
 
-| Milestone | Median (q 0.85) | Casual (q 0.70) | Expert (q 0.95) | Greedy expander | Idle owner |
-|---|---|---|---|---|---|
-| Tutorial done | 4.8 min | 4.8 min | 4.8 min | 4.8 min | 4.8 min |
-| First tool affordable | cleaning 2 | 2 | 2 | 2 | 2 |
-| Level 4 | cleaning 13 | 15 | 11 | 13 | 13 |
-| Practice opened | cleaning 24, 50 min | 28, 58 min | 19, 40 min | 24, 50 min | 24, 50 min |
-| First hire | owner day 1 | 1 | 1 | 1 | 1 |
-| Office T2 | 2.38 h (owner day 14) | 2.94 h | 2.28 h | 1.83 h | 1.02 h (day 20) |
-| Office T3 | 3.82 h (day 34) | 4.67 h | 3.70 h | 2.56 h | 1.28 h (day 44) |
-| Second location | 4.76 h (day 55) | 5.82 h | 4.71 h | 3.25 h | 1.47 h (day 61) |
-| Floss Boss | 8.23 h (day 135) | 9.11 h | 8.11 h | 7.06 h | 2.69 h (day 166) |
-
-Median bot over a whole game: about 128 routine, 24 candy, 16 braces, 22 deep, 5 pirate and 4 whitening cleans by hand (bots never buy the Whitening Lamp), Bronze on all six cases, about $400 of treasure, and only about 3 patients a game it wanted to delegate but had to clean itself for lack of Bronze.
-
-Degenerate checks (A/B runs from one forked state, autopilot chair): a second operatory plus a hygienist at T1 pays back in 4 to 11 days (+$546/day after); at T1 a cleaning price of 1.0 nets $746/day vs $725 at 1.2 and $769 at 1.5 (demand-limited, about flat), at T2 $3,599 vs $3,340 vs $1,488 (a whole game at 1.5 takes 10.6 h instead of 8.2 h); paying every employee the 75% floor for 30 days at T2 loses $650 to $1,350 a day to quits; a loan round trip moves no money and the bank refuses anything over the limit; cash always equals the ledger. Prices lock when a patient books, so dropping the price at closing and raising it by morning no longer pays.
-
-Known tension: the idle owner (chair on autopilot, 4x clock, no hands-on) needs more game days than the median (166 vs 135) but each of its days costs about 37 s of real time against 2.5 to 6 min for a player who cleans, so it reaches Floss Boss in under 3 h. v2 levers in the sim: autopilot earns no XP and works at auto quality minus 0.05; each hands-on clean by the owner adds +4% next-day demand (max +20%) and its review counts double. The remaining lever is the clock (UI): cap it at 2x on days with no hands-on clean.
+Known tension: the idle owner (chair on autopilot, 4x clock, auto-huddle, no hands-on) needs far more game days than the median (240 vs 130 to Floss Boss) but each of its days costs about 40 s of real time against 2 to 5 min for a player who cleans and manages, so it reaches Floss Boss in about 3 h. Sim levers already in: autopilot earns no XP and works at auto quality minus 0.05; owner hands-on cleans add next-day demand and count double in reviews; the manager layer (focus, campaigns, perks) is worth about 20% more net per day than ignoring it. The remaining lever is the clock (UI): cap it at 2x on days with no hands-on clean.
 
 A game day (8:00 to 17:00, 540 game minutes) lasts 108 s real time at 1x (1 game min = 0.2 s). Speeds: pause, 1x, 2x, 4x. Hands-on cleaning **freezes the clinic clock**; on completion the clinic fast-forwards `HANDS_ON_MINUTES[service]` (cleaning 45, deep 75) and the UI shows "While you were cleaning" with the events of that window.
 
@@ -64,14 +48,14 @@ You work at **Bright Smiles Dental**, owned by **Dr. Ruth Canal**. The employer 
 - Shift size: 4 patients (level 1 to 3), 5 (level 4 to 6), 6 (level 7+). Appointment i at `510 + i * floor(450 / n)` minutes.
 - A patient in your chair waits for you. Start it hands-on (full pay + tips), or **Quick clean** once you hold Bronze mastery of that patient's case (5.9: 50% wage, no tip, no XP, 60 game minutes of clock).
 - Every patient brings a case (5.5), 0 to 2 twists and a bonus (5.6). The shift avoids repeating a case type back to back, and a new case type is introduced with the "New case" card.
-- Pay per patient: `rate(title) * (0.4 + 0.8 * quality) * payMult(case) * (Silver ? 1.1 : 1) + tip`. rate: Staff Hygienist $70, Senior Hygienist $90 (level 4), Lead Hygienist $115 (level 7). payMult: routine 1, candy 1.05, braces 1.15, pirate 1.3, whitening 1.35, deep 1.5 (`CASES`).
+- Pay per patient: `rate(title) * (0.4 + 0.8 * quality) * payMult(case) * (Silver ? 1.1 : 1) + tip`. rate: Staff Hygienist $85, Senior Hygienist $110 (level 4), Lead Hygienist $140 (level 7) (v3: raised so the practice opens at cleaning 15 to 20). payMult: routine 1, candy 1.05, braces 1.15, pirate 1.3, whitening 1.35, deep 1.5 (`CASES`).
 - Graduation: Dr. Canal pays a $200 signing bonus (enough for Floss Picks right away).
 - Tip: `fee * tipRate(archetype) * max(0, (quality - 0.6) / 0.4) * (1 + 0.5 * speedBonus) * tipMult`, `fee = 120 * payMult(case)`, `speedBonus = clamp((par - seconds) / par, 0, 1)`, `tipMult = (Tip Magnet 1.25) * (Gold 1.2) * (bonus met 1.25)`.
 - Treasure: the pirate's doubloon pays `$30 + $10 * level` on top (both phases).
 - A case unlocked by a level-up is scheduled once in the next shift (tracked in `flags.case_sched_<case>`).
 - Shift bonus: $40 if every shift patient was seen.
 - 5 five-star cleanings in a row: "Dr. Canal is impressed" bonus of $150.
-- Open your own practice when `level >= 4` and `cash >= tierPrice(T1) - maxLoan` ($2,000 down on the $5,000 Strip Mall Suite).
+- Open your own practice when `level >= 4` and `cash >= tierPrice(T1) - maxLoan` ($1,600 down on the $4,000 Strip Mall Suite).
 
 ### 3.3 `owner`
 You own one or more clinics (`state.locations`). Revenue is yours, costs are yours. You can staff your own chair (hands-on or autopilot) or stay off the floor.
@@ -81,7 +65,7 @@ You own one or more clinics (`state.locations`). Revenue is yours, costs are you
 ### 4.1 XP and levels
 - Hands-on XP: `10 + 30 * quality + (stars == 5 ? 5 : 0)`. Quick clean and autopilot: none (v2: delegating is not progress).
 - Owner phase: +2 XP per patient any staff member serves (so the owner keeps levelling while idle).
-- `xpToNext(L) = round(60 * L^1.4)`. Level-up: +1 skill point, full comfort heal jingle, toast.
+- `xpToNext(L)`: 60, 100, 150 for levels 1 to 3 (a level-up every 2 to 5 cleans while employed), then `round(60 * L^1.4)` (418 at level 4). Level-up: +1 skill point, full comfort heal jingle, toast.
 - Titles: Hygiene Student (school), Staff Hygienist (L1), Senior Hygienist (L4), Lead Hygienist (L7), Practice Owner (owner, T1), Clinic Director (T2 or 2 locations), Dental Mogul (T3 or 3 locations), Floss Boss (5 locations or valuation >= $5M).
 
 ### 4.2 Auto quality (Quick clean and autopilot)
@@ -261,10 +245,10 @@ Pure, deterministic, tick-based in game minutes. `tick(state, minutes)` advances
 `scheduled -> entering (WALK_MIN) -> checkin -> waiting -> toChair (WALK_MIN) -> inChair -> toDesk (WALK_MIN) -> checkout (CHECKOUT_MIN) -> exiting (WALK_MIN) -> gone`
 Side exits: `noshow` (never appears), `walkout` (waiting too long, or comfort walkout: walks from seat or chair to the door, WALK_MIN, then gone).
 - `WALK_MIN = 1.5`, `CHECKOUT_MIN = 2`. Check-in: 3 min with a receptionist (`* (1.2 - 0.4 * skill/100)`), 7 min without (the front desk is you or nobody). Only one check-in at a time per receptionist (or one total without).
-- Waiting: patience in minutes from archetype `* (espresso 1.25)`. The patience clock starts at the appointment time (early arrivals wait for free). If `waited > patience` the patient walks out (1-star review, rating hit).
-- Assignment: first waiting patient (appointment order) to the first free, staffed operatory that can serve the service; hired hygienists (and your autopilot) come first, your hands-on chair only gets a patient when nobody else is free. Nobody is seated in the past when an operatory starts serving mid-day. Player's chair in hands-on mode: the patient sits and waits for the player (`awaitingPlayer`), still using patience (x1.5 while seated, x1.25 more with a Ceiling TV), but always gets at least 20 minutes in the chair.
+- Waiting: patience in minutes from archetype `* (espresso 1.25) * (sound masking 1.2) * (spa lounge 1.5)` (kids with a Kids Corner 1.3). The patience clock starts at the appointment time (early arrivals wait for free). If `waited > patience` the patient walks out: a wait walkout reviews only half the time, at 2 stars, weight 0.5 ("Waited too long"); a comfort walkout during a clean is still 1 star.
+- Assignment: VIPs first, then booked patients whose appointment time has come, then walk-ins, to the first free, staffed operatory that can serve the service (a whitening case prefers a lamp, then a specialist of the patient's case type, DESIGN 10.4); hired hygienists (and your autopilot) come first, your hands-on chair only gets a patient when nobody else is free. Nobody is seated in the past when an operatory starts serving mid-day. Player's chair in hands-on mode: the patient sits and waits for the player (`awaitingPlayer`), still using patience (x1.5 while seated, x1.25 more with a Ceiling TV), but always gets at least 20 minutes in the chair.
 - Fast-forward after your own clean: when your hands-on chair is the only one serving at that location, the waiting room's patience is paused for the window (nobody else could have seated them).
-- Walk-ins come in only when a seat is free and someone can clean; with only your hands-on chair serving, only into an empty waiting room.
+- Walk-ins come in only when a seat is free and someone can clean, and (v3) only when a chair is free or nobody else is waiting (walk-ins take the gaps); with only your hands-on chair serving, only into an empty waiting room. A walk-in who does not come in counts as turned away.
 - In chair: NPC duration `d = minutes(service + addons) * (1.3 - 0.6*speed/100) * difficulty(archetype) * (assistant ? 0.8 : 1) * (ultrasonic kits ? 0.9 : 1)`.
 - Dentist: the dentist drops in during the last 12 minutes of a cleaning that has an exam (walk WALK_MIN, exam `10 * (1.2 - 0.4*speed/100)` minutes, a filling adds 20 more). If the exam is not finished when the cleaning ends, the patient holds the chair until it is; if no dentist comes within 20 minutes the exam is skipped and not billed. Fillings happen in the same chair.
 
@@ -289,24 +273,30 @@ An average NPC clean (skill 50, basic chair) lands at 3 stars, a good hygienist 
 
 ### 8.4 Demand and booking (start of each day)
 ```
-awareness      = 0.5 + 0.5*(1 - exp(-served/150))
+awareness      = 0.5 + 0.5*(1 - exp(-reach/150)) + event and campaign bonus (max 0.3), capped at 1.15
+                 reach = patients served at this office tier (Brand Builder: /75). Moving to a bigger office keeps
+                 reach up to 40 (the new neighbourhood has not met you yet); a new location starts at 0.
 ratingFactor   = 0.6 + 0.16*rating
-priceFactor    = cleaningMult^-2.2
+priceFactor    = cleaningMult^-2.2          (the price locked at the day's first booking)
 marketing      = [1, 1.2, 1.45, 1.75][level], cost/day [0, 60, 180, 420] * tierScale
+equipment      = online booking 1.1, loyalty cards 1.08, patient app 1.05, helipad (chain-wide) 1.15
 weekday        = [1.1, 1.0, 1.0, 1.0, 1.15]   (Mon..Fri, weekends skipped)
-lambda         = baseDemand(tier) * awareness * ratingFactor * priceFactor * marketing * (1 + marketer 0.12) * (online booking 1.1) * weekday
-demand         = poisson(lambda)
-capacity       = sum over serving operatories of floor(510 / expectedDuration)
-                 expectedDuration = (45 + expected add-on minutes) * speed factors * 1.12 (mean difficulty) + 9 min turnover
-booked         = min(demand, capacity + 1); turnedAway = demand - booked
-                 capacity 0 (nobody can clean): book nobody, no walk-ins, all demand turned away
-                 only your hands-on chair serving: no +1 overbooking
-boss           = 1 + min(0.2, 0.04 * owner hands-on cleans at this location yesterday)   (multiplies lambda)
-your chair     = hands-on: 45 + (deep cert ? 4.5 : 0) + add-on minutes + 10 per patient
-noShow         = 0.12 * (receptionist ? 0.6 : 1) * (online booking ? 0.5 : 1)
-walkIns        = poisson(0.12 * lambda), arrive at random open times, only if a seat is free
+lambda         = baseDemand(tier) * awareness * ratingFactor * priceFactor * marketing * (marketer 1.12) * equipment
+                 * modifiers.demand (events, campaigns) * weekday * boss
+                 * 0.85 at a location that is not the active one and has no manager (Delegator: no penalty)
+demand         = poisson(lambda) new patients, plus yesterday's waitlist (booked first)
+booking        = greedy lanes: one lane per serving operatory; each patient takes the earliest lane for their
+                 expected chair time (service + average add-ons + whitening for a whitening case, times the
+                 hygienist's speed factor and the archetype difficulty, + 9 min turnover; your hands-on chair uses
+                 the fast-forward time). Appointments start until 16:00 (Night Shift 17:00). Nobody is ever
+                 double-booked into a slot (v2 stacked extra patients on used slots: the main source of wait walkouts).
+capacity       = sum over serving operatories of floor(span / expectedInterval) (AI Scheduler x1.1), for display
+waitlist       = min(today's unbooked new patients, capacity) come back tomorrow; the rest are turnedAway
+boss           = 1 + min(0.2, 0.04 * owner hands-on cleans at this location yesterday)
+noShow         = 0.12 * (receptionist 0.6) * (online booking 0.5) * (patient app 0.7) * modifiers.noShows
+walkIns        = poisson(0.12 * lambda * modifiers.walkins), arrive at random open times (see 8.1)
 ```
-Appointments are spread across 8:00..16:00 by operatory lanes. `turnedAway` shows in the day report as the clearest hint to hire.
+`turnedAway` counts patients lost for good (overflow beyond the waitlist, walk-ins who did not come in); the day report's `perLocation[i].waitlist` and a note show tomorrow's waitlist. Every decision in the morning huddle (focus, events, campaigns) rebooks the day before the doors open with the same seeded booking RNG, so the list only changes where the decision changes it.
 
 ### 8.5 Staff (`src/data/staff.ts`)
 Roles: `hygienist`, `receptionist`, `assistant`, `dentist`, `manager`.
@@ -322,10 +312,10 @@ Roles: `hygienist`, `receptionist`, `assistant`, `dentist`, `manager`.
 ### 8.6 Offices (`src/data/offices.ts`)
 | tier | Name | op slots | seats | rent/day | price | baseDemand | appeal |
 |---|---|---|---|---|---|---|---|
-| t1 | Strip Mall Suite | 2 | 4 | $180 | $5,000 | 15 | 1.0 |
-| t2 | Main Street Office | 4 | 8 | $700 | $28,000 | 28 | 1.25 |
-| t3 | Medical Plaza | 6 | 12 | $1,800 | $120,000 | 36 | 1.5 |
-| t4 | Smile Tower | 8 | 16 | $3,600 | $400,000 | 50 | 1.8 |
+| t1 | Strip Mall Suite | 2 | 4 | $180 | $4,000 | 11 | 1.0 |
+| t2 | Main Street Office | 4 | 8 | $700 | $25,000 | 17 | 1.25 |
+| t3 | Medical Plaza | 6 | 12 | $1,800 | $120,000 | 22 | 1.5 |
+| t4 | Smile Tower | 8 | 16 | $3,600 | $400,000 | 27 | 1.8 |
 
 - The first operatory is included in the price. More operatories: $4,000 each.
 - Moving up: pay the new tier price minus 50% of the current tier price (trade-in); operatories, chairs and equipment move with you (up to the new slot count).
@@ -350,10 +340,10 @@ On load, if `phase == 'owner'`, at least one hired hygienist and `now - lastSeen
 `credit = max(0, avgNet(last 3 days)) * min(hoursAway * 0.5, 6) * 0.6`. Shown in a "While you were away" card. No days advance.
 
 ### 8.10 Goals and achievements
-Three daily goals from templates (remove N tartar chunks, N five-star reviews, serve N patients, clean in under N s, sell N add-ons, finish a perfect clean, hit an N-chunk combo). Each pays `max($100, 0.2 * avg operating net of the last 3 days)` as an owner (`$20 + $5 * level` as an employee) plus `15 + 5 * level` XP, so the three together are about half a day of net. As an owner with no hands-on chair anywhere, the third goal only draws from served, five-star and add-on goals. Finished goals are paid out before opening the practice replaces them. Finished goals are claimed automatically at the day close if the player has not claimed them. About 24 achievements (first chunk, 100 chunks, first hire, T2, 5 locations, perfect clean, 10-combo, and so on).
+Three daily goals from templates (remove N tartar chunks, N five-star reviews, serve N patients, clean in under N s, sell N add-ons, finish a perfect clean, hit an N-chunk combo). Each pays `max($100, 0.2 * avg operating net of the last 3 days)` as an owner (`$20 + $5 * level` as an employee) plus `15 + 5 * level` XP, so the three together are about half a day of net. As an owner with no hands-on chair anywhere, the third goal only draws from served, five-star and add-on goals. Finished goals are paid out before opening the practice replaces them. Finished goals left unclaimed at the day close are claimed for half their reward (v3); with Paperwork Pro they pay in full. The fast-clean goal reads "Finish a 3-star cleaning in under N s" (only 3-star cleans count). Owner goals: DESIGN 10.7. About 24 achievements (first chunk, 100 chunks, first hire, T2, 5 locations, perfect clean, 10-combo, and so on).
 
 ### 8.11 Valuation
-`sum(tierPrice*0.6 + equipmentValue*0.5) + max(0, avgNet7)*150 + cash - loan`. avgNet7 is the operating net of the last 7 owner days: purchases, loans, hiring fees, training, severance, goal rewards and offline credit are excluded (`NON_OPERATING_LABELS`), so offline credit and goal rewards (both based on it) cannot feed themselves.
+`(sum(tierPrice*0.6 + equipmentValue*0.5) + max(0, avgNet7)*150) * (Investor Relations 1.1) + cash - loan`. avgNet7 is the operating net of the last 7 owner days: purchases, loans, hiring fees, training, severance, interviews, event cash, goal rewards and offline credit are excluded (`NON_OPERATING_LABELS`), so offline credit and goal rewards (both based on it) cannot feed themselves.
 
 ## 9. Look and feel
 - Light-first bright cartoon. Palette: mint `#3DD6B5`, teal `#0E8F8A`, bubblegum `#FF7AA8`, sunshine `#FFD166`, enamel white `#FFFDF7`, ink `#16323A`. Tartar is mustard `#D8B04A` with darker crust, plaque buttery `#F2DE8A`, stain coffee `#8A5A2B`.
@@ -373,7 +363,7 @@ Each owner morning every location draws an event with `EVENT_CHANCE[tier]` from 
 
 ### 10.3 Demand, capacity and marketing
 - **Offices start under capacity.** A new office at the default price and no marketing should fill about 70 to 90% of its staffed capacity in its first week; awareness growth alone takes it to about 100% over 2 to 3 weeks. Every operatory you add creates spare capacity that marketing and campaigns fill. Turned-away demand should stay under about 15% unless you over-market.
-- **Waitlist.** Turned-away patients are not lost: up to one day of capacity carries over as a waitlist that is booked first the next day (`ClinicDayStats.turnedAway` still reports the overflow, the day report shows the waitlist).
+- **Waitlist.** Turned-away patients are not lost: up to one day of capacity carries over as a waitlist that is booked first the next day. `ClinicDayStats.turnedAway` reports only the patients lost for good; the day report's `perLocation[i].waitlist` (and a note) shows tomorrow's waitlist.
 - **Marketing levels** stay (volume). **Campaigns** (`CAMPAIGNS`) run 4 to 5 days per location, cost scales with `tierScale` (Brand Builder -25%), and shift the case mix (`caseBoost`) toward specific cases: kids, whitening, deep cleans, braces, pirates. Premium cases pay more (whitening add-on, deep service) and feed mastery, so campaigns are worth running even when an office is full. Grand Opening is for a new location (big demand and awareness boost, long cooldown). One campaign per location at a time, cooldown after it ends.
 - **Wait walkouts review gently**: a patient who leaves the waiting room reviews only half the time, at 2 stars, weight 0.5 ("Waited too long"). A comfort walkout during a clean is still 1 star.
 
@@ -386,7 +376,7 @@ Each owner morning every location draws an event with `EVENT_CHANCE[tier]` from 
 25 equipment items and 5 operatory upgrades, some exclusive to bigger offices (`minTier`); locked ones show "Needs Main Street Office" and so on. Every blurb is implemented exactly as written. Chain-wide items (Research Wing, Helipad) apply at every location. The diorama renders every owned item at its spot.
 
 ### 10.6 Skills
-Four branches: Technique, Bedside, Business, Management (`SKILLS`). Paperwork Pro claims finished goals at day close. Owners keep earning skill points from staff patients, so the Management branch fills in while managing.
+Four branches: Technique, Bedside, Business, Management (`SKILLS`). Paperwork Pro pays unclaimed goals in full at day close (they pay half without it). Owners keep earning skill points from staff patients, so the Management branch fills in while managing.
 
 ### 10.7 Owner goals
 Owner daily goals come from management verbs: run a campaign, zero walkouts at a location, serve N, operating net over N, sell N add-ons, answer N events, reach a rating. Hands-on goals only appear when the owner staffs a chair in hands mode.
@@ -404,3 +394,34 @@ Hands-on only (no Quick clean until Bronze), median bot 80 s per v2 clean plus 1
 | Office T3 | 2.5 to 3.5 h |
 | Second location | 3.5 to 4.5 h |
 | Floss Boss | 7 to 10 h |
+
+Last `npm run balance` (v3 rules, median of 5 seeds; 80 s cleans + 15 s hub time; 2x while cleaning, 4x otherwise; owners clean 3 a day at T1, 2 at T2, 1 from T3 and Quick clean only Bronze cases). "Managed" bots run the huddle every morning (focus by a simple rule, events by expected value, campaigns when there is spare capacity or a lamp or certification, the first offered perk, interviews before hiring); casual answers every event with its first choice; the idle owner uses auto-huddle and never manages.
+
+| Milestone | Target | Median (q 0.85) | Casual (q 0.70) | Expert (q 0.95) | Greedy expander | Median, no manager | Idle owner |
+|---|---|---|---|---|---|---|---|
+| Tutorial done | < 5 min | 4.3 min | 4.3 | 4.3 | 4.3 | 4.3 | 4.3 |
+| First tool affordable | cleaning 2 | 2 | 2 | 2 | 2 | 2 | 2 |
+| Level 2 / 3 / 4 | 2 / 4-5 / 9-12 | 2 / 5 / 9 | 2 / 6 / 10 | 2 / 5 / 8 | 2 / 5 / 9 | 2 / 5 / 9 | 2 / 5 / 9 |
+| Practice opened | cleaning 15-20, 25-35 min | 15, 27 min | 20, 35 min | 15, 27 min | 15, 27 min | 15, 27 min | 15, 27 min |
+| First hire | owner day 1-2 | 1 | 1 | 1 | 1 | 1 | 1 |
+| Office T2 | 1.25-2 h | 1.91 h (owner day 14) | 2.34 h | 1.84 h | 1.48 h | 2.03 h | 0.72 h (day 25) |
+| Office T3 | 2.5-3.5 h | 3.17 h (day 33) | 3.71 h | 3.17 h | 2.20 h | 3.86 h | 1.06 h (day 51) |
+| Second location | 3.5-4.5 h | 4.36 h (day 61) | 4.81 h | 4.39 h | 2.82 h | 5.37 h | 1.37 h (day 79) |
+| Floss Boss | 7-10 h | 7.14 h (day 130) | 7.51 h | 6.63 h | 6.20 h | 8.64 h | 3.06 h (day 240) |
+
+Demand (median bot, all locations by tier; new demand over the morning's capacity, fill of a new or moved office in its first 5 days, share lost for good, walkouts a day): T1 107% (first week 113%, the bot runs a Grand Opening at once), lost 14%, 0.27 walkouts; T2 90% (first week 73%), lost 9%, 0.21; T3 98% (86%), lost 18%, 0.15; T4 108% (107%), lost 20%, 0.03. The unmanaged median sits at 99 to 120% with 14 to 25% lost (it never markets down or runs campaigns but also never adds demand). v2 ran 128 to 157% with 21 to 36% lost and about 3 wait walkouts a day at T2 and up; lane booking (no double-booked slots) and walk-ins that only take the gaps bring walkouts to 0.03 to 0.3 a day, and none of them is a 1-star review any more.
+
+Manager layer over a median game: about 145 events answered (event cash +$32k / -$43k: events cost more than they pay), 24 campaigns (Golden Years and Smile Makeover when full, Grand Opening at new locations), focus mostly Speed and Upsell when full, Walk-in and Quality when there is room, about 150 perks picked, 52 interviews.
+
+Degenerate checks (A/B from one forked state, autopilot chair, 3 seeds): cash always equals the ledger and the loan round trip moves no money; a second operatory plus a hygienist at T1 on owner day 6 pays back in 4 to 20+ days (+$77/day over 20 days: a young office has spare capacity until awareness, marketing or a campaign fills it); price at T1 1.0 / 1.2 / 1.5 nets $985 / $957 / $839 a day, at T2 $3,876 / $2,251 / $735 (demand-limited: raising prices loses); paying everyone the 75% floor for 30 days at T2 loses 3 to 4 people and -$1,814 to +$146 a day; Kids Week over 10 days at a full T2 office nets +$1,141 / +$667 / -$155 a day and with a fresh spare operatory +$452 / -$923 / -$122 (campaigns are not strictly dominant); Smile Makeover with a Whitening Lamp +$565 to +$1,395 (the lamp and the staffed operatory are the price of entry; cost $1,200 x tierScale, 4-day cooldown); the BlueTooth insurance network nets $2,355 / $3,916 / $2,124 a day over 30 days against $3,050 / $3,517 / $2,264 for staying independent (a real trade-off); always taking the richest-looking event choice nets $1,575 / $3,178 / $2,229 a day against $2,465 / $3,095 / $1,956 for the first choice (no infinite event money: event cash is non-operating and costs more than it pays).
+
+### 10.9 Sim rules as implemented (src/sim/manager.ts, effects.ts, booking.ts, staff.ts)
+- **Huddle.** `closeDay` (owner) books the new day, then draws events (at most one per location), then makes the goals. `huddlePending(state)` is true until `completeHuddle` ("Open the doors"); `tick()` completes it itself if the clock starts first (leftover events take choice 0 and come back as toasts), and `closeDay` does too. With `settings.autoHuddle` the events resolve inside `closeDay` and the focus is kept. Every morning decision (focus, event, campaign) rebooks that location before the doors open with the day's seeded booking RNG; prices stay locked at the first booking of the day.
+- **Focus.** `setFocus` validates the office tier (the highest owned) and the slots (1, Huddle Pro 2); `[]` means Steady. The focus persists across days and is written each morning as `focus:<id>:<day>` modifiers on every location (speed, quality, walk-ins, fees, add-ons); Team Day adds its morale at close and Training Day doubles staff XP.
+- **Events.** Draw: `EVENT_CHANCE[tier]` per location, weights, `minTier`, `needs` (temporary staff do not count), no repeat within 5 days, and never an event whose permanent modifier is already in force there (no second insurance network or puppy). Vars: `{clinic}`, `{staff}`/`{staffId}` (poaching picks one of your two best), `{op}`/`{opId}`, `{equip}`/`{equipId}` (an unowned item this office can buy). `eventText` fills them and rewrites scaled cash in the hints ("-$300" reads "-$540" at Main Street). Effects: cash (`Events` ledger line, non-operating so it never feeds valuation or goal rewards), rating (a bonus capped at +-0.5 that fades 5% a day), awareness (cap +0.3; the keynote lifts every location), modifier (`event:<id>:<day>`, `days: null` = permanent), morale, skill (the ask follows), salary, quit chance (Loyal stays), VIP (added to today, `vip: true`, flat fee, review weight 5, seated first), closed operatory, late opening, temporary staff (salary 0, leave after `tempUntilDay`), salesman discount (today only, `equipmentPrice`), free equipment, XP, chance (+0.2 with Crisis Manager). A choice that changes no numbers still leaves a one-day marker modifier so the diorama can show its prop. Every resolution goes to `eventLog` (last 30) and the next report's notes.
+- **Campaigns.** `campaignStatus` / `startCampaign`: cost x `tierScale` (Brand Builder -25%, ledger line `Campaigns`, operating), `minTier`, a Whitening Lamp (Smile Makeover) or the certification (Golden Years), one at a time, cooldown after (`campaignCooldownUntil = end + 1 + cooldown`), Grand Opening only within 10 days of opening a location (or under 150 patients served). Bought before the doors open it runs today plus `days - 1`; later it runs the rest of today plus `days`. The `campaign:<id>:<day>` modifier carries the demand multiplier and the case boost; the booking picks patient and case together with the boost, so a pirate campaign brings pirates.
+- **Owner case premium.** Sugar bug, braces and pirate cases bill the cleaning at their case rate (1.05, 1.15, 1.3) at your own offices; whitening and deep cases bill their add-on and service. Premium campaigns pay even when an office is full.
+- **Perks.** At levels 2, 4, 6, 8 two perks for the role (not owned) are offered in `pendingPerks`; `pickPerk` takes one; after 2 days the first is picked. Effects: case specialists get their case's quality and speed and are seated their case type first; Speed Demon x1.1 (hygienists, desk check-in, assistants, dentist exams); Gentle Hands +0.1 comfort (dentists: +0.05 on the exam); Mentor: teammates x1.5 XP; Iron Lungs: two more patients (90 chair minutes) before overwork; Upsell Star: the desk's check-ins, a dentist's exams, a hygienist's chair-side second offer; Pirate Whisperer: pirates leave a tip at checkout.
+- **Candidates and interviews.** Six on the board (eight with Talent Scout), each stat shown as a 30-wide range holding the true value until `interview` ($40 x tierScale of the active office, free with Talent Scout, ledger `Interviews`, non-operating).
+- **Equipment, upgrades and skills** (blurbs as written): Water Filter supplies x0.9; Aromatherapy +0.05 comfort; Loyalty Cards demand x1.08; Staff Lockers +1 morale; Digital X-Ray needs the X-Ray Suite, X-rays accepted x1.2 and take half the time; Sound Masking patience x1.2; Patient App no-shows x0.7, demand x1.05; Central Nitrous Line +0.10 comfort everywhere and laughing gas in every operatory; Laser Whitening whitening fees x1.25 and +0.05 quality on whitening; Spa Lounge patience x1.5 and rating +0.15; CAD/CAM fillings x1.5 fee and 2/3 of the time; Rooftop Garden +3 morale and staff only quit after 5 days in a row under 25; Smile Studio one VIP a day ($2,400, weight 5); Research Wing staff XP x1.5 at every location and training half price; Helipad demand x1.15 at every location; AI Scheduler capacity x1.1 (tighter lanes); Ergonomic Stool 5% faster and 80% of chair minutes count toward overwork; Laughing Gas (Main Street and up) +0.15 comfort, and a nervous patient in that chair never walks out of a hands-on clean (the clean is scored as finished with comfort floored at 20; the scene also gets +15 starting comfort and 30% slower drain). Paperwork Pro: unclaimed goals pay in full at close (half without); Bulk Buyer -10% on equipment, chairs and operatory upgrades; Brand Builder awareness scale 75 instead of 150; Investor Relations loan interest halved and valuation x1.1; Franchise Savvy moves and new locations x0.8; HR Guru training x0.6 and +12 skill; Delegator no -15% at unmanaged locations; Night Shift appointments until 17:00, close 18:00, overwork threshold +60 minutes; Mentor Program staff XP x1.5; Morale Officer morale floor 30.
+- **Owner goals.** First goal: serve N. Second: five-star reviews, add-ons, no walkouts at the active location, operating net over 90% of the 3-day average, or keep the active location's rating (rounded down to 0.05). Third: five-stars or add-ons, answer N events (when cards are waiting and auto-huddle is off), start a campaign (when one is possible), or a hands-on goal when you staff a chair in hands mode. Net, walkout and rating goals are judged at the close. Goal kinds beyond the core union are stored in `Goal.kind` as 'campaign', 'noWalkouts', 'net', 'events', 'rating'.

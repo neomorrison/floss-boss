@@ -6,12 +6,14 @@ import { OFFICES, TIER_ORDER } from '../data/offices';
 import { SERVICES } from '../data/services';
 import { TOOLS, EXTRAS } from '../data/tools';
 import { SKILLS } from '../data/skills';
-import { addCash, clinicByIndex } from './internal';
+import { SimClinic, addCash, clinicByIndex } from './internal';
 import { avgNet, tierIndex } from './progress';
 import { capacityOf, demandLambda, weekdayOf } from './booking';
-import { marketingCost, maxLoan, moveQuote, practiceStatus } from './economy';
+import { loanRate, marketingCost, maxLoan, moveQuote, practiceStatus } from './economy';
 import { salaryCost } from './staff';
-import { LOAN_DAILY_PAYMENT, LOAN_DAILY_RATE } from '../core/constants';
+import { campaignStatus } from './manager';
+import { CAMPAIGN_ORDER } from '../data/manager';
+import { LOAN_DAILY_PAYMENT } from '../core/constants';
 
 export function activeClinic(state: GameState): Clinic | null {
   if (state.phase === 'employee') return state.employer;
@@ -22,7 +24,8 @@ export function activeClinic(state: GameState): Clinic | null {
 export function forecast(state: GameState, clinicIndex: number): { demand: number; capacity: number; revenue: number; costs: number } {
   const c = clinicByIndex(state, clinicIndex);
   if (!c) return { demand: 0, capacity: 0, revenue: 0, costs: 0 };
-  const lambda = demandLambda(state, c, weekdayOf(state.day));
+  // new patients plus the waitlist booked first today
+  const lambda = demandLambda(state, c, weekdayOf(state.day)) + ((c as SimClinic).waitIn ?? 0);
   const capacity = capacityOf(state, c);
   const served = Math.min(lambda * 0.93, capacity);
   const fee = SERVICES.cleaning.fee * (c.prices.cleaning ?? 1);
@@ -31,7 +34,7 @@ export function forecast(state: GameState, clinicIndex: number): { demand: numbe
   let costs = 0;
   if (c.ownedByPlayer) {
     costs = c.staff.reduce((t, s) => t + salaryCost(state, s), 0) + OFFICES[c.tier].rent + marketingCost(c) + Math.round(served * 10);
-    if (clinicIndex === 0 && state.loan > 0) costs += Math.round(state.loan * (LOAN_DAILY_RATE + LOAN_DAILY_PAYMENT));
+    if (clinicIndex === 0 && state.loan > 0) costs += Math.round(state.loan * (loanRate(state) + LOAN_DAILY_PAYMENT));
   }
   return { demand: Math.round(lambda * 10) / 10, capacity, revenue, costs: Math.round(costs) };
 }
@@ -91,10 +94,16 @@ export function nextHint(state: GameState): string {
   if (openOp >= 0) return `Hire a hygienist to staff operatory ${openOp + 1}`;
   if (state.cash < 0) return 'Cash is below zero. Cut costs or take a loan';
   if (!c.staff.some((s) => s.role === 'receptionist')) return 'Hire a receptionist to speed up check-in';
+  const perk = state.locations.flatMap((l) => l.staff).find((s) => s.pendingPerks && s.pendingPerks.length);
+  if (perk) return `Pick a perk for ${perk.name.split(' ')[0]} in Staff`;
   const last = state.reports[state.reports.length - 1];
-  const turned = last?.perLocation.find((l) => l.clinicId === c.id)?.stats.turnedAway ?? 0;
+  const lastLoc = last?.perLocation.find((l) => l.clinicId === c.id);
+  const turned = lastLoc?.stats.turnedAway ?? 0;
   if (turned > 0 && c.ops.length < OFFICES[c.tier].opSlots) return 'Patients were turned away. Add an operatory';
   if (turned > 0 && c.marketing > 0) return 'Patients were turned away. Hire or grow before more marketing';
+  const cap = capacityOf(state, c);
+  const spare = cap > 0 && c.day.booked < cap * 0.8;
+  if (spare && !c.campaign && CAMPAIGN_ORDER.some((id) => campaignStatus(state, idx, id).ok)) return 'Spare capacity today. Run a campaign';
   if (c.rating < 3.2 && c.reviews.length >= 5) return 'Rating is slipping. Check prices and staff';
   if (learnable) return 'Spend your skill point';
   const i = tierIndex(c.tier);

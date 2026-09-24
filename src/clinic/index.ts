@@ -11,6 +11,7 @@ import { money } from '../core/format';
 import { CLOSE_MIN, PLAYER_ID } from '../core/constants';
 import { CLINIC_MODELS, PEOPLE_MODELS } from '../data/assets';
 import { OFFICES } from '../data/offices';
+import { PERKS } from '../data/manager';
 import { audio } from '../audio';
 import { layoutFor, type ClinicLayout } from './layout';
 import { Office, type HitInfo } from './office';
@@ -53,6 +54,19 @@ export function preloadClinic(): Promise<void> {
 const TAG_WORKER = 'worker';
 const TAG_PATIENT = 'patient';
 const SLOT_KEYS = Array.from({ length: 16 }, (_, i) => 's' + i);
+
+/** The case type a staff member's perks make them a specialist in (DESIGN 10.4), or null: only case
+ * perks (whiteningPro, kidMagnet, bracesWhiz, deepDiver, pirateWhisperer) carry a caseType, so a staffer
+ * with Speed Demon or Mentor alone gets no dot. First match wins (nobody can hold two case perks at once
+ * in practice, since perks are picked one at a time, but this keeps the lookup total either way). */
+function specialtyCase(perks: readonly string[] | undefined) {
+  if (!perks) return null;
+  for (const id of perks) {
+    const def = PERKS[id as keyof typeof PERKS];
+    if (def?.caseType) return def.caseType;
+  }
+  return null;
+}
 
 const HOST_CSS = 'position:relative;width:100%;height:100%;overflow:hidden;touch-action:none;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;';
 
@@ -249,6 +263,14 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
       if (a.settle > 0.6 && (a.settlePose === 'sit' || a.settlePose === 'recline')) {
         overlays.badge(p.id, a.x, y + 0.42, a.z, p.caseType);
       }
+      // VIP patient (DESIGN 10.2): a gold name tag, always up (not gated on the operatory being selected)
+      if (p.vip && a.settle > 0.4) overlays.tag('vip:' + p.id, a.x, a.headY + 0.5, a.z, p.name, false, true);
+    }
+    // a tiny specialty dot over any posted staff member with a case perk (DESIGN 10.4), matching the
+    // case badge colors above so "this hygienist is a whitening specialist" reads the same way
+    for (const a of actors.staff.values()) {
+      const spec = specialtyCase(a.staff?.perks);
+      if (spec) overlays.badge('spec:' + a.id, a.x - 0.3, a.headY + 0.15, a.z, spec);
     }
     // name tags for the selected operatory
     if (selectedOp) {
@@ -264,8 +286,9 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
         if (pa?.patient) {
           // in the chair: tag at the foot of the chair, clear of the hygienist's tag
           const L = l.ops[o.slot];
-          if (L && pa.settlePose === 'recline') overlays.tag(TAG_PATIENT, L.bedside.x, 1.25, L.bedside.z, pa.patient.name);
-          else overlays.tag(TAG_PATIENT, pa.x, pa.headY + 0.35, pa.z, pa.patient.name);
+          const vip = pa.patient.vip;
+          if (L && pa.settlePose === 'recline') overlays.tag(TAG_PATIENT, L.bedside.x, 1.25, L.bedside.z, pa.patient.name, false, vip);
+          else overlays.tag(TAG_PATIENT, pa.x, pa.headY + 0.35, pa.z, pa.patient.name, false, vip);
         }
       }
     }

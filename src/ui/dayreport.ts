@@ -1,16 +1,22 @@
-// Day report: net, income and expense lines, per-location stats, reviews, goals, notes, "Next day".
+// Day report: net, income and expense lines, per-location stats with the waitlist, events answered today,
+// reviews, goals (auto-claimed ones too), what ends tomorrow, notes, "Next day". Employees see their own shift.
 import { money, signedMoney, weekday as weekdayName } from '../core/format';
 import { store } from '../core/store';
-import type { DayLine, DayReport, Review } from '../core/types';
+import type { ClinicDayStats, DayLine, DayReport, Review } from '../core/types';
+import { CAMPAIGNS } from '../data/manager';
 import { h } from './dom';
 import { countUp, music, sfx } from './fx';
 import { icon } from './icons';
 import { noDash, operatingNet, plural } from './logic';
+import { eventDef } from './mgr';
+import { endingOn, type MyDay } from './mgrlogic';
 import { openModal } from './modal';
 import { patientPortrait } from './portrait';
 import { btn, chip, stars } from './widgets';
 
-export function showDayReport(report: DayReport): Promise<void> {
+type WaitStats = ClinicDayStats & { waitlist?: number };
+
+export function showDayReport(report: DayReport, extra: { mine?: MyDay | null; autoClaimed?: string[] } = {}): Promise<void> {
   const netEl = h('span.num', money(0));
   // owners see the day's profit; purchases, loans and rewards show as the cash change beside it
   const owner = report.phase === 'owner';
@@ -27,10 +33,41 @@ export function showDayReport(report: DayReport): Promise<void> {
       cashDiff ? h('span.report-cash.tiny.bold', `Cash ${signedMoney(Math.round(report.net))}`) : null),
   );
 
+  const tile = (label: string, value: string | number, tone = '', ic?: string) => h('div.report-tile', { class: tone }, ic ? icon(ic) : null, h('b.num', String(value)), h('span', label));
+
+  // ---- employee: your own shift first, the clinic as a footnote
+  const mine = !owner ? extra.mine ?? null : null;
+  const shift = mine ? h('div.report-loc.report-mine',
+    h('div.row.row-between.row-wrap',
+      h('div.report-loc-name', icon('hand'), 'Your shift'),
+      mine.reviews ? h('div.row.gap-6', stars(mine.avgStars, 16), h('span.num', mine.avgStars.toFixed(1))) : null,
+    ),
+    h('div.report-tiles.is-four',
+      tile('Patients', mine.seen, '', 'user'),
+      tile('Five stars', mine.fiveStars, mine.fiveStars ? 'good' : '', 'star'),
+      tile('Walkouts', mine.walkouts, mine.walkouts ? 'bad' : '', 'door'),
+      tile('Avg stars', mine.reviews ? mine.avgStars.toFixed(1) : '-', '', 'starLine'),
+    ),
+  ) : null;
+
   const locs = report.perLocation.map((l) => {
-    const st = l.stats;
-    const tile = (label: string, value: string | number, tone = '', ic?: string) => h('div.report-tile', { class: tone }, ic ? icon(ic) : null, h('b.num', String(value)), h('span', label));
+    const st = l.stats as WaitStats;
     const delta = Math.round(l.ratingDelta * 100) / 100;
+    if (!owner) {
+      // the employer's day in one line: it is not your score
+      return h('div.report-clinic-line.small.muted', icon('pin'),
+        `${l.name} today: ${plural(st.served, 'patient')} served, rating ${l.rating.toFixed(1)}`);
+    }
+    const waitlist = st.waitlist ?? (l as { waitlist?: number }).waitlist;
+    let waitNote: HTMLElement | null = null;
+    const wl = typeof waitlist === 'number' ? waitlist : 0;
+    if (wl > 0 || st.turnedAway > 0) {
+      const parts: string[] = [];
+      if (wl > 0) parts.push(`${plural(wl, 'patient')} on tomorrow's waitlist, booked first.`);
+      else if (typeof waitlist !== 'number') parts.push(`${plural(st.turnedAway, 'patient')} could not get in today.`);
+      if (typeof waitlist === 'number' && st.turnedAway > wl) parts.push(`${plural(st.turnedAway - wl, 'patient')} went elsewhere.`);
+      waitNote = h('div.report-note', icon('calendar'), h('span', parts.join(' '), h('span.report-note-tip', ' More operatories or hygienists fit them in.')));
+    }
     return h('div.report-loc',
       h('div.row.row-between.row-wrap',
         h('div.report-loc-name', icon('pin'), l.name),
@@ -38,12 +75,12 @@ export function showDayReport(report: DayReport): Promise<void> {
       ),
       h('div.report-tiles',
         tile('Served', st.served, '', 'user'),
-        tile('Turned away', st.turnedAway, st.turnedAway ? 'bad' : '', 'door'),
-        tile('Walkouts', st.walkouts, st.walkouts ? 'bad' : '', 'alert'),
-        tile('No-shows', st.noShows, '', 'calendar'),
+        tile(typeof waitlist === 'number' ? 'Waitlist' : 'Turned away', typeof waitlist === 'number' ? waitlist : st.turnedAway, wl > 0 || st.turnedAway > 0 ? 'warn' : '', 'calendar'),
+        tile('Walkouts', st.walkouts, st.walkouts ? 'bad' : '', 'door'),
+        tile('No-shows', st.noShows, '', 'alert'),
         tile('Five stars', st.fiveStars, st.fiveStars ? 'good' : '', 'star'),
       ),
-      st.turnedAway > 0 && report.phase === 'owner' ? h('div.report-note', icon('bulb'), `${plural(st.turnedAway, 'patient')} could not get an appointment. More operatories or hygienists would fit them in.`) : null,
+      waitNote,
     );
   });
 
@@ -56,28 +93,60 @@ export function showDayReport(report: DayReport): Promise<void> {
     );
   };
 
-  // reviews from the finished day
+  // ---- the finished day from the live state (reviews, events answered, what ends tomorrow)
   const reviews: Review[] = [];
-  if (store.loaded && report.phase === 'owner') {
+  const events: { title: string; text: string; place: string }[] = [];
+  const ending: string[] = [];
+  if (store.loaded && owner) {
+    const s = store.state;
     const ids = new Set(report.perLocation.map((l) => l.clinicId));
-    for (const c of store.state.locations) if (ids.has(c.id)) reviews.push(...c.reviews.filter((r) => r.day === report.day));
+    const multi = s.locations.length > 1;
+    for (const c of s.locations) if (ids.has(c.id)) reviews.push(...c.reviews.filter((r) => r.day === report.day));
+    for (const e of s.eventLog ?? []) {
+      if (e.day !== report.day) continue;
+      const def = eventDef(e.eventId);
+      const c = s.locations.find((x) => x.id === e.clinicId);
+      events.push({ title: def?.title ?? 'Event', text: e.text, place: multi && c ? c.name : '' });
+    }
+    // closeDay already moved to tomorrow: modifiers whose last day is s.day end after tomorrow
+    for (const c of s.locations) {
+      const where = multi ? ` (${c.name})` : '';
+      if (c.campaign && c.campaign.untilDay === s.day) ending.push(`${CAMPAIGNS[c.campaign.id]?.name ?? 'Campaign'}${where}`);
+      for (const m of endingOn(c.modifiers, s.day)) if (!m.id.startsWith('campaign:') && !m.id.startsWith('focus:')) ending.push(`${m.label}${where}`);
+    }
   }
   reviews.sort((a, b) => b.stars * b.weight - a.stars * a.weight);
   const shownReviews = [...reviews.slice(0, 2), ...reviews.filter((r) => r.stars <= 2).slice(0, 1)].filter((r, i, arr) => arr.indexOf(r) === i).slice(0, 3);
+
+  // goals: Paperwork Pro claims finished goals at day close
+  const autoField = (report as DayReport & { autoClaimed?: string[] }).autoClaimed ?? [];
+  const autoNotes = report.notes.filter((n) => /^auto-?claimed/i.test(n)).map((n) => n.replace(/^auto-?claimed:?\s*/i, ''));
+  const autoClaimed = [...(extra.autoClaimed ?? []), ...autoField, ...autoNotes.flatMap((n) => n.split(/;\s*/))].filter((g, i, a) => g && a.indexOf(g) === i);
+  // the sim also writes events and the waitlist as notes: they have their own sections here
+  const eventLines = events.map((e) => `${e.title}. ${e.text}`);
+  const notes = report.notes.filter((n) => !/^auto-?claimed/i.test(n)
+    && !(owner && (/turned away$/.test(n) || /on the waitlist/i.test(n)))
+    && !eventLines.some((x) => n.endsWith(x)));
+  const goalsDone = report.goalsDone.filter((g) => !autoClaimed.includes(g));
 
   const next = btn('Next day', { variant: 'primary', size: 'lg', block: true, iconRight: 'arrowRight' });
   const m = openModal({
     hero,
     body: h('div.report-body',
+      shift,
       ...locs,
-      h('div.report-money', { class: { 'is-single': !(report.expenses.length || report.phase === 'owner') } },
-        lineList(report.phase === 'owner' ? 'Income' : 'Earnings', report.income, 'good'),
-        report.expenses.length || report.phase === 'owner' ? lineList('Expenses', report.expenses, 'bad') : null),
+      h('div.report-money', { class: { 'is-single': !(report.expenses.length || owner) } },
+        lineList(owner ? 'Income' : 'Earnings', report.income, 'good'),
+        report.expenses.length || owner ? lineList('Expenses', report.expenses, 'bad') : null),
+      events.length ? h('div.report-section', h('div.report-lines-title', 'Events today'), ...events.map((e) =>
+        h('div.report-event', icon('bell'), h('div.grow', h('b.small', noDash(e.title)), e.place ? h('span.tiny.faint', `  ${e.place}`) : null, h('div.small.muted', noDash(e.text)))))) : null,
       shownReviews.length ? h('div.report-section', h('div.report-lines-title', 'Reviews'), ...shownReviews.map((r) =>
         h('div.report-review', patientPortrait({ name: r.name, archetype: r.archetype }, r.stars >= 4 ? 'happy' : r.stars <= 2 ? 'pain' : 'neutral', 40),
           h('div.grow', h('div.row.gap-6', h('b.small', r.name), stars(r.stars, 13)), h('div.small.muted', `“${noDash(r.text)}”`))))) : null,
-      report.goalsDone.length ? h('div.report-section', h('div.report-lines-title', 'Goals done'), h('div.row.row-wrap.gap-6', ...report.goalsDone.map((g) => chip(noDash(g), 'sun', 'goals')))) : null,
-      report.notes.length ? h('div.report-section', h('div.report-lines-title', 'Notes'), ...report.notes.map((n) => h('div.report-note', icon('info'), noDash(n)))) : null,
+      goalsDone.length ? h('div.report-section', h('div.report-lines-title', 'Goals done'), h('div.row.row-wrap.gap-6', ...goalsDone.map((g) => chip(noDash(g), 'sun', 'goals')))) : null,
+      autoClaimed.length ? h('div.report-section', h('div.report-lines-title', 'Auto-claimed'), h('div.row.row-wrap.gap-6', ...autoClaimed.map((g) => chip(noDash(g), 'mint', 'check')))) : null,
+      ending.length ? h('div.report-section', h('div.report-lines-title', 'Ending tomorrow'), h('div.row.row-wrap.gap-6', ...ending.map((x) => chip(noDash(x), 'sky', 'clock')))) : null,
+      notes.length ? h('div.report-section', h('div.report-lines-title', 'Notes'), ...notes.map((n) => h('div.report-note', icon('info'), noDash(n)))) : null,
       h('div.report-foot-stats',
         h('span.chip.chip-sun', icon('bolt'), `+${Math.round(report.xpGained)} XP`),
         report.levelUps ? h('span.chip.chip-gum', icon('arrowUp'), plural(report.levelUps, 'level up')) : null,

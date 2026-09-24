@@ -318,7 +318,7 @@ export interface DayReport {
   day: number;
   weekday: number;             // 0..4 Mon..Fri
   phase: Phase;
-  perLocation: { clinicId: string; name: string; stats: ClinicDayStats; rating: number; ratingDelta: number }[];
+  perLocation: { clinicId: string; name: string; stats: ClinicDayStats; rating: number; ratingDelta: number; waitlist?: number }[];   // waitlist: patients booked first tomorrow
   income: DayLine[];
   expenses: DayLine[];
   net: number;                 // total cash change of the day, including purchases and loans
@@ -333,7 +333,8 @@ export interface DayReport {
 
 export interface Goal {
   id: string;
-  kind: 'chunks' | 'fiveStars' | 'served' | 'fastClean' | 'addons' | 'perfect' | 'combo';
+  kind: 'chunks' | 'fiveStars' | 'served' | 'fastClean' | 'addons' | 'perfect' | 'combo'
+    | 'campaign' | 'noWalkouts' | 'net' | 'events' | 'rating';   // owner goals (DESIGN 10.7)
   target: number;
   progress: number;
   rewardCash: number;

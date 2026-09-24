@@ -297,6 +297,61 @@ function shellCrackBuilder(): Builder {
   };
 }
 
+// ---------------------------------------------------------------- manager layer sounds (DESIGN 10)
+
+function cardSlideBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a thin card sliding across a desk and settling: a soft filtered swish, pitch easing down
+    burst(ctx, out, { duration: 0.26, rng, filter: 'bandpass', freq: 1700, freqEnd: 850, Q: 1.1, peak: 0.3, attack: 0.02, decay: 0.22 });
+  };
+}
+
+function marimbaRise(semis: number[], step: number, dur: number, peak = 0.5): Builder {
+  return (ctx, out) => {
+    // warm mallet notes: a sine fundamental plus a soft quiet octave partial, short pluck decay
+    semis.forEach((s, i) => {
+      const f = noteFreq(s);
+      tone(ctx, out, { type: 'sine', freq: f, duration: dur, start: i * step, peak, attack: 0.006, decay: dur });
+      tone(ctx, out, { type: 'sine', freq: f * 2, duration: dur * 0.5, start: i * step, peak: peak * 0.18, attack: 0.004, decay: dur * 0.5 });
+    });
+  };
+}
+
+function woodBonkBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a gentle low wooden knock: a soft noise tap (the wood contact) plus a low rounded thump, no
+    // harsh edge (contrast with the sharper, more alarm-like `error` bonk)
+    burst(ctx, out, { duration: 0.03, rng, filter: 'bandpass', freq: 500, Q: 1.4, peak: 0.35, attack: 0.002, decay: 0.026 });
+    tone(ctx, out, { type: 'sine', freq: 160, freqEnd: 100, duration: 0.24, peak: 0.5, attack: 0.004, decay: 0.22 });
+  };
+}
+
+function whooshChimeBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a soft cheerful whoosh (a bandpass sweeping up) landing on a small warm chime
+    burst(ctx, out, { duration: 0.34, rng, filter: 'bandpass', freq: 450, freqEnd: 2000, Q: 1.0, peak: 0.4, attack: 0.05, decay: 0.28 });
+    tone(ctx, out, { type: 'sine', freq: noteFreq(9), duration: 0.35, start: 0.22, peak: 0.4, attack: 0.006, decay: 0.32 });
+    tone(ctx, out, { type: 'sine', freq: noteFreq(9) * 2, duration: 0.22, start: 0.22, peak: 0.14, attack: 0.006, decay: 0.2 });
+  };
+}
+
+function clipboardHuddleBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a soft clipboard tap (a short muted knock) then a warm chime, like the morning huddle opening
+    burst(ctx, out, { duration: 0.04, rng, filter: 'bandpass', freq: 900, Q: 1.6, peak: 0.4, attack: 0.002, decay: 0.035 });
+    tone(ctx, out, { type: 'triangle', freq: 300, freqEnd: 220, duration: 0.1, peak: 0.35, attack: 0.003, decay: 0.09 });
+    tone(ctx, out, { type: 'sine', freq: noteFreq(4), duration: 0.3, start: 0.14, peak: 0.35, attack: 0.008, decay: 0.28 });
+  };
+}
+
+function penClickShuffleBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a soft pen click (a tiny bright tick) then a quiet paper shuffle (short filtered noise)
+    burst(ctx, out, { duration: 0.012, rng, filter: 'bandpass', freq: 2600, Q: 4, peak: 0.35, attack: 0.001, decay: 0.01 });
+    burst(ctx, out, { duration: 0.18, rng, start: 0.05, filter: 'bandpass', freq: 3200, freqEnd: 2200, Q: 0.9, peak: 0.16, attack: 0.02, decay: 0.15 });
+  };
+}
+
 // ---------------------------------------------------------------- key -> recipe table
 const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 | 2 }> = {
   scrape_1: { build: scrape(3200), duration: 0.5 },
@@ -340,6 +395,14 @@ const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 |
   shell_crack: { build: shellCrackBuilder(), duration: 0.3 },
   // a single clean pitched note: the clean scene steps it up (rate) with every snapped tooth
   tooth_done: { build: bell(noteFreq(12), 3, 0.7, 0.7), duration: 0.8 },
+  // manager layer (DESIGN 10)
+  event_card: { build: cardSlideBuilder(), duration: 0.35 },
+  event_good: { build: marimbaRise([0, 5], 0.09, 0.35, 0.5), duration: 0.5 },
+  event_bad: { build: woodBonkBuilder(), duration: 0.3 },
+  campaign_start: { build: whooshChimeBuilder(), duration: 0.65 },
+  perk_pick: { build: marimbaRise([-5, -1, 3], 0.055, 0.28, 0.45), duration: 0.5 },
+  huddle: { build: clipboardHuddleBuilder(), duration: 0.5 },
+  interview: { build: penClickShuffleBuilder(), duration: 0.3 },
   door_chime: { build: doorChimeBuilder(), duration: 0.7 },
   cash: { build: cashBuilder(), duration: 0.6 },
   coins: { build: coinsBuilder(), duration: 0.45 },

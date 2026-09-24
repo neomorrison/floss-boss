@@ -14,13 +14,14 @@ function patient(id: string, state: PatientState, extra: Partial<DayPatient> = {
     id, name: 'Pat ' + id, archetype: 'regular', portrait: 'regular', service: 'cleaning', addons: [], apptMin: 540,
     walkIn: false, state, since: 540, until: null, seat: null, opId: null, staffId: null, awaitingPlayer: false,
     arrivedMin: 540, waitedMin: 0, patience: 45, dirtLevel: 0.5, quality: null, comfort: null, stars: null,
-    fee: 120, tip: 0, isPlayerPatient: false, mood: 'ok', caseType: 'routine', twists: [], ...extra,
+    fee: 120, tip: 0, isPlayerPatient: false, mood: 'ok', caseType: 'routine', twists: [], bonus: null, vip: false, ...extra,
   };
 }
 function staff(id: string, role: StaffRole, extra: Partial<Staff> = {}): Staff {
   return {
     id, name: 'S ' + id, role, portrait: 'staff_0', skill: 50, speed: 50, bedside: 50, salary: 200, ask: 200, morale: 70,
-    traits: [], level: 1, xp: 0, hiredDay: 1, offUntilDay: 0, patientsToday: 0, task: 'idle', targetOpId: null, busyUntil: null, ...extra,
+    traits: [], level: 1, xp: 0, hiredDay: 1, offUntilDay: 0, patientsToday: 0, task: 'idle', targetOpId: null, busyUntil: null,
+    perks: [], pendingPerks: null, ...extra,
   };
 }
 function op(slot: number, extra: Partial<Operatory> = {}): Operatory {
@@ -32,7 +33,7 @@ function clinic(patients: DayPatient[], ops: Operatory[] = [], team: Staff[] = [
     prices: { cleaning: 1, deep: 1, fluoride: 1, sealant: 1, xray: 1, whitening: 1, exam: 1, filling: 1 },
     marketing: 0, rating: 4, reviews: [], served: 0, patients,
     day: { booked: 0, demand: 0, turnedAway: 0, noShows: 0, walkIns: 0, served: 0, walkouts: 0, revenue: 0, tips: 0, supplies: 0, addonsSold: 0, fiveStars: 0, handsOn: 0 },
-    checkinBusyUntil: 0,
+    checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
   };
 }
 

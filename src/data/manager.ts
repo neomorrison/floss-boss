@@ -28,7 +28,7 @@ export interface CampaignDef {
 }
 export const CAMPAIGNS: Record<CampaignId, CampaignDef> = {
   kidsWeek: { id: 'kidsWeek', name: 'Kids Week', blurb: 'Balloons, stickers and sugar bugs.', cost: 600, days: 5, cooldown: 3, demand: 1.15, caseBoost: { candy: 3 }, requires: null, minTier: 't1' },
-  smileMakeover: { id: 'smileMakeover', name: 'Smile Makeover', blurb: 'Whitening specials all week.', cost: 900, days: 5, cooldown: 3, demand: 1.1, caseBoost: { whitening: 3 }, requires: 'whiteningLamp', minTier: 't1' },
+  smileMakeover: { id: 'smileMakeover', name: 'Smile Makeover', blurb: 'Whitening specials all week.', cost: 1200, days: 5, cooldown: 4, demand: 1.1, caseBoost: { whitening: 3 }, requires: 'whiteningLamp', minTier: 't1' },
   goldenYears: { id: 'goldenYears', name: 'Golden Years', blurb: 'Senior discount mornings.', cost: 800, days: 5, cooldown: 3, demand: 1.1, caseBoost: { deep: 3 }, requires: 'deepCert', minTier: 't1' },
   bracesBonanza: { id: 'bracesBonanza', name: 'Braces Bonanza', blurb: 'Free wax with every braces check.', cost: 700, days: 5, cooldown: 3, demand: 1.1, caseBoost: { braces: 3 }, requires: null, minTier: 't2' },
   pirateDay: { id: 'pirateDay', name: 'Talk Like a Pirate Week', blurb: 'Eyepatches at the front desk. Pirates hear about it.', cost: 1000, days: 4, cooldown: 5, demand: 1.1, caseBoost: { pirate: 6 }, requires: null, minTier: 't2' },
@@ -46,10 +46,10 @@ export interface PerkDef {
 }
 export const PERKS: Record<PerkId, PerkDef> = {
   whiteningPro: { id: 'whiteningPro', name: 'Whitening Pro', text: 'Whitening cases: quality +8%, 20% faster.', roles: ['hygienist'], caseType: 'whitening', caseQuality: 0.08, caseSpeed: 1.2 },
-  kidMagnet: { id: 'kidMagnet', name: 'Kid Magnet', text: 'Sugar bug cases: quality +8%, kids stay calm.', roles: ['hygienist'], caseType: 'candy', caseQuality: 0.08, caseSpeed: 1.1 },
+  kidMagnet: { id: 'kidMagnet', name: 'Kid Magnet', text: 'Sugar bug cases: quality +8%, 10% faster.', roles: ['hygienist'], caseType: 'candy', caseQuality: 0.08, caseSpeed: 1.1 },
   bracesWhiz: { id: 'bracesWhiz', name: 'Braces Whiz', text: 'Braces cases: quality +8%, 20% faster.', roles: ['hygienist'], caseType: 'braces', caseQuality: 0.08, caseSpeed: 1.2 },
   deepDiver: { id: 'deepDiver', name: 'Deep Diver', text: 'Deep cleanings: quality +8%, 15% faster.', roles: ['hygienist'], caseType: 'deep', caseQuality: 0.08, caseSpeed: 1.15 },
-  pirateWhisperer: { id: 'pirateWhisperer', name: 'Pirate Whisperer', text: 'Pirates tip double. Arr.', roles: ['hygienist'], caseType: 'pirate', caseQuality: 0.05, tipMult: 2 },
+  pirateWhisperer: { id: 'pirateWhisperer', name: 'Pirate Whisperer', text: 'Pirates leave big tips. Arr.', roles: ['hygienist'], caseType: 'pirate', caseQuality: 0.05, tipMult: 2 },
   speedDemon: { id: 'speedDemon', name: 'Speed Demon', text: '10% faster on everything.', roles: ['hygienist', 'receptionist', 'assistant', 'dentist'], speed: 1.1 },
   gentleHands: { id: 'gentleHands', name: 'Gentle Hands', text: 'Patients 10% more comfortable.', roles: ['hygienist', 'dentist'], comfort: 0.1 },
   mentor: { id: 'mentor', name: 'Mentor', text: 'Teammates at this office gain XP 50% faster.', roles: ['hygienist', 'dentist', 'manager'], mentorXp: 1.5 },

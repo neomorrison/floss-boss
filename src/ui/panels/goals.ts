@@ -16,8 +16,10 @@ import { masteryInfo, noDash } from '../logic';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { bar, btn, chip, empty, sectionTitle, tabs } from '../widgets';
 
-const GOAL_ICON: Record<Goal['kind'], string> = {
+// owner goals (DESIGN 10.7) add management kinds beyond Goal['kind']: campaigns, events, net, rating, zero walkouts
+const GOAL_ICON: Record<string, string> = {
   chunks: 'tooth', fiveStars: 'star', served: 'user', fastClean: 'timer', addons: 'receipt', perfect: 'sparkle', combo: 'bolt',
+  campaign: 'megaphone', events: 'bell', net: 'trendUp', opNet: 'trendUp', profit: 'trendUp', rating: 'star', noWalkouts: 'door', zeroWalkouts: 'door', walkouts: 'door',
 };
 
 type GoalsTab = 'goals' | 'cases';

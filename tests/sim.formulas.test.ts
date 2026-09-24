@@ -9,10 +9,10 @@ import { CASES } from '../src/data/cases';
 import { graduated, grant, result } from './sim.helpers';
 
 describe('progression formulas', () => {
-  it('xpToNext = round(60 * L^1.4)', () => {
+  it('xpToNext = 60, 100, 150 through level 3, then round(60 * L^1.4)', () => {
     expect(sim.xpToNext(1)).toBe(60);
-    expect(sim.xpToNext(2)).toBe(158);
-    expect(sim.xpToNext(3)).toBe(279);
+    expect(sim.xpToNext(2)).toBe(100);
+    expect(sim.xpToNext(3)).toBe(150);
     expect(sim.xpToNext(4)).toBe(418);
     expect(sim.xpToNext(10)).toBe(Math.round(60 * Math.pow(10, 1.4)));
   });

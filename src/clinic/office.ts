@@ -2,10 +2,10 @@
 // equipment. Rebuilt when the office tier or name changes; operatories and equipment are re-synced when
 // the clinic buys something (new pieces pop in).
 import * as THREE from 'three';
-import type { Clinic, EquipId, Operatory } from '../core/types';
+import type { Clinic, ClinicModifier, EquipId, Operatory, OpUpgradeId } from '../core/types';
 import { CHAIRS, EQUIPMENT, OP_UPGRADES } from '../data/upgrades';
 import { OFFICES } from '../data/offices';
-import type { ClinicLayout, Piece, Rect } from './layout';
+import type { ClinicLayout, OpSlotLayout, Piece, Rect, V2 } from './layout';
 import {
   C, mat, glassMat, hitMat, tileTexture, woodTexture, concreteTexture, streetTexture, outlineTexture,
   numberTexture, signTexture, roundRect,
@@ -103,12 +103,67 @@ function disposeOwned(root: THREE.Object3D): void {
   });
 }
 
+/** The OpSlotLayout fields that hold a Piece (as opposed to a Spot, a Rect or a plain number). */
+type PieceKeyOf<T> = { [K in keyof T]: T[K] extends Piece ? K : never }[keyof T];
+
+/** Which OpSlotLayout field holds each op upgrade's spot (DESIGN 10.5: ergoStool, nitrous joined tv,
+ * whiteningLamp, intraoralCam this round). */
+const OP_UPGRADE_PIECE: Record<OpUpgradeId, PieceKeyOf<OpSlotLayout>> = {
+  tv: 'tv', whiteningLamp: 'whiteningLamp', intraoralCam: 'intraoralCam', ergoStool: 'ergoStool', nitrous: 'nitrous',
+};
+
+/** A small traffic cone and a taped-off strip: the "this operatory is closed" marker for an event's
+ * closedOpId (DESIGN 10.2, e.g. a burst pipe). Built from shared primitives, no model key needed. */
+function closedMarker(): THREE.Object3D {
+  const g = new THREE.Group();
+  g.add(cyl(0.02, 0.1, 0.3, mat('#FF7A3D', 0.55), 0, 0, 0, 12));
+  g.add(cyl(0.12, 0.12, 0.03, mat('#FF7A3D', 0.55), 0, 0, 0, 12));
+  g.add(box(0.09, 0.05, 0.02, mat(C.white, 0.5), 0, 0.16, 0, 0.01));
+  g.add(box(0.6, 0.05, 0.015, mat(C.sunshine, 0.4), 0, 0.42, 0, 0.01));
+  return g;
+}
+
+// ------------------------------------------------------------------ event and campaign props (DESIGN 10.2)
+// Clinic.modifiers ids follow '<source>:<key>:<n>' (DESIGN 10, shared convention); the middle segment
+// picks the diorama prop, when one fits. Several event/campaign keys can map to the same prop (a rival
+// sign never doubles up just because the modifier renewed), so callers dedupe by prop key.
+function propKeyForModifier(m: ClinicModifier): string | null {
+  const key = m.id.split(':')[1] ?? '';
+  switch (key) {
+    case 'puppy': return 'prop_puppy';
+    case 'pirateDay': case 'pirateFestival': return 'prop_jolly_roger';
+    case 'rival': return 'prop_rival_sign';
+    case 'news': return 'prop_camera_crew';
+    case 'outage': return 'prop_generator';
+    case 'mystery': case 'celebrity': return 'prop_red_carpet';
+    default: return m.source === 'campaign' ? 'prop_balloons' : null;
+  }
+}
+
+/** Where a modifier prop stands and which way it faces. Puppy has no fixed spot: it wanders (Office.update). */
+function propSpotFor(key: string, l: ClinicLayout): { x: number; z: number; yaw: number } | null {
+  switch (key) {
+    case 'prop_balloons': return { x: l.desk.x - 1.1, z: l.desk.z + 0.3, yaw: 0 };
+    case 'prop_jolly_roger': return { x: l.sign.x - 0.7, z: l.sign.z - 0.5, yaw: 0.3 };
+    case 'prop_rival_sign': return { x: l.zones.street.x1 - 1.6, z: l.zones.street.z1 - 0.3, yaw: Math.PI };
+    case 'prop_camera_crew': return { x: l.zones.sidewalk.x0 + 1.6, z: (l.zones.sidewalk.z0 + l.zones.sidewalk.z1) / 2, yaw: 0.4 };
+    case 'prop_generator': return { x: l.floor.x1 + 0.9, z: l.floor.z0 + 1.4, yaw: Math.PI / 2 };
+    case 'prop_red_carpet': return { x: l.door.x, z: (l.door.inside.z + l.door.outside.z) / 2, yaw: 0 };
+    default: return null;
+  }
+}
+
 export class Office {
   readonly group = new THREE.Group();
   readonly proxies: THREE.Object3D[] = [];
   private env = new THREE.Group();
   private ops = new THREE.Group();
   private equip = new THREE.Group();
+  private modProps = new THREE.Group();
+  private modKey = '';
+  private puppy: THREE.Object3D | null = null;
+  private puppyBase: V2 = { x: 0, z: 0 };
+  private puppyRadius = 1;
   private selection: THREE.Mesh;
   private doorPivot: THREE.Object3D | null = null;
   private doorRest = 0;
@@ -133,7 +188,7 @@ export class Office {
   }
 
   constructor() {
-    this.group.add(this.env, this.ops, this.equip);
+    this.group.add(this.env, this.ops, this.equip, this.modProps);
     const selGeo = new THREE.PlaneGeometry(1, 1); selGeo.rotateX(-Math.PI / 2);
     this.selection = new THREE.Mesh(selGeo, new THREE.MeshBasicMaterial({ map: outlineTexture(C.bubblegum, false), transparent: true, depthWrite: false }));
     this.selection.visible = false;
@@ -157,7 +212,38 @@ export class Office {
       this.buildOps(l, c, !first && !rebuilt);
       this.opsKey = ok;
     }
+    this.syncModifiers(l, c, rebuilt);
     return rebuilt;
+  }
+
+  // ---------------------------------------------------------------- event and campaign props
+
+  /** Rebuild the modifier-driven props (puppy, balloons, Jolly Roger, ...) when the active set changes. */
+  private syncModifiers(l: ClinicLayout, c: Clinic, force: boolean): void {
+    const seen = new Set<string>();
+    for (const m of c.modifiers) { const k = propKeyForModifier(m); if (k) seen.add(k); }
+    const key = [...seen].sort().join(',');
+    if (!force && key === this.modKey) return;
+    this.modKey = key;
+    disposeOwned(this.modProps);
+    this.modProps.clear();
+    this.puppy = null;
+    for (const k of seen) {
+      if (k === 'prop_puppy') {
+        this.puppyBase = { x: (l.zones.lobby.x0 + l.zones.lobby.x1) / 2, z: (l.zones.lobby.z0 + l.zones.lobby.z1) / 2 };
+        this.puppyRadius = Math.min(1.6, (l.zones.lobby.x1 - l.zones.lobby.x0) / 4);
+        this.puppy = place(makeProp('prop_puppy'), this.puppyBase.x, this.puppyBase.z, 0);
+        // wanders every frame (Office.update): excluded from the static batch, unlike the props below
+        this.puppy.userData.noBatch = true;
+        this.puppy.traverse((o) => { o.userData.noBatch = true; });
+        this.modProps.add(this.puppy);
+        continue;
+      }
+      const spot = propSpotFor(k, l);
+      if (!spot) continue;
+      this.modProps.add(place(makeProp(k), spot.x, spot.z, spot.yaw));
+    }
+    batchStatic(this.modProps);
   }
 
   // ---------------------------------------------------------------- building shell
@@ -347,6 +433,8 @@ export class Office {
     const bySlot = new Map<number, Operatory>();
     for (const o of c.ops) bySlot.set(o.slot, o);
     const slots = Math.min(l.ops.length, OFFICES[l.tier].opSlots);
+    const closedOpIds = new Set<string>();
+    for (const m of c.modifiers) if (m.closedOpId) closedOpIds.add(m.closedOpId);
     for (let i = 0; i < l.ops.length; i++) {
       const L = l.ops[i];
       const op = bySlot.get(L.slot);
@@ -355,13 +443,18 @@ export class Office {
         g.add(place(makeProp(CHAIRS[op.chair]?.model ?? 'chair_basic'), L.chair.x, L.chair.z, L.chair.yaw));
         for (const p of [L.counter, L.lamp, L.cart]) g.add(propAt(p));
         for (const u of op.upgrades) {
-          const piece = u === 'tv' ? L.tv : u === 'whiteningLamp' ? L.whiteningLamp : L.intraoralCam;
+          const piece = L[OP_UPGRADE_PIECE[u]];
           const obj = propAt({ ...piece, key: OP_UPGRADES[u]?.model ?? piece.key });
           g.add(obj);
           pop(`${op.id}|${u}`, obj);
         }
         const num = decal(numberTexture(L.slot + 1), 0.5, 0.5, L.entry.x, 0.02, L.entry.z - (L.row === 'back' ? 0.95 : -0.95));
         g.add(num);
+        if (closedOpIds.has(op.id)) {
+          const marker = place(closedMarker(), L.entry.x, L.entry.z, L.yaw);
+          g.add(marker);
+          pop(`${op.id}|closed`, marker);
+        }
         this.ops.add(g);
         pop(`${op.id}|${op.chair}`, g.children[0]);
         pop(`op|${op.id}`, g);
@@ -430,6 +523,17 @@ export class Office {
       p.obj.scale.setScalar(Math.max(0.01, s * p.base));
       if (t >= 1) this.poppers.splice(i, 1);
     }
+    // the office puppy (DESIGN 10.2) wanders a slow loop around the middle of the lobby
+    if (this.puppy) {
+      const r = this.puppyRadius;
+      const x = this.puppyBase.x + Math.sin(nowSec * 0.22) * r;
+      const z = this.puppyBase.z + Math.sin(nowSec * 0.15 + 1.7) * r * 0.6;
+      const ahead = nowSec + 0.05;
+      const nx = this.puppyBase.x + Math.sin(ahead * 0.22) * r;
+      const nz = this.puppyBase.z + Math.sin(ahead * 0.15 + 1.7) * r * 0.6;
+      this.puppy.position.set(x, 0, z);
+      this.puppy.rotation.y = Math.atan2(nx - x, nz - z);
+    }
   }
 
   dispose(): void {
@@ -448,7 +552,9 @@ function mixStr(h: number, s: string): number {
   for (let i = 0; i < s.length; i++) h = mix(h, s.charCodeAt(i));
   return mix(h, 124);
 }
-/** Cheap identity (a hash, no allocation) of what is built: operatory slots, chairs, upgrades, equipment. */
+/** Cheap identity (a hash, no allocation) of what is built: operatory slots, chairs, upgrades, equipment,
+ * and which operatory (if any) an event has closed (DESIGN 10.2, closedOpId), so a burst pipe closing or
+ * reopening an operatory pops the "Closed" marker in or out without waiting on some other change. */
 export function opsSignature(c: Clinic): number {
   let h = c.ownedByPlayer ? 2166136261 : 1234567;
   for (const o of c.ops) {
@@ -457,6 +563,8 @@ export function opsSignature(c: Clinic): number {
   }
   h = mix(h, 35);
   for (const e of c.equipment) h = mixStr(h, e);
+  h = mix(h, 71);
+  for (const m of c.modifiers) if (m.closedOpId) h = mixStr(h, m.closedOpId);
   return h;
 }
 

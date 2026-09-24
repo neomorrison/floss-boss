@@ -109,7 +109,9 @@ describe('envGain', () => {
 
 describe('SFX/music key lists (data/assets contract this module renders a fallback for)', () => {
   it('has the expected key counts (canary: fails loudly if the shared data contract changes)', () => {
-    expect(SFX_KEYS.length).toBe(53);
+    // v3 manager layer (DESIGN 10) added 7 keys: event_card, event_good, event_bad, campaign_start,
+    // perk_pick, huddle, interview (53 -> 60).
+    expect(SFX_KEYS.length).toBe(60);
     expect(MUSIC_KEYS.length).toBe(3);
   });
   it('ships a real mp3 for every SFX and music key (the synth recipes are only the fallback)', () => {

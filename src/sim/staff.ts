@@ -1,13 +1,16 @@
 // Staff: candidates, hiring, firing, training, assignments and the daily staff update. DESIGN 8.5.
-import type { ActionResult, Candidate, Clinic, GameState, SimEvent, Staff, StaffRole, TraitId } from '../core/types';
+import type { ActionResult, Candidate, Clinic, GameState, PerkId, SimEvent, Staff, StaffRole, TraitId } from '../core/types';
 import type { Rng } from '../core/rng';
 import { clamp } from '../core/rng';
 import { PLAYER_ID, TRAINING_COST } from '../core/constants';
 import { money } from '../core/format';
 import { OFFICES } from '../data/offices';
 import { ROLES, STAFF_FIRST, STAFF_LAST, STAFF_PORTRAITS, TRAITS } from '../data/staff';
+import { PERKS, PERK_LEVELS } from '../data/manager';
 import { S, SimOp, SimStaff, addCash, clinicByIndex, hasSkill, isPresent, nextId, note, pushEvent, withRng } from './internal';
 import { checkAchievements } from './goals';
+import { chainHas, has, lateMinutes, perkAdd, perksOf } from './effects';
+import { focusMoraleAtClose } from './manager';
 
 export function statAvg(role: StaffRole, s: { skill: number; speed: number; bedside: number }): number {
   return role === 'hygienist' ? (s.skill + s.speed + s.bedside) / 3 : s.skill;
@@ -60,16 +63,94 @@ export function makeStaff(state: GameState, rng: Rng, role: StaffRole, quality: 
     task: 'idle',
     targetOpId: null,
     busyUntil: null,
+    perks: [],
+    pendingPerks: null,
     ...o,
   };
 }
+
+/** Width of a candidate's stat ranges before an interview (DESIGN 10.4). */
+export const RANGE_WIDTH = 30;
+
+/** A range of RANGE_WIDTH that contains the true value, placed at random. */
+function statRange(v: number, rng: Rng): [number, number] {
+  const lo = clamp(v - rng.int(0, RANGE_WIDTH), 0, 100 - RANGE_WIDTH);
+  return [lo, lo + RANGE_WIDTH];
+}
+
+/** Candidates on the board: six, eight with Talent Scout. */
+export function candidateSlots(state: GameState): number {
+  return CANDIDATE_SLOTS + (hasSkill(state, 'talentScout') ? 2 : 0);
+}
+
+/** Interview price: $40 x tierScale of the active office, free with Talent Scout. */
+export function interviewCost(state: GameState): number {
+  if (hasSkill(state, 'talentScout')) return 0;
+  const c = state.locations[state.active] ?? state.locations[0];
+  return Math.round(INTERVIEW_COST * (c ? OFFICES[c.tier].tierScale : 1));
+}
+export const INTERVIEW_COST = 40;
+
+/** Interview a candidate: reveals exact stats and traits (DESIGN 10.4). */
+export function interview(state: GameState, candidateId: string): ActionResult {
+  if (state.phase !== 'owner') return { ok: false, reason: 'Open a practice first' };
+  const cand = state.candidates.find((x) => x.id === candidateId);
+  if (!cand) return { ok: false, reason: 'Candidate is no longer available' };
+  if (cand.interviewed) return { ok: false, reason: 'Already interviewed' };
+  const cost = interviewCost(state);
+  if (state.cash < cost) return { ok: false, reason: 'Not enough cash' };
+  if (cost > 0) addCash(state, -cost, 'Interviews');
+  cand.interviewed = true;
+  cand.range = { skill: [cand.skill, cand.skill], speed: [cand.speed, cand.speed], bedside: [cand.bedside, cand.bedside] };
+  return { ok: true, message: `Interviewed ${cand.name}` };
+}
+
+/** Remove a staff member from a clinic (quit, poached, temp contract over) and free their operatory. */
+export function removeStaff(c: Clinic, staffId: string): void {
+  unassign(c, staffId);
+  c.staff = c.staff.filter((x) => x.id !== staffId);
+}
+
+/** Perks a staff member can be offered: their role, not owned yet. */
+export function perkPool(s: Staff): PerkId[] {
+  return (Object.keys(PERKS) as PerkId[]).filter((id) => PERKS[id].roles.includes(s.role) && !perksOf(s).includes(id));
+}
+
+/** Offer two perks (DESIGN 10.4) when a staff member reaches a perk level. */
+function offerPerks(state: GameState, s: SimStaff, rng: Rng): boolean {
+  if (s.pendingPerks && s.pendingPerks.length) return false;
+  const pool = perkPool(s);
+  if (!pool.length) return false;
+  const a = rng.pick(pool);
+  const rest = pool.filter((x) => x !== a);
+  s.pendingPerks = rest.length ? [a, rng.pick(rest)] : [a];
+  s.perkDay = state.day;
+  return true;
+}
+
+/** Pick one of the two offered perks. */
+export function pickPerk(state: GameState, clinicIndex: number, staffId: string, perk: PerkId): ActionResult {
+  const c = state.phase === 'owner' ? state.locations[clinicIndex] : null;
+  if (!c) return { ok: false, reason: 'Location not found' };
+  const s = c.staff.find((x) => x.id === staffId) as SimStaff | undefined;
+  if (!s) return { ok: false, reason: 'Staff member not found' };
+  if (!s.pendingPerks || !s.pendingPerks.includes(perk)) return { ok: false, reason: 'Perk not offered' };
+  s.perks = [...perksOf(s), perk];
+  s.pendingPerks = null;
+  delete s.perkDay;
+  return { ok: true, message: `${s.name.split(' ')[0]}: ${PERKS[perk].name}` };
+}
+
+/** Days before an unpicked perk choice is made automatically (the first offered). */
+export const PERK_AUTO_DAYS = 2;
 
 /** Candidates stay on the board until they expire (2 days); the board is topped up to six,
  * weighted toward the roles the active office lacks. */
 export const CANDIDATE_SLOTS = 6;
 export function makeCandidates(state: GameState, rng: Rng): void {
   if (state.phase !== 'owner' || !state.locations.length) { state.candidates = []; return; }
-  const keep = state.candidates.filter((x) => x.expiresDay >= state.day).slice(0, CANDIDATE_SLOTS);
+  const slots = candidateSlots(state);
+  const keep = state.candidates.filter((x) => x.expiresDay >= state.day).slice(0, slots);
   const c = state.locations[Math.max(0, Math.min(state.locations.length - 1, state.active))];
   const tier = OFFICES[c.tier];
   const hyg = c.staff.filter((s) => s.role === 'hygienist').length;
@@ -84,12 +165,13 @@ export function makeCandidates(state: GameState, rng: Rng): void {
   const roles = Object.keys(w) as StaffRole[];
   const out: Candidate[] = [...keep];
   const seen = new Set<StaffRole>(keep.map((x) => x.role));
-  for (let i = keep.length; i < CANDIDATE_SLOTS; i++) {
+  for (let i = keep.length; i < slots; i++) {
     // guarantee variety: the first three picks avoid repeats when possible
     let role = rng.weighted(roles, (r) => w[r] * (i < 3 && seen.has(r) ? 0.25 : 1));
     seen.add(role);
     const s = makeStaff(state, rng, role, tier.candidateQuality);
-    out.push({ ...s, expiresDay: state.day + 1 });
+    const range = { skill: statRange(s.skill, rng), speed: statRange(s.speed, rng), bedside: statRange(s.bedside, rng) };
+    out.push({ ...s, expiresDay: state.day + 1, interviewed: false, range });
   }
   state.candidates = out;
 }
@@ -103,8 +185,12 @@ export function hire(state: GameState, candidateId: string, clinicIndex: number)
   const fee = cand.ask;
   if (state.cash < fee) return { ok: false, reason: 'Not enough cash' };
   addCash(state, -fee, 'Hiring fees');
-  const { expiresDay, ...rest } = cand;
-  const s: Staff = { ...rest, hiredDay: state.day, salary: cand.ask, task: 'idle', patientsToday: 0, busyUntil: null, targetOpId: null };
+  const { expiresDay, interviewed, range, ...rest } = cand;
+  void expiresDay; void interviewed; void range;
+  const s: Staff = {
+    ...rest, hiredDay: state.day, salary: cand.ask, task: 'idle', patientsToday: 0, busyUntil: null, targetOpId: null,
+    perks: perksOf(cand), pendingPerks: null,
+  };
   c.staff.push(s);
   state.candidates = state.candidates.filter((x) => x.id !== candidateId);
   state.stats.hires += 1;
@@ -120,7 +206,7 @@ export function hire(state: GameState, candidateId: string, clinicIndex: number)
   return { ok: true, message: msg };
 }
 
-function unassign(c: Clinic, staffId: string): void {
+export function unassign(c: Clinic, staffId: string): void {
   for (const o of c.ops) {
     if (o.staffId === staffId) o.staffId = null;
     if (o.assistantId === staffId) o.assistantId = null;
@@ -155,13 +241,24 @@ export function train(state: GameState, clinicIndex: number, staffId: string): A
   if (!s) return { ok: false, reason: 'Staff member not found' };
   if (s.offUntilDay > state.day) return { ok: false, reason: 'Already booked on a course' };
   if (s.skill >= 99) return { ok: false, reason: 'Nothing left to learn' };
-  if (state.cash < TRAINING_COST) return { ok: false, reason: 'Not enough cash' };
-  addCash(state, -TRAINING_COST, 'Training');
+  if (s.tempUntilDay != null) return { ok: false, reason: 'Temporary staff do not train' };
+  const cost = trainingCost(state);
+  if (state.cash < cost) return { ok: false, reason: 'Not enough cash' };
+  addCash(state, -cost, 'Training');
   // the skill gain (and a higher ask) arrive when the course day ends
-  s.courseGain = (s.courseGain ?? 0) + COURSE_SKILL;
+  s.courseGain = (s.courseGain ?? 0) + courseSkill(state);
   s.offFrom = state.day + 1;
   s.offUntilDay = state.day + 1;
   return { ok: true, message: `${s.name} is on a course tomorrow` };
+}
+
+/** Training course price: HR Guru -40%, a Research Wing anywhere halves it. */
+export function trainingCost(state: GameState): number {
+  return Math.round(TRAINING_COST * (hasSkill(state, 'hrGuru') ? 0.6 : 1) * (chainHas(state, 'researchWing') ? 0.5 : 1));
+}
+/** Skill a course teaches: HR Guru +50%. */
+export function courseSkill(state: GameState): number {
+  return Math.round(COURSE_SKILL * (hasSkill(state, 'hrGuru') ? 1.5 : 1));
 }
 
 export function setSalary(state: GameState, clinicIndex: number, staffId: string, salary: number): ActionResult {
@@ -248,27 +345,37 @@ export const COURSE_SKILL = 8;
 /** Morale lost per day while cash is below zero (not offset by managers, Leader or the break room). */
 const BROKE_MORALE = 8;
 
-/** Daily staff update at close: morale, quits, levels, raise requests. */
+/** Morale floor with Morale Officer. */
+export const MORALE_OFFICER_FLOOR = 30;
+/** Rooftop Garden: staff only quit after this many days in a row under 25 morale. */
+export const ROOFTOP_QUIT_DAYS = 5;
+
+/** Daily staff update at close: morale, quits, levels, perks, raise requests, temp contracts. */
 export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): void {
   const leader = hasSkill(state, 'leader') ? 1 : 0;
+  const floor = hasSkill(state, 'moraleOfficer') ? MORALE_OFFICER_FLOOR : 0;
+  const team = focusMoraleAtClose(state);
   for (const c of state.locations) {
     const manager = c.staff.some((s) => s.role === 'manager' && isPresent(state, s)) ? 2 : 0;
-    const breakRoom = c.equipment.includes('breakRoom') ? 3 : 0;
+    const perks = (has(c, 'breakRoom') ? 3 : 0) + (has(c, 'staffLockers') ? 1 : 0) + (has(c, 'rooftopGarden') ? 3 : 0);
+    const late = lateMinutes(state, c);
     const quitters: Staff[] = [];
+    const leavers: Staff[] = [];
     for (const s0 of c.staff) {
       const s = s0 as SimStaff;
       const byMinutes = s.role === 'hygienist' || s.role === 'assistant';
+      const bonus = perkAdd(s, 'overworkBonus');
       const over = byMinutes
-        ? Math.max(0, (s.workMin ?? 0) - OVERWORK_MINUTES) / OVERWORK_STEP
-        : Math.max(0, s.patientsToday - OVERWORK[s.role]);
+        ? Math.max(0, (s.workMin ?? 0) - (OVERWORK_MINUTES + late + bonus * OVERWORK_STEP)) / OVERWORK_STEP
+        : Math.max(0, s.patientsToday - (OVERWORK[s.role] + bonus));
       const overwork = Math.round(3 * over);
       const underpaid = s.salary < s.ask ? Math.round(30 * (1 - s.salary / Math.max(1, s.ask))) : 0;
       // underpaid staff lose morale in proportion (-3 at 90% of their ask, -15 at half)
       let dm = 2 - overwork - underpaid + (s.traits.includes('nightOwl') ? 1 : 0);
       if (state.cash < 0) dm -= BROKE_MORALE;   // payday bounced: no perk makes up for that
-      else dm += breakRoom + leader + manager;
+      else dm += perks + leader + manager + team;
       const m0 = s.morale;
-      s.morale = clamp(Math.round(s.morale + dm), 0, 100);
+      s.morale = clamp(Math.round(s.morale + dm), floor, 100);
       if (m0 - s.morale > 5) {
         const why = state.cash < 0 ? 'unpaid' : overwork >= underpaid && overwork > 0 ? 'overworked' : underpaid > 0 ? 'underpaid' : 'unhappy';
         note(state, `${s.name} is ${why} (morale ${s.morale})`);
@@ -284,7 +391,7 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
           if (s.salary < s.ask) pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
         }
       }
-      // levels: every 25 * level patients
+      // levels: every 25 * level patients; perk choices at PERK_LEVELS
       const lv0 = s.level;
       while (s.xp >= 25 * s.level) {
         s.xp -= 25 * s.level;
@@ -292,8 +399,12 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
         s.skill = Math.min(99, s.skill + 3);
         s.speed = Math.min(99, s.speed + 2);
         s.bedside = Math.min(99, s.bedside + 2);
-        s.ask = Math.round(s.ask * 1.08);
+        if (s.tempUntilDay == null) s.ask = Math.round(s.ask * 1.08);
+        if (PERK_LEVELS.includes(s.level) && s.tempUntilDay == null && offerPerks(state, s, rng)) {
+          note(state, `${s.name.split(' ')[0]} leveled up: choose a perk`);
+        }
       }
+      s.xp = Math.round(s.xp * 100) / 100;
       if (s.level > lv0) {
         note(state, `${s.name} reached level ${s.level}`);
         if (s.salary < s.ask) {
@@ -304,15 +415,32 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
         pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
         note(state, `${s.name} asks for a raise to ${money(s.ask)} per day`);
       }
-      if (s.morale < 25 && !s.traits.includes('loyal') && rng.chance(LOW_MORALE_QUIT)) quitters.push(s);
+      // an unpicked perk choice is made for you after two days (the first offered)
+      if (s.pendingPerks && s.pendingPerks.length && state.day - (s.perkDay ?? state.day) >= PERK_AUTO_DAYS) {
+        const pick = s.pendingPerks[0];
+        s.perks = [...perksOf(s), pick];
+        s.pendingPerks = null;
+        delete s.perkDay;
+        note(state, `${s.name.split(' ')[0]} picked ${PERKS[pick].name}`);
+      }
+      // quits: morale under 25 (Loyal never; with a Rooftop Garden only after a bad week)
+      s.lowDays = s.morale < 25 ? (s.lowDays ?? 0) + 1 : 0;
+      if (!s.lowDays) delete s.lowDays;
+      const patient = has(c, 'rooftopGarden') && (s.lowDays ?? 0) < ROOFTOP_QUIT_DAYS;
+      if (s.morale < 25 && !s.traits.includes('loyal') && !patient && s.tempUntilDay == null && rng.chance(LOW_MORALE_QUIT)) quitters.push(s);
+      if (s.tempUntilDay != null && s.tempUntilDay <= state.day) leavers.push(s);
       s.patientsToday = 0;
       s.workMin = 0;
     }
     for (const q of quitters) {
-      unassign(c, q.id);
-      c.staff = c.staff.filter((x) => x !== q);
+      removeStaff(c, q.id);
       pushEvent(ev, { type: 'staffQuit', clinicId: c.id, staffId: q.id, name: q.name });
       note(state, `${q.name} quit`);
+    }
+    for (const q of leavers) {
+      if (!c.staff.includes(q)) continue;
+      removeStaff(c, q.id);
+      note(state, `${q.name} finished their placement`);
     }
   }
 }

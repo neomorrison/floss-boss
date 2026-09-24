@@ -5,14 +5,28 @@ import { clamp } from '../core/rng';
 import { ARCHETYPES, LAST_NAMES, PATIENT_ARCHETYPES } from '../data/patients';
 import { CASES } from '../data/cases';
 import { SERVICES } from '../data/services';
-import { S, SimPatient, hasSkill, isPresent, nextId, priceOf } from './internal';
-import { pickCase, pickTwists } from './cases';
+import { S, SimPatient, hasSkill, isPresent, nextId, priceOf, staffById } from './internal';
+import { pickBonus, pickCase, pickTwists } from './cases';
+import { addonFeeMult, addonMinutesMult, has, modAgg, patienceMult, perkMult } from './effects';
 
-/** Pirates sail in from level 3 (DESIGN 5.5): below it they are rerolled as someone else. */
-export function pickArchetype(state: GameState, c: Clinic, rng: Rng): ArchetypeId {
+/** Arrival weight of an archetype at a clinic: the tier mix, twice the kids with a Kids Corner, no
+ * pirates before level 3 (DESIGN 5.5). */
+export function archetypeWeight(state: GameState, c: Clinic, a: ArchetypeId): number {
   const kids = c.equipment.includes('kidsCorner') ? 2 : 1;
   const pirates = state.player.level >= CASES.pirate.minLevel ? 1 : 0;
-  return rng.weighted(PATIENT_ARCHETYPES, (a) => ARCHETYPES[a].weight[c.tier] * (a === 'kid' ? kids : 1) * (a === 'pirate' ? pirates : 1));
+  return ARCHETYPES[a].weight[c.tier] * (a === 'kid' ? kids : 1) * (a === 'pirate' ? pirates : 1);
+}
+
+export function pickArchetype(state: GameState, c: Clinic, rng: Rng): ArchetypeId {
+  return rng.weighted(PATIENT_ARCHETYPES, (a) => archetypeWeight(state, c, a));
+}
+
+/** Owner fee premium of a case on a plain cleaning: sugar bugs, braces and pirates pay their case rate
+ * (DESIGN 10.3); whitening and deep cases bill their add-on or service instead. */
+export function caseFeeMult(c: Clinic, p: { caseType: CaseType; service: ServiceId }): number {
+  if (!c.ownedByPlayer || p.service !== 'cleaning') return 1;
+  const ct = p.caseType;
+  return ct === 'candy' || ct === 'braces' || ct === 'pirate' ? CASES[ct].payMult : 1;
 }
 
 /** Service that goes with a case: a deep case is a deep cleaning, everything else a cleaning. */
@@ -36,10 +50,10 @@ export function makePatient(state: GameState, c: Clinic, rng: Rng, o: {
   const caseType = o.caseType ?? pickCase(state, c, arch, rng, o.avoidCase ?? null);
   const twists = pickTwists(state, arch, rng);
   const service = serviceFor(caseType);
-  const kidsWait = arch === 'kid' && c.equipment.includes('kidsCorner') ? 1.3 : 1;
-  const patience = a.patience * (c.equipment.includes('espresso') ? 1.25 : 1) * kidsWait;
+  const patience = a.patience * patienceMult(c, arch);
+  const id = nextId(state, 'p');
   return {
-    id: nextId(state, 'p'),
+    id,
     name: patientName(arch, rng),
     archetype: arch,
     portrait: arch,
@@ -66,6 +80,8 @@ export function makePatient(state: GameState, c: Clinic, rng: Rng, o: {
     isPlayerPatient: !!o.player,
     caseType,
     twists,
+    bonus: pickBonus(state, id, caseType),
+    vip: false,
     mood: 'happy',
     arriveAt: o.arriveAt,
     pm: { [service]: c.prices[service] ?? 1 },
@@ -77,9 +93,21 @@ export function hasDentist(state: GameState, c: Clinic): boolean {
   return c.staff.some((s) => s.role === 'dentist' && isPresent(state, s));
 }
 
-export function addonAcceptMult(state: GameState, c: Clinic, key: AddonId): number {
+/** Add-on acceptance multiplier: price^-2, Upseller, an Intraoral Camera, Digital X-Ray (X-rays), today's
+ * focus and modifiers, and an Upsell Star at the front desk (or, for exams, among the present dentists). */
+export function addonAcceptMult(state: GameState, c: Clinic, key: AddonId, deskId?: string | null): number {
   const m = c.prices[key] ?? 1;
-  return Math.pow(m, -2) * (hasSkill(state, 'upseller') ? 1.15 : 1) * (c.ops.some((o) => o.upgrades.includes('intraoralCam')) ? 1.1 : 1);
+  let mult = Math.pow(m, -2) * (hasSkill(state, 'upseller') ? 1.15 : 1) * (c.ops.some((o) => o.upgrades.includes('intraoralCam')) ? 1.1 : 1);
+  if (key === 'xray' && has(c, 'digitalXray')) mult *= 1.2;
+  if (c.ownedByPlayer) mult *= modAgg(state, c).addons;
+  const desk = staffById(c, deskId ?? null);
+  if (desk) mult *= perkMult(desk, 'addons');
+  if (key === 'exam') {
+    let best = 1;
+    for (const d of c.staff) if (d.role === 'dentist' && isPresent(state, d)) best = Math.max(best, perkMult(d, 'addons'));
+    mult *= best;
+  }
+  return mult;
 }
 
 /** Which add-ons this clinic can offer this patient right now (before the acceptance roll). */
@@ -112,7 +140,7 @@ export function decideAddons(state: GameState, c: Clinic, p: SimPatient, rng: Rn
   const accepted: AddonId[] = [];
   if (!p.isPlayerPatient) {
     for (const id of offerableAddons(state, c, p)) {
-      const pr = clamp(addonBase(p, id) * addonAcceptMult(state, c, id), 0, 0.95);
+      const pr = clamp(addonBase(p, id) * addonAcceptMult(state, c, id, p.deskBy), 0, 0.95);
       if (rng.chance(pr)) accepted.push(id);
     }
     if (p.caseType === 'whitening') accepted.push('whitening');
@@ -124,20 +152,34 @@ export function decideAddons(state: GameState, c: Clinic, p: SimPatient, rng: Rn
   for (const k of accepted) pm[k] = c.prices[k] ?? 1;
   if (accepted.includes('exam')) pm.filling = c.prices.filling ?? 1;
   p.pm = pm;
+  // fee modifiers (focus, events, campaigns) lock at check-in too
+  const fm = c.ownedByPlayer ? modAgg(state, c).fees : 1;
+  if (fm !== 1) p.fm = Math.round(fm * 1000) / 1000;
   p.fee = feeFor(c, p);
 }
 
+/** Service part of a fee: a VIP's flat fee, or the locked service price with the owner case premium. */
+function serviceFee(c: Clinic, p: SimPatient): number {
+  if (typeof p.vipFee === 'number') return p.vipFee;
+  return SERVICES[p.service].fee * priceOf(c, p, p.service) * caseFeeMult(c, p);
+}
+
+/** Fee of one add-on at this clinic for this patient (locked price, Laser Whitening, CAD/CAM). */
+export function addonFee(c: Clinic, p: SimPatient, a: AddonId): number {
+  return SERVICES[a].fee * priceOf(c, p, a) * addonFeeMult(c, a);
+}
+
 export function feeFor(c: Clinic, p: SimPatient): number {
-  let fee = SERVICES[p.service].fee * priceOf(c, p, p.service);
-  for (const a of p.addons) fee += SERVICES[a].fee * priceOf(c, p, a);
-  return Math.round(fee);
+  let fee = serviceFee(c, p);
+  for (const a of p.addons) fee += addonFee(c, p, a);
+  return Math.round(fee * (p.fm ?? 1));
 }
 
 /** Fee of the parts billed at the end of a hands-on clean (service + non-dentist add-ons). */
 export function handsFee(c: Clinic, p: SimPatient): number {
-  let fee = SERVICES[p.service].fee * priceOf(c, p, p.service);
-  for (const a of p.addons) if (!SERVICES[a].requiresDentist) fee += SERVICES[a].fee * priceOf(c, p, a);
-  return Math.round(fee);
+  let fee = serviceFee(c, p);
+  for (const a of p.addons) if (!SERVICES[a].requiresDentist) fee += addonFee(c, p, a);
+  return Math.round(fee * (p.fm ?? 1));
 }
 
 /** Turn a case the operatory cannot do into a routine cleaning (owner phase), fixing service and fee. */
@@ -150,15 +192,13 @@ export function downgradeCase(c: Clinic, p: SimPatient): void {
 }
 
 /** Chair minutes of the hygienist part: service plus non-dentist add-ons. */
-export function chairMinutes(p: SimPatient): number {
-  let m = SERVICES[p.service].minutes;
-  for (const a of p.addons) if (!SERVICES[a].requiresDentist) m += SERVICES[a].minutes;
-  return m;
+export function chairMinutes(p: SimPatient, c?: Clinic): number {
+  return SERVICES[p.service].minutes + addonMinutes(p, c);
 }
 
-export function addonMinutes(p: SimPatient): number {
+export function addonMinutes(p: SimPatient, c?: Clinic): number {
   let m = 0;
-  for (const a of p.addons) if (!SERVICES[a].requiresDentist) m += SERVICES[a].minutes;
+  for (const a of p.addons) if (!SERVICES[a].requiresDentist) m += SERVICES[a].minutes * (c ? addonMinutesMult(c, a) : 1);
   return m;
 }
 

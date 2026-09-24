@@ -1,8 +1,14 @@
 // window.__fb debug hooks for headless tests (ARCHITECTURE "Debug hooks"). Available in every build.
 import { bus } from '../core/bus';
 import { store } from '../core/store';
-import type { BonusId, CaseSpecial, CaseType, CleanResult, HandsOnPayout, SimEvent, Speed, TwistId } from '../core/types';
+import type { BonusId, CaseSpecial, CaseType, CleanResult, EquipId, HandsOnPayout, OfficeTierId, PendingEvent, SimEvent, Speed, TwistId } from '../core/types';
 import { CASES } from '../data/cases';
+import { EVENTS } from '../data/manager';
+import { OFFICES, TIER_ORDER } from '../data/offices';
+import { EQUIPMENT, EQUIP_ORDER } from '../data/upgrades';
+import { showHuddle } from './huddle';
+import * as mgr from './mgr';
+import { openPerkChoice } from './staffcard';
 import * as sim from '../sim';
 import { go } from './app';
 import { startNewGame } from './flow';
@@ -206,6 +212,92 @@ export function installDebug(): void {
         events: [], phase: s.phase === 'school' ? 'employee' : s.phase, ownedClinicIds: [], caseType: ct, bonus: o.bonus === undefined ? 'combo' : o.bonus, special,
       });
       return CASES[ct].name;
+    },
+    /** Queue an event card for the active location (the huddle shows it). */
+    event(eventId = 'inspector', clinicIndex?: number) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const idx = clinicIndex ?? Math.max(0, s.active);
+      const c = s.locations[idx];
+      const def = EVENTS.find((e) => e.id === eventId);
+      if (!c || !def) return null;
+      const staff = c.staff.find((x) => x.role === 'hygienist') ?? c.staff[0];
+      const op = c.ops[c.ops.length - 1];
+      const equip = EQUIP_ORDER.find((id) => !c.equipment.includes(id) && TIER_ORDER.indexOf(c.tier) >= TIER_ORDER.indexOf(EQUIPMENT[id].minTier)) as EquipId | undefined;
+      const vars: Record<string, string> = { clinic: c.name };
+      if (staff) { vars.staff = staff.name.split(' ')[0]; vars.staffId = staff.id; }
+      if (op) { vars.op = `Operatory ${op.slot + 1}`; vars.opId = op.id; }
+      if (equip) { vars.equip = EQUIPMENT[equip].name; vars.equipId = equip; }
+      const pe: PendingEvent = { eventId, clinicId: c.id, day: s.day, vars };
+      s.pendingEvents = [...(s.pendingEvents ?? []).filter((x) => !(x.eventId === eventId && x.clinicId === c.id)), pe];
+      store.commit();
+      return pe;
+    },
+    /** Open the Morning Huddle now, with events forced when none are waiting. */
+    huddle(eventIds: string[] = ['inspector', 'news']) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      if (s.phase !== 'owner') debug.owner('t1');
+      if (!(s.pendingEvents ?? []).length) for (const id of eventIds) debug.event(id);
+      s.huddleDay = Math.min(s.huddleDay ?? 0, s.day - 1);
+      store.commit();
+      void showHuddle();
+      return s.pendingEvents.map((e) => e.eventId);
+    },
+    /** Offer two perks to a staff member now (first hygienist of the active location by default) and open the choice. */
+    perks(staffId?: string, open = true) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const c = s.locations[Math.max(0, s.active)];
+      const id = staffId ?? c?.staff.find((x) => x.role === 'hygienist')?.id ?? c?.staff[0]?.id;
+      if (!id) return null;
+      const got = mgr.offerPerks(s, id);
+      store.commit();
+      if (got && open) openPerkChoice(id);
+      return got;
+    },
+    /** Jump to an owner game at an office tier: every operatory staffed, a receptionist, cash to spend. */
+    owner(tier: OfficeTierId = 't2', cash?: number) {
+      if (!store.loaded) debug.newGame();
+      if (!store.loaded) return null;
+      let s = store.state;
+      if (s.phase !== 'owner') debug.openPractice();
+      s = store.state;
+      if (s.phase !== 'owner') return null;
+      const target = TIER_ORDER.indexOf(tier);
+      while (TIER_ORDER.indexOf(s.locations[0].tier) < target) {
+        const next = TIER_ORDER[TIER_ORDER.indexOf(s.locations[0].tier) + 1];
+        s.cash += OFFICES[next].price * 2;
+        const r = attempt(() => sim.moveOffice(s, 0, next, 0), { ok: false as const, reason: 'sim' }, 'moveOffice');
+        if (!r.ok) { console.warn('[debug] move', r); break; }
+      }
+      const c = s.locations[0];
+      attempt(() => sim.setActive(s, 0), undefined);
+      s.cash += 200000;
+      while (c.ops.length < OFFICES[c.tier].opSlots) {
+        const r = attempt(() => sim.buyOperatory(s, 0), { ok: false as const, reason: 'sim' }, 'buyOperatory');
+        if (!r.ok) break;
+      }
+      // hire from the board; when it runs dry, clone a hired hygienist (debug only)
+      const want = (role: string) => s.candidates.find((x) => x.role === role);
+      let guard = 20;
+      while (c.ops.some((o) => !o.staffId) && guard-- > 0) {
+        const cand = want('hygienist');
+        if (cand) { attempt(() => sim.hire(s, cand.id, 0), null, 'hire'); continue; }
+        const base = c.staff.find((x) => x.role === 'hygienist');
+        if (!base) break;
+        const clone = { ...base, id: `dbg${s.nextId++}`, name: `${base.name.split(' ')[0]} ${String.fromCharCode(65 + (guard % 26))}.`, portrait: base.portrait, perks: [], pendingPerks: null };
+        c.staff.push(clone);
+        const free = c.ops.find((o) => !o.staffId);
+        if (free) attempt(() => sim.assignHygienist(s, 0, free.id, clone.id), null, 'assign');
+      }
+      for (const o of c.ops) if (!o.staffId) { const h2 = c.staff.find((x) => x.role === 'hygienist' && !c.ops.some((op) => op.staffId === x.id)); if (h2) attempt(() => sim.assignHygienist(s, 0, o.id, h2.id), null, 'assign'); }
+      if (!c.staff.some((x) => x.role === 'receptionist')) { const r = want('receptionist'); if (r) attempt(() => sim.hire(s, r.id, 0), null, 'hire'); }
+      s.cash = cash ?? Math.round(30000 * OFFICES[c.tier].tierScale);
+      s.huddleDay = s.day;
+      store.commit({ saveNow: true });
+      go('hub');
+      return { tier: c.tier, ops: c.ops.length, staff: c.staff.length, cash: s.cash };
     },
     clean(patientId?: string) {
       if (!store.loaded) return null;

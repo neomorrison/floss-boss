@@ -5,8 +5,12 @@ import { OFFICES, TIER_ORDER } from '../data/offices';
 import { CHAIRS, EQUIPMENT, OP_UPGRADES } from '../data/upgrades';
 import { S, SimReport, hasSkill, pushEvent } from './internal';
 
+/** XP to the next level while employed: 60, 100, 150 (a level-up every 2 to 5 cleans, DESIGN 10.8). */
+export const EARLY_XP = [60, 100, 150];
+/** XP to the next level: EARLY_XP through level 3, then round(60 x L^1.4). */
 export function xpToNext(level: number): number {
-  return Math.round(60 * Math.pow(Math.max(1, level), 1.4));
+  const L = Math.max(1, level);
+  return L <= EARLY_XP.length ? EARLY_XP[L - 1] : Math.round(60 * Math.pow(L, 1.4));
 }
 
 /** Add XP, handle level-ups (+1 skill point each). Returns the number of level-ups. */
@@ -49,7 +53,7 @@ export function title(state: GameState): string {
 
 /** Employee hourly-ish rate per cleaning by title (DESIGN 3.2). */
 export function employeeRate(level: number): number {
-  return level >= 7 ? 115 : level >= 4 ? 90 : 70;
+  return level >= 7 ? 140 : level >= 4 ? 110 : 85;
 }
 
 export function autoQuality(state: GameState): number {
@@ -101,6 +105,8 @@ export function valuation(state: GameState): number {
   let v = 0;
   for (const c of state.locations) v += OFFICES[c.tier].price * 0.6 + equipmentValue(c) * 0.5;
   v += Math.max(0, avgNet(state, 7)) * VALUATION_NET_DAYS;
+  // Investor Relations: buyers pay 10% more for the business (not for your cash)
+  if (hasSkill(state, 'investorRelations')) v *= 1.1;
   v += state.cash - state.loan;
   return Math.round(v);
 }

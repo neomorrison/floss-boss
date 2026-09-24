@@ -32,7 +32,7 @@ export const EQUIPMENT: Record<EquipId, EquipDef> = {
   // v3 (DESIGN 10.5)
   waterFilter: { id: 'waterFilter', name: 'Water Filter', price: 1200, blurb: 'Supplies cost 10% less.', model: 'water_filter', minTier: 't1' },
   aromatherapy: { id: 'aromatherapy', name: 'Aromatherapy Diffuser', price: 1800, blurb: 'Comfort +5% in every operatory. Smells like mint.', model: 'aroma_diffuser', minTier: 't1' },
-  loyaltyProgram: { id: 'loyaltyProgram', name: 'Loyalty Punch Cards', price: 2500, blurb: 'Demand +8%. Regulars come back sooner.', model: 'loyalty_board', minTier: 't1' },
+  loyaltyProgram: { id: 'loyaltyProgram', name: 'Loyalty Punch Cards', price: 2500, blurb: 'Demand +8%. Everyone loves a punch card.', model: 'loyalty_board', minTier: 't1' },
   staffLockers: { id: 'staffLockers', name: 'Staff Lockers', price: 2200, blurb: 'Staff morale +1 per day.', model: 'staff_lockers', minTier: 't1' },
   digitalXray: { id: 'digitalXray', name: 'Digital X-Ray', price: 6000, blurb: 'X-rays accepted 20% more and take half the time. Needs the X-Ray Suite.', model: 'digital_xray', minTier: 't2' },
   soundMasking: { id: 'soundMasking', name: 'Sound Masking', price: 4500, blurb: 'No drill noise in the lobby. Waiting patients stay 20% longer.', model: 'sound_panel', minTier: 't2' },

@@ -3,6 +3,7 @@
 import { store } from '../core/store';
 import { clock, money, weekday } from '../core/format';
 import type { Speed } from '../core/types';
+import { FOCUSES } from '../data/manager';
 import * as sim from '../sim';
 import { h, replay } from './dom';
 import { sfx } from './fx';
@@ -100,6 +101,7 @@ export function createHud(): Hud {
     if (!store.loaded) return;
     const s = store.state;
     rating.style.display = isOwner(s) ? '' : 'none';
+    el.classList.toggle('is-owner', isOwner(s));
     time.classList.toggle('is-school', s.phase === 'school');
   }
 
@@ -117,8 +119,14 @@ export function createHud(): Hud {
     cash.classList.toggle('is-neg', s.cash < 0);
 
     // day and clock
-    const dk = `Day ${s.day} · ${weekday(s.day - 1)}`;
-    if (dk !== lastDay) { dayLabel.textContent = dk; lastDay = dk; }
+    // owners see today's focus next to the day (set in the Morning Huddle)
+    const fx = isOwner(s) ? (s.focus ?? []).filter((x) => x !== 'steady' && FOCUSES[x]) : [];
+    const fl = fx.map((x) => FOCUSES[x].name.replace(/ Day$/, '')).join(' + ');
+    const dk = `Day ${s.day} · ${weekday(s.day - 1)}|${fl}`;
+    if (dk !== lastDay) {
+      lastDay = dk;
+      dayLabel.replaceChildren(`Day ${s.day} · ${weekday(s.day - 1)}`, fl ? h('span.hud-focus', { title: 'Daily focus' }, ` · ${fl}`) : '');
+    }
     const ck = s.dayOver ? 'Closed' : clock(s.minute);
     if (ck !== lastClock) { clockLabel.textContent = ck; lastClock = ck; }
     const sp = s.speed + (paused ? 10 : 0);

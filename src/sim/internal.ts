@@ -2,7 +2,7 @@
 // The sim keeps a few private bookkeeping fields on the shared objects (patients, staff,
 // operatories, the state). They are optional, JSON-safe and filled in by migrate().
 import type {
-  Clinic, DayPatient, DayReport, GameState, Goal, Operatory, PriceKey, SimEvent, SkillId, Staff,
+  Clinic, DayPatient, DayReport, EquipId, GameState, Goal, Operatory, PriceKey, SimEvent, SkillId, Staff,
 } from '../core/types';
 import type { Rng } from '../core/rng';
 import { makeRng } from '../core/rng';
@@ -31,21 +31,44 @@ export interface SimPatient extends DayPatient {
   seen?: boolean;            // employee: counted toward the shift
   gel?: boolean;             // a numbing gel was already used on this patient
   pm?: Partial<Record<PriceKey, number>>;  // price multipliers locked at booking (service) and check-in (add-ons)
+  fm?: number;               // fee multiplier from modifiers (focus, events, campaigns), locked at check-in
+  vipFee?: number;           // VIP patient: flat service fee (replaces the cleaning fee)
+  vipWeight?: number;        // VIP patient: review weight
+  preTip?: number;           // tip left for a specialist (Pirate Whisperer), billed at checkout
+  deskBy?: string;           // receptionist who checked the patient in (Upsell Star)
 }
 
 export interface SimStaff extends Staff {
   workMin?: number;          // chair minutes worked today (overwork is measured in minutes, not patients)
   courseGain?: number;       // skill gained when the booked course ends
+  perkDay?: number;          // day the pending perk choice was offered (auto-picked after 2 days)
+  lowDays?: number;          // consecutive days with morale under 25 (Rooftop Garden: quits need 5)
 }
 export interface SimOp extends Operatory { freeAt?: number }
 export interface SimClinic extends Clinic {
   startRating?: number;
+  startRatingDay?: number;   // day startRating was taken (a morning rebook keeps it)
   bossCleans?: number;       // hands-on cleans by the owner today: +4% demand each next day (max +20%)
+  bossBoost?: number;        // today's demand multiplier from yesterday's owner cleans
+  waitIn?: number;           // waitlisted patients booked first today (DESIGN 10.3)
+  waitOut?: number;          // today's overflow that comes back tomorrow
+  reach?: number;            // patients served at this office tier (drives awareness; a move resets it)
+  awBonus?: number;          // awareness from events and campaigns
+  ratingBonus?: number;      // rating from events (fades 5% a day)
+  recentEvents?: Record<string, number>;   // event id -> last day it was drawn here
+  openedDay?: number;        // day this location opened (Grand Opening)
+  vips?: { fee: number; weight: number; day: number }[];   // event VIPs booked for a day
+  bookDay?: number;          // day the service prices below were locked for booking
+  bookPrices?: { cleaning: number; deep: number };
 }
-export interface SimGoal extends Goal { limit?: number }
+/** Owner goal kinds beyond the core Goal['kind'] union (DESIGN 10.7). Stored in Goal.kind; the UI falls back
+ * to a generic icon for kinds it does not know. */
+export type OwnerGoalKind = 'campaign' | 'noWalkouts' | 'net' | 'events' | 'rating';
+export interface SimGoal extends Goal { limit?: number; clinicId?: string }
 /** Reports saved before operatingNet existed carry opNet instead. */
 export interface SimReport extends DayReport { opNet?: number }
 export interface SimState extends GameState {
+  discounts?: { clinicId: string; equipId: EquipId; pct: number; day: number }[];   // salesman offers (today only)
   dayXp?: number;
   dayLevelUps?: number;
   dayGoals?: string[];
@@ -63,9 +86,18 @@ export function priceOf(c: Clinic, p: DayPatient, key: PriceKey): number {
 
 /** Can this operatory serve patients today: your chair, or a present hygienist. */
 export function opStaffed(state: GameState, c: Clinic, op: Operatory): boolean {
+  if (opClosed(state, c, op.id)) return false;
   if (op.staffId === PLAYER_ID) return true;
   const s = staffById(c, op.staffId);
   return !!s && s.role === 'hygienist' && isPresent(state, s);
+}
+
+/** An event closed this operatory for today (ClinicModifier.closedOpId). */
+export function opClosed(state: GameState, c: Clinic, opId: string): boolean {
+  const mods = c.modifiers;
+  if (!mods || !mods.length) return false;
+  for (const m of mods) if (m.closedOpId === opId && (m.untilDay == null || m.untilDay >= state.day)) return true;
+  return false;
 }
 
 export const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;

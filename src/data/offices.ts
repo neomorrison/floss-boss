@@ -17,10 +17,10 @@ export interface OfficeTier {
 }
 
 export const OFFICES: Record<OfficeTierId, OfficeTier> = {
-  t1: { id: 't1', name: 'Strip Mall Suite', blurb: 'Two chairs between a nail salon and a vape shop.', opSlots: 2, seats: 4, rent: 180, price: 5000, baseDemand: 15, appeal: 1.0, tierScale: 1, candidateQuality: 0 },
-  t2: { id: 't2', name: 'Main Street Office', blurb: 'Four operatories, a real waiting room, a sign out front.', opSlots: 4, seats: 8, rent: 700, price: 28000, baseDemand: 28, appeal: 1.25, tierScale: 1.8, candidateQuality: 5 },
-  t3: { id: 't3', name: 'Medical Plaza', blurb: 'Six operatories in a glass building with valet parking.', opSlots: 6, seats: 12, rent: 1800, price: 120000, baseDemand: 36, appeal: 1.5, tierScale: 3, candidateQuality: 10 },
-  t4: { id: 't4', name: 'Smile Tower', blurb: 'The flagship. Eight operatories and a view.', opSlots: 8, seats: 16, rent: 3600, price: 400000, baseDemand: 50, appeal: 1.8, tierScale: 5, candidateQuality: 15 },
+  t1: { id: 't1', name: 'Strip Mall Suite', blurb: 'Two chairs between a nail salon and a vape shop.', opSlots: 2, seats: 4, rent: 180, price: 4000, baseDemand: 11, appeal: 1.0, tierScale: 1, candidateQuality: 0 },
+  t2: { id: 't2', name: 'Main Street Office', blurb: 'Four operatories, a real waiting room, a sign out front.', opSlots: 4, seats: 8, rent: 700, price: 25000, baseDemand: 17, appeal: 1.25, tierScale: 1.8, candidateQuality: 5 },
+  t3: { id: 't3', name: 'Medical Plaza', blurb: 'Six operatories in a glass building with valet parking.', opSlots: 6, seats: 12, rent: 1800, price: 120000, baseDemand: 22, appeal: 1.5, tierScale: 3, candidateQuality: 10 },
+  t4: { id: 't4', name: 'Smile Tower', blurb: 'The flagship. Eight operatories and a view.', opSlots: 8, seats: 16, rent: 3600, price: 400000, baseDemand: 27, appeal: 1.8, tierScale: 5, candidateQuality: 15 },
 };
 
 export const TIER_ORDER: OfficeTierId[] = ['t1', 't2', 't3', 't4'];

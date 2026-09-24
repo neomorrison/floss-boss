@@ -10,8 +10,9 @@ import { act, activeIndex } from '../game';
 import { icon } from '../icons';
 import { locationPicker } from './office';
 import type { PanelCtx, PanelInst } from '../panelhost';
-import { candidateBlock, staffBlock } from '../staffcard';
-import { empty, tabs } from '../widgets';
+import * as mgr from '../mgr';
+import { candidateBlock, openPerkChoice, staffBlock } from '../staffcard';
+import { btn, empty, tabs } from '../widgets';
 
 let intent: { tab: 'team' | 'hire'; role: StaffRole | 'all' } | null = null;
 /** Open the Staff panel on a given tab and role filter next time it is built (for example from the operatory panel). */
@@ -32,11 +33,11 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
       if (!c) return 'none';
       return JSON.stringify([
         s.active, s.day, s.locations.length,
-        c.staff.map((x) => [x.id, x.salary, x.ask, Math.round(x.morale), x.level, x.xp, x.patientsToday, x.offUntilDay, x.offFrom ?? 0]),
+        c.staff.map((x) => [x.id, x.salary, x.ask, Math.round(x.morale), x.level, x.xp, x.patientsToday, x.offUntilDay, x.offFrom ?? 0, x.perks, x.pendingPerks, x.tempUntilDay ?? 0]),
         s.player.skills.includes('negotiator'),
         c.ops.map((o) => [o.id, o.staffId, o.assistantId]),
-        s.candidates.map((x) => x.id),
-        [1500, ...s.candidates.map((x) => x.ask)].map((p) => (s.cash >= p ? 1 : 0)).join(''),
+        s.candidates.map((x) => [x.id, x.interviewed]),
+        [mgr.trainingCost(s), mgr.interviewCost(s), ...s.candidates.map((x) => x.ask)].map((p) => (s.cash >= p ? 1 : 0)).join(''),
       ]);
     },
     render() {
@@ -62,9 +63,12 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
           h('div.sum-tile', icon('wallet'), h('b.num', money(payroll)), h('span', 'Salaries per day')),
         );
         const list = c.staff.length
-          ? h('div.grid.grid-auto-lg', ...c.staff.slice().sort((a, b) => ROLE_IDS.indexOf(a.role) - ROLE_IDS.indexOf(b.role)).map((st) => staffBlock(c, loc, st)))
+          ? h('div.grid.grid-auto-lg.staff-grid', ...c.staff.slice().sort((a, b) => (b.pendingPerks?.length ? 1 : 0) - (a.pendingPerks?.length ? 1 : 0) || ROLE_IDS.indexOf(a.role) - ROLE_IDS.indexOf(b.role)).map((st) => staffBlock(c, loc, st)))
           : empty('userPlus', 'No team yet', 'Hygienists clean patients for you. Receptionists speed up check-in.', h('button.btn.btn-primary', { type: 'button', onClick: () => { tab = 'hire'; ctx.rerender(); } }, 'Hire board'));
-        return h('div.staff-panel', head, summary, list);
+        const offers = mgr.perkOffers(s).filter((o) => o.clinicIndex !== loc);
+        const elsewhere = offers.length ? h('div.staff-elsewhere', icon('sparkle'), h('span.grow', `${offers.map((o) => o.staff.name.split(' ')[0]).join(', ')} at ${offers[0].clinic.name}${offers.length > 1 && offers.some((o) => o.clinic !== offers[0].clinic) ? ' and more' : ''} can pick a perk`),
+          btn('Choose', { variant: 'sun', size: 'sm', onClick: () => openPerkChoice(offers[0].staff.id) })) : null;
+        return h('div.staff-panel', head, elsewhere, summary, list);
       }
       // hire board
       const roles = Array.from(new Set(s.candidates.map((x) => x.role)));
@@ -78,13 +82,14 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
         : null;
       const cands = s.candidates.filter((x) => roleFilter === 'all' || x.role === roleFilter);
       const list = cands.length
-        ? h('div.grid.grid-auto-lg', ...cands.map((cand) => candidateBlock(cand, () => {
+        ? h('div.grid.grid-auto-lg.staff-grid', ...cands.map((cand) => candidateBlock(cand, () => {
           const ok = act(() => sim.hire(store.state, cand.id, loc), { sound: 'hire', success: `${cand.name} joined ${c.name}` });
           if (ok) confetti(undefined, 40);
         }, s.locations.length > 1 ? `Hire to ${c.name}` : 'Hire')))
         : empty('calendar', 'No candidates right now', 'New people apply every morning.');
+      const icost = mgr.interviewCost(s);
       return h('div.staff-panel', head,
-        h('div.small.muted.staff-hint', icon('info'), 'The hiring fee is one day of salary. New hires start right away.'),
+        h('div.small.muted.staff-hint', icon('info'), `The hiring fee is one day of salary. New hires start right away. An interview shows real stats and traits (${icost > 0 ? money(icost) : 'free'}).`),
         filterRow, list);
     },
   };

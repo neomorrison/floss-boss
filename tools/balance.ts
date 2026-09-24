@@ -1,18 +1,21 @@
 // Headless economy simulation with bot strategies (npm run balance).
 // Converts game time to real time: 1 game minute = 0.2 s at 1x, hands-on cleans take the bot's
 // seconds plus hub overhead, and bots use 2x or 4x when idle like a player would.
-// Prints the milestone table against the DESIGN 2 pacing targets, plus degenerate-strategy checks.
+// Prints the milestone table against the DESIGN 10.8 pacing targets, manager-layer stats (demand fill,
+// waitlist, walkouts, events, campaigns, perks), plus degenerate-strategy checks.
 //
 //   npm run balance              all bots, 5 seeds each
 //   npm run balance -- --seeds 9 --bot median --verbose
+//   npm run balance -- --no-checks
 import * as sim from '../src/sim/index';
-import type { CaseType, CleanResult, CleanSetup, Clinic, GameState, OfficeTierId, Staff } from '../src/core/types';
+import type { CampaignId, CaseType, CleanResult, CleanSetup, Clinic, FocusId, GameState, OfficeTierId, PendingEvent, Staff } from '../src/core/types';
 import { makeRng } from '../src/core/rng';
 import { REAL_SEC_PER_GAME_MIN } from '../src/core/constants';
 import { OFFICES, TIER_ORDER } from '../src/data/offices';
 import { TOOLS, EXTRAS } from '../src/data/tools';
-import { EQUIPMENT, EQUIP_ORDER, CHAIRS } from '../src/data/upgrades';
+import { EQUIPMENT, EQUIP_ORDER, CHAIRS, OP_UPGRADES } from '../src/data/upgrades';
 import { SKILLS } from '../src/data/skills';
+import { CAMPAIGNS, EVENTS, type EventEffect } from '../src/data/manager';
 
 // ------------------------------------------------------------------ bot definitions
 
@@ -22,19 +25,21 @@ interface Bot {
   secs: number;             // real seconds per hands-on clean
   overhead: number;         // real seconds of hub time per clean (result screen, clicking Clean)
   handsPerDay: number;      // owner phase: hands-on cleans per day before switching the chair to autopilot
-  idleOwner: boolean;       // owner phase: chair on autopilot, 4x clock, minimal management
+  idleOwner: boolean;       // owner phase: chair on autopilot, 4x clock, minimal management, auto-huddle
   greedy: boolean;          // loans to the max, moves and expands as early as possible
   priceMult: number;        // cleaning price multiplier the bot sets
+  events: 'first' | 'smart';   // event policy: always the first choice, or a simple expected-value score
+  manage: boolean;          // uses focus, campaigns, interviews and picks perks
   maxHours: number;
 }
 
 const BOTS: Bot[] = [
-  { name: 'casual (q 0.70)', quality: 0.7, secs: 100, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, maxHours: 14 },
-  { name: 'median (q 0.85)', quality: 0.85, secs: 100, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, maxHours: 14 },
-  { name: 'expert (q 0.95)', quality: 0.95, secs: 100, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, maxHours: 14 },
-  { name: 'idle owner', quality: 0.85, secs: 100, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, maxHours: 14 },
-  { name: 'greedy expander', quality: 0.85, secs: 100, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, maxHours: 14 },
-  { name: 'median, price 1.5', quality: 0.85, secs: 100, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1.5, maxHours: 14 },
+  { name: 'casual (q 0.70)', quality: 0.7, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: true, maxHours: 14 },
+  { name: 'median (q 0.85)', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
+  { name: 'expert (q 0.95)', quality: 0.95, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
+  { name: 'idle owner', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, events: 'first', manage: false, maxHours: 14 },
+  { name: 'greedy expander', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
+  { name: 'median, no manager', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: false, maxHours: 14 },
 ];
 
 // ------------------------------------------------------------------ run state
@@ -48,6 +53,7 @@ interface Run {
   mc: Record<string, number>;  // milestone -> hands-on cleaning count
   md: Record<string, number>;  // milestone -> owner days completed
   ownerDays: number;
+  handsToday: number;
   log: string[];
   maxLoanSeen: number;
   minCash: number;
@@ -55,7 +61,18 @@ interface Run {
   treasure: number;
   cases: Partial<Record<CaseType, number>>;
   quicks: number;
-  lockedQuick: number;    // patients the bot wanted to quick clean but had to clean hands-on (no Bronze yet)
+  lockedQuick: number;
+  // manager layer
+  tierDays: Record<string, { demand: number; booked: number; cap: number; lost: number; wait: number; walkouts: number; waitWalk: number; served: number; days: number; firstWeekFill: number[] }>;
+  eventCash: { in: number; out: number };
+  eventsAnswered: number;
+  campaigns: Partial<Record<CampaignId, number>>;
+  focus: Partial<Record<FocusId, number>>;
+  perks: number;
+  interviews: number;
+  twoStarWait: number;
+  oneStar: number;
+  reviews: number;
 }
 
 const M = (r: Run, key: string) => {
@@ -85,6 +102,11 @@ function caseQuality(r: Run, setup: CleanSetup): number {
 }
 const CASE_LEARNING = 0.08;
 
+function levelMilestones(r: Run): void {
+  const L = r.s.player.level;
+  for (const k of [2, 3, 4, 5]) if (L >= k) M(r, 'level' + k);
+}
+
 function handsOn(r: Run, pid: string): void {
   const setup = sim.beginHandsOn(r.s, pid);
   const secs = r.bot.secs * (0.9 + 0.2 * r.rng.next());
@@ -93,8 +115,8 @@ function handsOn(r: Run, pid: string): void {
   r.treasure += out.payout.treasure;
   r.cases[setup.caseType] = (r.cases[setup.caseType] ?? 0) + 1;
   if (r.s.phase === 'employee') {
-    if (r.s.cash >= 300) M(r, 'firstTool');
-    if (r.s.player.level >= 4) M(r, 'level4');
+    if (r.s.cash >= TOOLS.scaler[1].price) M(r, 'firstTool');
+    levelMilestones(r);
   }
 }
 
@@ -104,17 +126,22 @@ function quick(r: Run, pid: string): void {
   sim.quickClean(r.s, pid);
 }
 
-function clockSpeed(r: RunExt): number {
+function clockSpeed(r: Run): number {
   if (r.s.phase === 'owner' && r.handsToday >= handsQuota(r)) return 4;
   return 2;
 }
 
-interface RunExt extends Run { handsToday: number }
+function tierStats(r: Run, tier: string) {
+  return (r.tierDays[tier] ??= { demand: 0, booked: 0, cap: 0, lost: 0, wait: 0, walkouts: 0, waitWalk: 0, served: 0, days: 0, firstWeekFill: [] });
+}
 
-function playDay(r: RunExt): void {
+function playDay(r: Run): void {
   const s = r.s;
   r.handsToday = 0;
+  // morning numbers per location (after the huddle): capacity, booked, waitlist
+  const morning = s.phase === 'owner' ? s.locations.map((c, i) => ({ id: c.id, tier: c.tier, cap: sim.dayOutlook(s, i).capacity, booked: c.day.booked, wait: (c as { waitIn?: number }).waitIn ?? 0 })) : [];
   let guard = 0;
+  let waitWalk = 0;
   while (!s.dayOver && guard++ < 20000) {
     const q = sim.playerQueue(s);
     if (q.length) {
@@ -124,17 +151,37 @@ function playDay(r: RunExt): void {
       continue;
     }
     const before = s.minute;
-    sim.tick(s, 2);
+    const ev = sim.tick(s, 2);
+    for (const e of ev) {
+      if (e.type === 'walkout' && e.reason === 'wait') waitWalk++;
+      if (e.type === 'review') { r.reviews++; if (e.stars === 1) r.oneStar++; if (e.stars === 2 && e.text.startsWith('Waited')) r.twoStarWait++; }
+    }
     r.real += (s.minute - before) * REAL_SEC_PER_GAME_MIN / clockSpeed(r);
   }
-  if (s.phase === 'owner') r.ownerDays++;
+  if (s.phase === 'owner') {
+    r.ownerDays++;
+    for (const m of morning) {
+      const c = s.locations.find((l) => l.id === m.id);
+      if (!c) continue;
+      const t = tierStats(r, m.tier);
+      t.days++; t.demand += c.day.demand; t.booked += m.booked; t.cap += m.cap; t.lost += c.day.turnedAway; t.wait += m.wait;
+      t.walkouts += c.day.walkouts; t.served += c.day.served;
+      const key = `open:${c.id}:${c.tier}`;
+      if (r.md[key] == null) r.md[key] = r.ownerDays;
+      if (r.ownerDays - r.md[key] < 5 && m.cap > 0) t.firstWeekFill.push(Math.min(1.5, (c.day.demand) / m.cap));
+    }
+    const last = tierStats(r, s.locations[0].tier);
+    last.waitWalk += waitWalk;
+  }
   r.real += s.phase === 'owner' ? 10 : 6;   // day report and a glance at the hub
   const rep = sim.closeDay(s);
+  for (const e of rep.income) if (e.label === 'Events') r.eventCash.in += e.amount;
+  for (const e of rep.expenses) if (e.label === 'Events') r.eventCash.out += e.amount;
   if (s.cash < r.minCash) r.minCash = s.cash;
   if (process.argv.includes('--verbose')) {
     const c = s.locations[0];
     r.log.push(`d${rep.day} ${s.phase} ${(r.real / 60).toFixed(1)}m cash ${s.cash} loan ${s.loan} net ${rep.net} op ${rep.operatingNet} lvl ${s.player.level} ` +
-      (c ? `${c.tier} ops ${c.ops.length} staff ${c.staff.map((x) => x.role[0]).join('')} served ${rep.perLocation.map((l) => l.stats.served + "/" + l.stats.demand + " wo" + l.stats.walkouts + " ta" + l.stats.turnedAway + " ns" + l.stats.noShows).join(",")} rating ${c.rating} mk ${c.marketing} locs ${s.locations.length}` : ''));
+      (c ? `${c.tier} ops ${c.ops.length} staff ${c.staff.map((x) => x.role[0]).join('')} served ${rep.perLocation.map((l) => l.stats.served + '/' + l.stats.booked + ' d' + l.stats.demand + ' wo' + l.stats.walkouts + ' ta' + l.stats.turnedAway + ' wl' + ((l as { waitlist?: number }).waitlist ?? 0)).join(',')} rating ${c.rating} mk ${c.marketing} locs ${s.locations.length} focus ${s.focus.join('+')} camp ${c.campaign?.id ?? '-'}` : ''));
   }
 }
 
@@ -153,11 +200,25 @@ function dailyCosts(s: GameState): number {
   return c + s.loan * 0.0125;
 }
 
-function bestCandidate(s: GameState, role: Staff['role']) {
-  const list = s.candidates.filter((c) => c.role === role);
-  list.sort((a, b) => score(b) / b.ask - score(a) / a.ask);
+/** The bot's estimate of a candidate: exact once interviewed, the range midpoint before. */
+function est(x: GameState['candidates'][number], k: 'skill' | 'speed' | 'bedside'): number {
+  return x.interviewed ? x[k] : (x.range[k][0] + x.range[k][1]) / 2;
+}
+function score(x: GameState['candidates'][number], role: Staff['role']) {
+  return role === 'hygienist' ? (est(x, 'skill') * 2 + est(x, 'speed') + est(x, 'bedside')) / 4 : est(x, 'skill');
+}
+
+function bestCandidate(r: Run, role: Staff['role']) {
+  const s = r.s;
+  let list = s.candidates.filter((c) => c.role === role);
+  if (r.bot.manage && list.length > 1) {
+    // interview the two most promising before hiring (free with Talent Scout)
+    list.sort((a, b) => score(b, role) / b.ask - score(a, role) / a.ask);
+    for (const c of list.slice(0, 2)) if (!c.interviewed && s.cash > sim.interviewCost(s) + c.ask && sim.interview(s, c.id).ok) { r.interviews++; r.real += 2; }
+    list = s.candidates.filter((c) => c.role === role);
+  }
+  list.sort((a, b) => score(b, role) / b.ask - score(a, role) / a.ask);
   return list[0];
-  function score(x: Staff) { return role === 'hygienist' ? (x.skill * 2 + x.speed + x.bedside) / 4 : x.skill; }
 }
 
 function employeeShopping(r: Run): void {
@@ -168,10 +229,9 @@ function employeeShopping(r: Run): void {
     M(r, 'practice');
     return;
   }
-  // skills: technique first
   learnSkills(r);
   // cheap tools while saving: first scaler upgrade, floss picks
-  const cheap: [keyof typeof TOOLS, number][] = [['scaler', 2], ['floss', 2]];
+  const cheap: [keyof typeof TOOLS, number][] = [['floss', 2], ['scaler', 2]];
   for (const [slot, tier] of cheap) {
     const t = TOOLS[slot][tier - 1];
     if (s.player.tools[slot] < tier && s.cash >= t.price) buy(r, sim.buyTool(s, slot, tier));
@@ -180,7 +240,9 @@ function employeeShopping(r: Run): void {
 
 function learnSkills(r: Run): void {
   const s = r.s;
-  const order = ['power', 'steady1', 'calmingVoice', 'marketer', 'negotiator', 'polishPro', 'smallTalk', 'tipMagnet', 'leanOps', 'leader', 'eagleEye', 'steady2', 'upseller', 'speedCleaner', 'kidWhisperer', 'gagGuru'] as const;
+  const order = r.bot.manage
+    ? ['power', 'steady1', 'paperworkPro', 'calmingVoice', 'marketer', 'talentScout', 'huddlePro', 'negotiator', 'bulkBuyer', 'hrGuru', 'polishPro', 'smallTalk', 'crisisManager', 'leanOps', 'brandBuilder', 'leader', 'mentorProgram', 'investorRelations', 'tipMagnet', 'delegator', 'moraleOfficer', 'franchiseSavvy', 'eagleEye', 'steady2', 'upseller', 'nightShift', 'speedCleaner', 'kidWhisperer', 'gagGuru'] as const
+    : ['power', 'steady1', 'calmingVoice', 'marketer', 'negotiator', 'polishPro', 'smallTalk', 'tipMagnet', 'leanOps', 'leader', 'eagleEye', 'steady2', 'upseller', 'speedCleaner', 'kidWhisperer', 'gagGuru', 'paperworkPro', 'bulkBuyer'] as const;
   for (const id of order) {
     if (s.player.skillPoints < 1) break;
     if (sim.skillStatus(s, id) === 'available') sim.learnSkill(s, id);
@@ -202,7 +264,7 @@ function savingsGoal(r: Run): number {
   return q.price - Math.round(q.maxLoan * share);
 }
 
-function handsQuota(r: RunExt): number {
+function handsQuota(r: Run): number {
   if (r.bot.idleOwner) return 0;
   const ti = TIER_ORDER.indexOf(r.s.locations[0]?.tier ?? 't1');
   return Math.max(1, r.bot.handsPerDay - ti);
@@ -210,16 +272,142 @@ function handsQuota(r: RunExt): number {
 
 function hireBest(r: Run, li: number, role: Staff['role'], reserve: number): boolean {
   const s = r.s;
-  const cand = bestCandidate(s, role);
+  const cand = bestCandidate(r, role);
   if (!cand || s.cash < cand.ask + reserve) return false;
   if (!buy(r, sim.hire(s, cand.id, li))) return false;
   M(r, 'firstHire');
   return true;
 }
 
-function ownerShopping(r: RunExt): void {
+// ---------------------------------------------------------------- the morning huddle
+
+/** Rough daily revenue of a location, for weighing event choices. */
+function dayRevenue(s: GameState, li: number): number {
+  const f = sim.forecast(s, li);
+  return Math.max(300, f.revenue);
+}
+
+/** Simple expected-value score of an event choice (the 'smart' policy). */
+function effectValue(s: GameState, li: number, ef: EventEffect, spare: boolean): number {
+  const c = s.locations[li];
+  const scale = OFFICES[c.tier].tierScale;
+  const rev = dayRevenue(s, li);
+  const days = (d: number | null) => (d == null ? 40 : d);
+  switch (ef.kind) {
+    case 'cash': return ef.amount * (ef.scaled ? scale : 1);
+    case 'rating': return ef.delta * 8 * rev;
+    case 'awareness': return ef.delta * 20 * rev;
+    case 'modifier': {
+      let v = 0;
+      const n = days(ef.days);
+      if (ef.demand) v += (ef.demand - 1) * n * rev * (spare ? 0.8 : 0.15);
+      if (ef.fees) v += (ef.fees - 1) * n * rev;
+      if (ef.supplies) v += (1 - ef.supplies) * n * 150 * scale;
+      if (ef.comfort) v += (ef.comfort - 1) * n * rev * 0.5;
+      if (ef.noShows) v -= (ef.noShows - 1) * n * rev * 0.08;
+      if (ef.walkins) v += (ef.walkins - 1) * n * rev * (spare ? 0.1 : 0.02);
+      return v;
+    }
+    case 'morale': return ef.delta * (ef.who === 'all' ? c.staff.length : 1) * 25;
+    case 'skill': return ef.delta * 40;
+    case 'salary': return -ef.pct / 100 * 300 * 30 + 1500;   // keeps a good hygienist
+    case 'quitChance': return -ef.p * 4000;
+    case 'vip': return ef.fee;
+    case 'closeOp': return -ef.days * rev / Math.max(1, c.ops.length);
+    case 'openLate': return -ef.minutes / 480 * rev;
+    case 'tempStaff': return ef.days * 120;
+    case 'discountEquip': return 0;
+    case 'freeEquip': return 2000;
+    case 'xp': return ef.amount * 2;
+    case 'chance': {
+      const p = Math.min(1, ef.p + (s.player.skills.includes('crisisManager') ? 0.2 : 0));
+      const sum = (xs: EventEffect[]) => xs.reduce((t, x) => t + effectValue(s, li, x, spare), 0);
+      return p * sum(ef.win) + (1 - p) * sum(ef.lose);
+    }
+  }
+  return 0;
+}
+
+function pickChoice(r: Run, pe: PendingEvent): number {
+  if (r.bot.events === 'first') return 0;
+  const s = r.s;
+  const e = EVENTS.find((x) => x.id === pe.eventId);
+  const li = s.locations.findIndex((c) => c.id === pe.clinicId);
+  if (!e || li < 0) return 0;
+  const o = sim.dayOutlook(s, li);
+  const spare = o.booked < o.capacity * 0.9;
+  let best = 0;
+  let bestV = -Infinity;
+  e.choices.forEach((ch, i) => {
+    const v = ch.effects.reduce((t, x) => t + effectValue(s, li, x, spare), 0);
+    if (v > bestV + 1) { bestV = v; best = i; }
+  });
+  return best;
+}
+
+function chooseFocus(r: Run): FocusId[] {
+  const s = r.s;
+  const opts = sim.focusOptions(s);
+  const ok = (id: FocusId) => opts.options.some((o) => o.id === id && o.ok);
+  const outlooks = s.locations.map((_, i) => sim.dayOutlook(s, i));
+  const cap = outlooks.reduce((t, o) => t + o.capacity, 0);
+  const spare = outlooks.reduce((t, o) => t + o.booked, 0) < cap * 0.8;
+  const morale = s.locations.flatMap((c) => c.staff).reduce((t, x, _, a) => t + x.morale / a.length, 0);
+  const picks: FocusId[] = [];
+  if (morale && morale < 45 && ok('team')) picks.push('team');
+  if (spare && ok('walkin')) picks.push('walkin');
+  if (!spare && ok('upsell')) picks.push('upsell');
+  if (!spare && ok('speed')) picks.push('speed');
+  picks.push('quality');
+  return [...new Set(picks)].slice(0, opts.slots);
+}
+
+function campaigns(r: Run): void {
+  const s = r.s;
+  for (let li = 0; li < s.locations.length; li++) {
+    const c = s.locations[li];
+    if (c.campaign) continue;
+    const o = sim.dayOutlook(s, li);
+    const spare = o.booked + o.waitlist < o.capacity * 0.9;
+    const reserve = dailyCosts(s) * 2;
+    const order: CampaignId[] = spare
+      ? ['grandOpening', 'smileMakeover', 'goldenYears', 'kidsWeek', 'bracesBonanza', 'pirateDay']
+      : ['smileMakeover', 'goldenYears'];
+    for (const id of order) {
+      const st = sim.campaignStatus(s, li, id);
+      if (!st.ok || s.cash < st.cost + reserve) continue;
+      if (buy(r, sim.startCampaign(s, li, id))) { r.campaigns[id] = (r.campaigns[id] ?? 0) + 1; break; }
+    }
+  }
+}
+
+function huddle(r: Run): void {
+  const s = r.s;
+  if (s.phase !== 'owner') return;
+  for (const c of s.locations) for (const x of c.staff) if (x.pendingPerks?.length && r.bot.manage) {
+    const li = s.locations.indexOf(c);
+    if (sim.pickPerk(s, li, x.id, x.pendingPerks[0]).ok) r.perks++;
+  }
+  if (!sim.huddlePending(s)) return;
+  if (r.bot.manage) {
+    const f = chooseFocus(r);
+    sim.setFocus(s, f);
+    for (const id of s.focus) r.focus[id] = (r.focus[id] ?? 0) + 1;
+    campaigns(r);
+  }
+  while (s.pendingEvents.length) {
+    const choice = pickChoice(r, s.pendingEvents[0]);
+    sim.resolveEvent(s, 0, choice);
+    r.eventsAnswered++;
+  }
+  sim.completeHuddle(s);
+  r.real += r.bot.manage ? 12 : 4;
+}
+
+function ownerShopping(r: Run): void {
   const s = r.s;
   learnSkills(r);
+  if (r.bot.idleOwner) s.settings.autoHuddle = true;
   const costs = dailyCosts(s);
   const reserve = costs * (r.bot.greedy ? 0.5 : 1);
   const goal = Math.max(0, savingsGoal(r));
@@ -239,10 +427,14 @@ function ownerShopping(r: RunExt): void {
       while (c.ops.some((o) => o.staffId == null) && hireBest(r, li, 'hygienist', reserve * 0.3)) { /* staff it */ }
     }
     if (f.demand < f.capacity * 0.8 && c.marketing < 3 && c.served > 30) sim.setMarketing(s, li, (c.marketing + 1) as 1 | 2 | 3);
-    else if (f.demand > f.capacity * 1.25 && c.marketing > 0) sim.setMarketing(s, li, (c.marketing - 1) as 0 | 1 | 2);
-    if (!c.equipment.includes('deepCert') && s.cash >= EQUIPMENT.deepCert.price + reserve * 2) buy(r, sim.buyEquipment(s, li, 'deepCert'));
+    else if (f.demand > f.capacity * 1.2 && c.marketing > 0) sim.setMarketing(s, li, (c.marketing - 1) as 0 | 1 | 2);
+    if (!c.equipment.includes('deepCert') && s.cash >= sim.equipmentPrice(s, li, 'deepCert') + reserve * 2) buy(r, sim.buyEquipment(s, li, 'deepCert'));
     if (c.tier !== 't1' && !c.staff.some((x) => x.role === 'dentist') && s.cash >= 1500 + reserve * 2) hireBest(r, li, 'dentist', reserve);
     if (li > 0 && !c.staff.some((x) => x.role === 'manager')) hireBest(r, li, 'manager', reserve);
+    // a salesman's discount on something the bot would buy anyway
+    for (const d of (s as { discounts?: { clinicId: string; equipId: keyof typeof EQUIPMENT }[] }).discounts ?? []) {
+      if (d.clinicId === c.id && spare() + EQUIPMENT[d.equipId].price * 0.3 >= sim.equipmentPrice(s, li, d.equipId)) buy(r, sim.buyEquipment(s, li, d.equipId));
+    }
   }
   // grow: move the first location up, or open another (median waits for a Medical Plaza first)
   const c0 = s.locations[0];
@@ -272,9 +464,16 @@ function ownerShopping(r: RunExt): void {
       for (const id of EQUIP_ORDER) {
         const e = EQUIPMENT[id];
         if (c.equipment.includes(id) || TIER_ORDER.indexOf(c.tier) < TIER_ORDER.indexOf(e.minTier)) continue;
-        if (spare() >= e.price) { buy(r, sim.buyEquipment(s, li, id)); break; }
+        if (spare() >= sim.equipmentPrice(s, li, id)) { buy(r, sim.buyEquipment(s, li, id)); break; }
       }
-      for (const op of c.ops) if (op.chair === 'basic' && spare() >= CHAIRS.comfort.price) buy(r, sim.upgradeChair(s, li, op.id, 'comfort'));
+      for (const op of c.ops) if (op.chair === 'basic' && spare() >= sim.chairPrice(s, 'comfort')) buy(r, sim.upgradeChair(s, li, op.id, 'comfort'));
+      if (r.bot.manage) for (const op of c.ops) {
+        if (!op.upgrades.includes('ergoStool') && spare() >= sim.opUpgradePrice(s, 'ergoStool')) buy(r, sim.buyOpUpgrade(s, li, op.id, 'ergoStool'));
+      }
+      if (r.bot.manage && !c.ops.some((o) => o.upgrades.includes('whiteningLamp')) && c.tier !== 't1' && spare() >= OP_UPGRADES.whiteningLamp.price) {
+        const op = c.ops.find((o) => o.staffId && o.staffId !== 'player');
+        if (op) buy(r, sim.buyOpUpgrade(s, li, op.id, 'whiteningLamp'));
+      }
     }
   }
   if (!r.bot.idleOwner) for (const slot of ['scaler', 'polisher', 'floss', 'suction'] as const) {
@@ -282,22 +481,29 @@ function ownerShopping(r: RunExt): void {
     if (next && spare() >= next.price) buy(r, sim.buyTool(s, slot, next.tier));
   }
   if (!r.bot.greedy && s.loan > 0 && spare() > s.loan) sim.repayLoan(s, s.loan);
-  void EXTRAS;
+  void EXTRAS; void CHAIRS; void CAMPAIGNS;
 }
 
 // ------------------------------------------------------------------ one game
 
-function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt {
+function newRun(bot: Bot, seed: number): Run {
   const s = sim.newGame({ name: 'Bot', avatar: 0, seed, nowMs: 0 });
-  const r: RunExt = {
+  return {
     bot, s, real: 0, rng: makeRng(seed ^ 0x5eed), m: {}, mc: {}, md: {}, ownerDays: 0, log: [], handsToday: 0, maxLoanSeen: 0, minCash: 0, nets: [],
     treasure: 0, cases: {}, quicks: 0, lockedQuick: 0,
+    tierDays: {}, eventCash: { in: 0, out: 0 }, eventsAnswered: 0, campaigns: {}, focus: {}, perks: 0, interviews: 0, twoStarWait: 0, oneStar: 0, reviews: 0,
   };
+}
+
+function playGame(bot: Bot, seed: number, stop?: (r: Run) => boolean): Run {
+  const r = newRun(bot, seed);
+  const s = r.s;
   for (const step of [1, 2] as const) {
     const setup = sim.schoolSetup(s, step);
-    const secs = bot.secs * (step === 1 ? 1.4 : 1.0);   // the tutorial takes longer
+    const secs = bot.secs * (step === 1 ? 1.6 : 1.0);   // the tutorial takes longer
     r.real += secs + bot.overhead;
     sim.completeSchool(s, step, result(r, bot.quality, secs, setup));
+    levelMilestones(r);
   }
   r.real += 20; // title, name, graduation card
   M(r, 'school');
@@ -305,9 +511,10 @@ function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt
   while (r.real < bot.maxHours * 3600) {
     if (stop && stop(r)) break;
     if (s.phase === 'employee') {
-      if (s.player.level >= 4) M(r, 'level4');
+      levelMilestones(r);
       employeeShopping(r);
     } else {
+      huddle(r);
       ownerShopping(r);
       if (s.locations.some((c) => c.tier !== 't1')) M(r, 't2');
       if (s.locations.some((c) => c.tier === 't3' || c.tier === 't4')) M(r, 't3');
@@ -316,7 +523,7 @@ function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt
     }
     r.maxLoanSeen = Math.max(r.maxLoanSeen, s.loan);
     playDay(r);
-    if (s.phase === 'employee' && s.player.level >= 4) M(r, 'level4');
+    if (s.phase === 'employee') levelMilestones(r);
     if (s.phase === 'owner') {
       r.nets.push(s.reports[s.reports.length - 1]?.operatingNet ?? 0);
     }
@@ -326,26 +533,27 @@ function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt
 
 // ------------------------------------------------------------------ report
 
-const fmtT = (sec?: number) => (sec == null ? '   -   ' : sec < 3600 ? `${(sec / 60).toFixed(0).padStart(3)} min` : `${(sec / 3600).toFixed(2).padStart(4)} h `);
 const median = (xs: number[]) => { const a = xs.filter((x) => Number.isFinite(x)).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
 
 const ROWS: { key: string; label: string; target: string; lo: number; hi: number; unit: 'clean' | 'min' | 'h' | 'days' }[] = [
   { key: 'school', label: 'Tutorial done', target: '< 5 min', lo: 0, hi: 5, unit: 'min' },
-  { key: 'firstTool', label: 'First tool affordable (cleaning #)', target: '<= 3', lo: 0, hi: 3, unit: 'clean' },
-  { key: 'level4', label: 'Level 4 (cleaning #)', target: '12 to 16', lo: 12, hi: 16, unit: 'clean' },
-  { key: 'practice', label: 'Practice opened (cleaning #)', target: '20 to 28', lo: 20, hi: 28, unit: 'clean' },
-  { key: 'practiceMin', label: 'Practice opened (time)', target: '40 to 50 min', lo: 40, hi: 50, unit: 'min' },
+  { key: 'firstTool', label: 'First tool affordable (cleaning #)', target: '<= 2', lo: 0, hi: 2, unit: 'clean' },
+  { key: 'level2', label: 'Level 2 (cleaning #)', target: '2', lo: 0, hi: 2, unit: 'clean' },
+  { key: 'level3', label: 'Level 3 (cleaning #)', target: '4 to 5', lo: 4, hi: 5, unit: 'clean' },
+  { key: 'level4', label: 'Level 4 (cleaning #)', target: '9 to 12', lo: 9, hi: 12, unit: 'clean' },
+  { key: 'practice', label: 'Practice opened (cleaning #)', target: '15 to 20', lo: 15, hi: 20, unit: 'clean' },
+  { key: 'practiceMin', label: 'Practice opened (time)', target: '25 to 35 min', lo: 25, hi: 35, unit: 'min' },
   { key: 'firstHireDays', label: 'First hire (owner days)', target: '<= 2', lo: 0, hi: 2, unit: 'days' },
-  { key: 't2', label: 'Office T2', target: '1.5 to 2.5 h', lo: 1.5, hi: 2.5, unit: 'h' },
-  { key: 't3', label: 'Office T3', target: '3 to 4 h', lo: 3, hi: 4, unit: 'h' },
-  { key: 'loc2', label: 'Second location', target: '4 to 5 h', lo: 4, hi: 5, unit: 'h' },
-  { key: 'flossBoss', label: 'Floss Boss title', target: '8 to 12 h', lo: 8, hi: 12, unit: 'h' },
+  { key: 't2', label: 'Office T2', target: '1.25 to 2 h', lo: 1.25, hi: 2, unit: 'h' },
+  { key: 't3', label: 'Office T3', target: '2.5 to 3.5 h', lo: 2.5, hi: 3.5, unit: 'h' },
+  { key: 'loc2', label: 'Second location', target: '3.5 to 4.5 h', lo: 3.5, hi: 4.5, unit: 'h' },
+  { key: 'flossBoss', label: 'Floss Boss title', target: '7 to 10 h', lo: 7, hi: 10, unit: 'h' },
 ];
 
-function value(r: RunExt, key: string): number {
+function value(r: Run, key: string): number {
   switch (key) {
     case 'firstTool': return r.mc.firstTool ?? NaN;
-    case 'level4': return r.mc.level4 ?? NaN;
+    case 'level2': case 'level3': case 'level4': return r.mc[key] ?? NaN;
     case 'practice': return r.mc.practice ?? NaN;
     case 'practiceMin': return r.m.practice != null ? r.m.practice / 60 : NaN;
     case 'school': return r.m.school / 60;
@@ -354,16 +562,15 @@ function value(r: RunExt, key: string): number {
   }
 }
 
-
 function main() {
   const args = process.argv.slice(2);
   const seedsN = Number(args[args.indexOf('--seeds') + 1]) || 5;
   const only = args.includes('--bot') ? args[args.indexOf('--bot') + 1] : null;
   const verbose = args.includes('--verbose');
   const bots = only ? BOTS.filter((b) => b.name.includes(only)) : BOTS;
-  const all: Record<string, RunExt[]> = {};
+  const all: Record<string, Run[]> = {};
   for (const bot of bots) {
-    const runs: RunExt[] = [];
+    const runs: Run[] = [];
     for (let i = 0; i < seedsN; i++) {
       const t0 = Date.now();
       const r = playGame(bot, 1000 + i * 7919);
@@ -377,17 +584,17 @@ function main() {
     }
     all[bot.name] = runs;
   }
-  console.log('\nFloss Boss balance: median of ' + seedsN + ' seeds per bot\n');
-  const header = ['Milestone'.padEnd(36), 'Target'.padEnd(14), ...bots.map((b) => b.name.padEnd(18))].join('');
+  console.log('\nFloss Boss balance: median of ' + seedsN + ' seeds per bot (80 s cleans + 15 s hub, DESIGN 10.8)\n');
+  const header = ['Milestone'.padEnd(36), 'Target'.padEnd(14), ...bots.map((b) => b.name.padEnd(20))].join('');
   console.log(header);
   console.log('-'.repeat(header.length));
   for (const row of ROWS) {
     const cells = bots.map((b) => {
       const v = median(all[b.name].map((r) => value(r, row.key)));
-      if (!Number.isFinite(v)) return '-'.padEnd(18);
+      if (!Number.isFinite(v)) return '-'.padEnd(20);
       const ok = v >= row.lo && v <= row.hi;
       const txt = row.unit === 'h' ? `${v.toFixed(2)} h` : row.unit === 'min' ? `${v.toFixed(1)} min` : `${v.toFixed(0)}`;
-      return (txt + (ok ? '  ok' : '  !!')).padEnd(18);
+      return (txt + (ok ? '  ok' : '  !!')).padEnd(20);
     });
     console.log([row.label.padEnd(36), row.target.padEnd(14), ...cells].join(''));
   }
@@ -397,6 +604,30 @@ function main() {
     const d = (k: string) => median(runs.map((r) => r.md[k] ?? NaN));
     const win = (a: number, z: number) => median(runs.map((r) => { const xs = r.nets.slice(a, z); return xs.length ? xs.reduce((p, q) => p + q, 0) / xs.length : NaN; }));
     console.log(`  ${b.name.padEnd(20)} hire ${d('firstHire')}  T2 ${d('t2')}  T3 ${d('t3')}  loc2 ${d('loc2')}  boss ${d('flossBoss')}  | net d1-5 ${Math.round(win(0, 5))}  d6-15 ${Math.round(win(5, 15))}  d16-30 ${Math.round(win(15, 30))}  d31-60 ${Math.round(win(30, 60))}  d61-120 ${Math.round(win(60, 120))}  d121+ ${Math.round(win(120, 999))}`);
+  }
+  console.log('\nDemand and capacity per office tier (all locations, median of runs): new demand / morning capacity, first-week fill of a new or moved office, lost for good, waitlisted, walkouts per day');
+  for (const b of bots) {
+    const runs = all[b.name];
+    const parts: string[] = [];
+    for (const t of TIER_ORDER) {
+      const rows = runs.map((r) => r.tierDays[t]).filter((x) => x && x.days > 0);
+      if (!rows.length) continue;
+      const fill = median(rows.map((x) => x.demand / Math.max(1, x.cap)));
+      const fw = median(rows.map((x) => median(x.firstWeekFill)));
+      const lost = median(rows.map((x) => x.lost / Math.max(1, x.demand)));
+      const wait = median(rows.map((x) => x.wait / x.days));
+      const wo = median(rows.map((x) => x.walkouts / x.days));
+      parts.push(`${t}: fill ${(fill * 100).toFixed(0)}% wk1 ${(fw * 100).toFixed(0)}% lost ${(lost * 100).toFixed(0)}% wait ${wait.toFixed(1)} wo ${wo.toFixed(2)}`);
+    }
+    console.log(`  ${b.name.padEnd(20)} ${parts.join(' | ')}`);
+  }
+  console.log('\nManager layer (median per run): events answered, event cash in/out, campaigns, focus days, perks, interviews, reviews (1-star, 2-star wait)');
+  for (const b of bots) {
+    const runs = all[b.name];
+    const med = (f: (r: Run) => number) => Math.round(median(runs.map(f)));
+    const camp = (id: CampaignId) => med((r) => r.campaigns[id] ?? 0);
+    const foc = (id: FocusId) => med((r) => r.focus[id] ?? 0);
+    console.log(`  ${b.name.padEnd(20)} events ${med((r) => r.eventsAnswered)}  cash +${med((r) => r.eventCash.in)}/-${med((r) => r.eventCash.out)}  campaigns open ${camp('grandOpening')} kids ${camp('kidsWeek')} smile ${camp('smileMakeover')} golden ${camp('goldenYears')} braces ${camp('bracesBonanza')} pirate ${camp('pirateDay')}  focus q ${foc('quality')} sp ${foc('speed')} wi ${foc('walkin')} up ${foc('upsell')} team ${foc('team')}  perks ${med((r) => r.perks)} interviews ${med((r) => r.interviews)}  reviews ${med((r) => r.reviews)} 1-star ${med((r) => r.oneStar)} 2-star wait ${med((r) => r.twoStarWait)}`);
   }
   console.log('\nCases (median per run): hands-on cleans by case, treasure paid, quick cleans, locked quick cleans cleaned by hand, bronze badges');
   for (const b of bots) {
@@ -422,42 +653,50 @@ function main() {
 
 const clone = (s: GameState): GameState => JSON.parse(JSON.stringify(s));
 
-/** Run plain owner days: the player's chair is on autopilot, nothing is bought. Returns cash per day. */
-function plainDays(s: GameState, days: number, each?: (s: GameState) => void): number[] {
+/** Run plain owner days: the player's chair is on autopilot, nothing is bought, events take choice 0
+ * unless `answer` picks. Returns cash per day. */
+function plainDays(s: GameState, days: number, each?: (s: GameState) => void, answer?: (s: GameState, pe: PendingEvent) => number): number[] {
   const out: number[] = [];
   for (let d = 0; d < days; d++) {
     each?.(s);
     s.locations.forEach((c, li) => { for (const o of c.ops) if (o.staffId === 'player') sim.setPlayerMode(s, li, o.id, 'auto'); });
+    while (s.pendingEvents.length) sim.resolveEvent(s, 0, answer ? answer(s, s.pendingEvents[0]) : 0);
+    sim.completeHuddle(s);
     let g = 0;
-    while (!s.dayOver && g++ < 20000) {
-      sim.tick(s, 3);
-    }
+    while (!s.dayOver && g++ < 20000) sim.tick(s, 3);
     sim.closeDay(s);
     out.push(s.cash);
   }
   return out;
 }
 
+const grant = (s: GameState, amount: number) => { s.cash += amount; s.ledger.push({ day: s.day, minute: s.minute, amount, label: 'test grant', kind: 'income' }); };
+
 function checks(): void {
   console.log('\nDegenerate-strategy checks (A/B from the same forked state, 3 seeds):');
-  const median = BOTS[1];
+  const median0 = BOTS[1];
   const rows: string[] = [];
   const payback: number[] = [];
   const hireGain: number[] = [];
   const price: Record<string, number[]> = { '1.0': [], '1.2': [], '1.5': [] };
   const priceT1: Record<string, number[]> = { '1.0': [], '1.2': [], '1.5': [] };
   const underpay: { quits: number; gain: number }[] = [];
+  const campFull: number[] = [];
+  const campSpare: number[] = [];
+  const campSmile: number[] = [];
+  const insurance: { join: number; stay: number }[] = [];
+  const eventAlways: number[] = [];
+  const eventNever: number[] = [];
+  const med = (xs: number[]) => { const a = xs.filter(Number.isFinite).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
   for (let i = 0; i < 3; i++) {
     const seed = 1000 + i * 7919;
     // 1. hiring payback at T1: a second operatory plus a hygienist vs keep going alone
-    const r1 = playGame(median, seed, (r) => r.ownerDays >= 6);
+    const r1 = playGame(median0, seed, (r) => r.ownerDays >= 6);
     const base = clone(r1.s);
     const a = clone(base);
-    const cash0 = a.cash;
-    a.cash += 20000; a.ledger.push({ day: a.day, minute: a.minute, amount: 20000, label: 'test grant', kind: 'income' });
+    grant(a, 20000);
     const b = clone(a);
-    const opsBefore = a.locations[0].ops.length;
-    if (opsBefore < 2) sim.buyOperatory(a, 0);
+    if (a.locations[0].ops.length < 2) sim.buyOperatory(a, 0);
     const cand = [...a.candidates].filter((c) => c.role === 'hygienist').sort((x, y) => y.skill - x.skill)[0];
     if (cand) sim.hire(a, cand.id, 0);
     const ca = plainDays(a, 20);
@@ -466,15 +705,14 @@ function checks(): void {
     for (let d = 0; d < 20; d++) if (ca[d] >= cb[d]) { pb = d + 1; break; }
     payback.push(pb);
     hireGain.push((ca[19] - cb[19]) / 20);
-    void cash0;
-    // 2. prices at T1 (demand-limited) and at T2 (after the move)
+    // 2. prices at T1 and at T2 (after the move)
     for (const m of ['1.0', '1.2', '1.5']) {
       const t = clone(base);
       const c0 = t.cash;
       const cs = plainDays(t, 15, (st) => sim.setPrice(st, 0, 'cleaning', Number(m)));
       priceT1[m].push((cs[14] - c0) / 15);
     }
-    const r2 = playGame(median, seed, (r) => r.s.phase === 'owner' && r.s.locations[0].tier === 't2' && r.ownerDays >= (r.md.t2 ?? 1e9) + 8);
+    const r2 = playGame(median0, seed, (r) => r.s.phase === 'owner' && r.s.locations[0].tier === 't2' && r.ownerDays >= (r.md.t2 ?? 1e9) + 8);
     for (const m of ['1.0', '1.2', '1.5']) {
       const t = clone(r2.s);
       const c0 = t.cash;
@@ -489,20 +727,81 @@ function checks(): void {
     const cf = plainDays(full, 30);
     const ch = plainDays(half, 30);
     underpay.push({ quits: staff0 - half.locations[0].staff.length, gain: (ch[29] - cf[29]) / 30 });
+    // 4. campaigns: Kids Week at a full office vs at an office with spare capacity, Smile Makeover with a lamp
+    const campaignAB = (st0: GameState, id: CampaignId, days = 10): number => {
+      const x = clone(st0);
+      const y = clone(st0);
+      grant(x, 50000); grant(y, 50000);
+      for (const s of [x, y]) {
+        sim.completeHuddle(s);
+        for (const c of s.locations) { c.campaign = null; c.campaignCooldownUntil = 0; c.modifiers = c.modifiers.filter((m) => m.source !== 'campaign'); }
+      }
+      const res = sim.startCampaign(x, 0, id);
+      if (!res.ok) return NaN;
+      const cx = plainDays(x, days);
+      const cy = plainDays(y, days);
+      return (cx[days - 1] - cy[days - 1]) / days;
+    };
+    const t2 = clone(r2.s);
+    campFull.push(campaignAB(t2, 'kidsWeek'));
+    const spareState = clone(r2.s);
+    // spare capacity: a fresh extra operatory staffed by the best hygienist on the board
+    grant(spareState, 20000);
+    if (spareState.locations[0].ops.length < OFFICES[spareState.locations[0].tier].opSlots) sim.buyOperatory(spareState, 0);
+    const h = [...spareState.candidates].filter((c) => c.role === 'hygienist').sort((x, y) => y.skill - x.skill)[0];
+    if (h) sim.hire(spareState, h.id, 0);
+    spareState.locations[0].marketing = 0;
+    campSpare.push(campaignAB(spareState, 'kidsWeek'));
+    const lamp = clone(r2.s);
+    grant(lamp, 20000);
+    const lop = lamp.locations[0].ops.find((o) => o.staffId && o.staffId !== 'player');
+    if (lop && !lop.upgrades.includes('whiteningLamp')) sim.buyOpUpgrade(lamp, 0, lop.id, 'whiteningLamp');
+    campSmile.push(campaignAB(lamp, 'smileMakeover'));
+    // 5. the insurance event: join (demand +25%, fees -10% for good) vs stay independent, 30 days at T2
+    const ins = clone(r2.s);
+    sim.completeHuddle(ins);
+    ins.pendingEvents = [{ eventId: 'insurance', clinicId: ins.locations[0].id, day: ins.day, vars: { clinic: ins.locations[0].name } }];
+    const join = clone(ins);
+    const stay = clone(ins);
+    sim.resolveEvent(join, 0, 0);
+    sim.resolveEvent(stay, 0, 1);
+    const j0 = join.cash;
+    const s0 = stay.cash;
+    const cj = plainDays(join, 30);
+    const cs2 = plainDays(stay, 30);
+    insurance.push({ join: (cj[29] - j0) / 30, stay: (cs2[29] - s0) / 30 });
+    // 6. event money: always the richest-looking choice vs always the first, 40 days at T2
+    const ev1 = clone(r2.s);
+    const ev2 = clone(r2.s);
+    const c1 = ev1.cash;
+    const c2 = ev2.cash;
+    const richest = (st: GameState, pe: PendingEvent) => {
+      const e = EVENTS.find((x) => x.id === pe.eventId);
+      if (!e) return 0;
+      let best = 0; let bv = -Infinity;
+      e.choices.forEach((ch, k) => { const v = ch.effects.reduce((t, x) => t + (x.kind === 'cash' ? x.amount : x.kind === 'vip' ? x.fee : 0), 0); if (v > bv) { bv = v; best = k; } });
+      return best;
+    };
+    const e1 = plainDays(ev1, 40, undefined, richest);
+    const e2 = plainDays(ev2, 40);
+    eventAlways.push((e1[39] - c1) / 40);
+    eventNever.push((e2[39] - c2) / 40);
   }
-  // 4. loan round trip
-  const r3 = playGame(median, 1000, (r) => r.ownerDays >= 3);
+  // loan round trip
+  const r3 = playGame(median0, 1000, (r) => r.ownerDays >= 3);
   const s = r3.s;
   const before = s.cash;
   const ml = sim.maxLoan(s) - s.loan;
   const took = sim.takeLoan(s, ml);
   const over = sim.takeLoan(s, 1000);
   const back = sim.repayLoan(s, ml);
-  const med = (xs: number[]) => { const a = xs.filter(Number.isFinite).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
   rows.push(`  Hiring: 2nd operatory + hygienist at T1 (owner day 6) pays back after ${payback.map((x) => (Number.isFinite(x) ? x : '>20')).join(', ')} days, then +${Math.round(med(hireGain))}/day on average over 20 days`);
   rows.push(`  Price at T1 (owner day 6), net/day: 1.0 ${Math.round(med(priceT1['1.0']))}  1.2 ${Math.round(med(priceT1['1.2']))}  1.5 ${Math.round(med(priceT1['1.5']))}`);
   rows.push(`  Price at T2 (8 days after the move), net/day: 1.0 ${Math.round(med(price['1.0']))}  1.2 ${Math.round(med(price['1.2']))}  1.5 ${Math.round(med(price['1.5']))}`);
   rows.push(`  Underpaying all staff at the 75% floor for 30 days at T2: ${underpay.map((u) => `${u.quits} quit, ${u.gain >= 0 ? '+' : ''}${Math.round(u.gain)}/day`).join(' | ')}`);
+  rows.push(`  Campaigns (net/day over 10 days vs none, cost included): Kids Week at a full T2 office ${campFull.map((x) => Math.round(x)).join(', ')} | with a fresh spare operatory ${campSpare.map((x) => Math.round(x)).join(', ')} | Smile Makeover with a lamp ${campSmile.map((x) => Math.round(x)).join(', ')}`);
+  rows.push(`  Insurance network at T2, net/day over 30 days: join ${insurance.map((x) => Math.round(x.join)).join(', ')} vs stay independent ${insurance.map((x) => Math.round(x.stay)).join(', ')}`);
+  rows.push(`  Event money: richest choice every time ${eventAlways.map((x) => Math.round(x)).join(', ')} vs first choice ${eventNever.map((x) => Math.round(x)).join(', ')} net/day over 40 days`);
   rows.push(`  Loan round trip: take ${ml} ${took.ok ? 'ok' : 'refused'}, over the limit ${over.ok ? 'ALLOWED' : 'refused'}, repay ${back.ok ? 'ok' : 'refused'}, cash change ${s.cash - before}`);
   console.log(rows.join('\n'));
 }

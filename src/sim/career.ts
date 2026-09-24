@@ -1,7 +1,7 @@
 // Career: new game, migration, school, the hands-on and quick-clean flows. DESIGN 3, 4 and 5.9.
 import type {
-  AddonId, CaseType, CleanResult, CleanSetup, Clinic, DayPatient, GameState, HandsOnPayout, Operatory, SimEvent, Staff,
-  TwistId,
+  AddonId, BonusId, CampaignId, CaseType, CleanResult, CleanSetup, Clinic, ClinicModifier, DayPatient, FocusId, GameState,
+  HandsOnPayout, Operatory, PendingEvent, PerkId, SimEvent, Staff, TwistId,
 } from '../core/types';
 import { hashSeed, clamp } from '../core/rng';
 import {
@@ -9,7 +9,8 @@ import {
 } from '../core/constants';
 import { SAVE_VERSION } from '../core/save';
 import { ARCHETYPES } from '../data/patients';
-import { CASES, CASE_ORDER, MASTERY_NAMES, MASTERY_TIERS, TWISTS } from '../data/cases';
+import { BONUSES, CASES, CASE_ORDER, MASTERY_NAMES, MASTERY_TIERS, TWISTS } from '../data/cases';
+import { CAMPAIGNS, EVENTS, FOCUSES, PERKS } from '../data/manager';
 import { OFFICES } from '../data/offices';
 import { SERVICES, defaultPrices } from '../data/services';
 import { SKILLS } from '../data/skills';
@@ -21,6 +22,7 @@ import { autoQuality, employeeRate, gainXp, starsFor, title } from './progress';
 import { addonMinutes, downgradeCase, handsFee } from './patients';
 import { buildCaseSetup, caseLevel, masteryCount, masteryTier } from './cases';
 import { addReview, computeRating, reviewStars, shiftBonusCheck, tickWorld, walkoutFromChair } from './clinic';
+import { hasNitrous, has as hasEquip, modAgg, VIP_WEIGHT } from './effects';
 import { bookDay, onlyPlayerHands } from './booking';
 import { checkAchievements, makeGoals, progressGoal } from './goals';
 
@@ -70,6 +72,11 @@ export function newGame(opts: { name: string; avatar: number; seed?: number; now
     },
     flags: {},
     nextId: 1,
+    focus: ['steady'],
+    huddleDay: 1,
+    pendingEvents: [],
+    eventLog: [],
+    settings: { autoHuddle: false },
   };
 }
 
@@ -93,6 +100,10 @@ function fixStaff(s: Staff): void {
   s.task ??= 'idle';
   s.targetOpId ??= null;
   s.busyUntil ??= null;
+  s.perks = arr<PerkId>(s.perks).filter((p) => p in PERKS);
+  const pend = arr<PerkId>(s.pendingPerks).filter((p) => p in PERKS);
+  s.pendingPerks = pend.length ? pend : null;
+  if (typeof s.tempUntilDay !== 'number' || !Number.isFinite(s.tempUntilDay)) delete s.tempUntilDay;
 }
 
 function fixClinic(c: Clinic): void {
@@ -108,6 +119,15 @@ function fixClinic(c: Clinic): void {
   c.patients = arr<DayPatient>(c.patients).filter((p) => p && typeof p === 'object');
   c.day = { ...emptyDayStats(), ...obj<Clinic['day']>(c.day) };
   c.checkinBusyUntil = num(c.checkinBusyUntil, 0);
+  c.modifiers = arr<ClinicModifier>(c.modifiers).filter((m) => m && typeof m === 'object' && typeof m.id === 'string');
+  for (const m of c.modifiers) {
+    if (m.source !== 'event' && m.source !== 'campaign' && m.source !== 'focus') m.source = 'event';
+    m.untilDay = m.untilDay == null ? null : num(m.untilDay, 0);
+    m.label = typeof m.label === 'string' ? m.label : '';
+  }
+  const camp = obj<NonNullable<Clinic['campaign']>>(c.campaign);
+  c.campaign = camp.id && camp.id in CAMPAIGNS ? { id: camp.id as CampaignId, untilDay: num(camp.untilDay, 0) } : null;
+  c.campaignCooldownUntil = num(c.campaignCooldownUntil, 0);
   c.ops.forEach((o, i) => {
     o.slot = num(o.slot, i);
     o.chair = o.chair in CHAIRS ? o.chair : 'basic';
@@ -127,6 +147,8 @@ function fixClinic(c: Clinic): void {
     p.arriveAt = num(p.arriveAt, p.apptMin);
     p.caseType = isCase(p.caseType) ? p.caseType : 'routine';
     p.twists = arr<TwistId>(p.twists).filter((t) => t in TWISTS);
+    p.bonus = typeof p.bonus === 'string' && p.bonus in BONUSES ? (p.bonus as BonusId) : null;
+    p.vip = p.vip === true;
     if (p.state === 'inChair' && !p.stage) p.stage = p.awaitingPlayer ? 'await' : 'clean';
   }
 }
@@ -134,6 +156,7 @@ function fixClinic(c: Clinic): void {
 /** Fill in fields missing from older (or damaged, or imported) saves. */
 export function migrate(state: GameState): GameState {
   const s = (state && typeof state === 'object' ? state : {}) as GameState;
+  const hadHuddle = typeof s.huddleDay === 'number' && Number.isFinite(s.huddleDay);
   const fresh = newGame({ name: obj<GameState['player']>(s.player).name ?? 'Hygienist', avatar: 0, seed: num(s.seed, 1), nowMs: num(s.createdAt, 0) });
   for (const k of Object.keys(fresh) as (keyof GameState)[]) {
     if ((s as any)[k] === undefined || (s as any)[k] === null && (fresh as any)[k] !== null) (s as any)[k] = (fresh as any)[k];
@@ -164,7 +187,19 @@ export function migrate(state: GameState): GameState {
   s.nextId = Math.max(1, num(s.nextId, 1));
   s.goals = arr<GameState['goals'][number]>(s.goals).filter((g) => g && typeof g === 'object');
   s.candidates = arr<GameState['candidates'][number]>(s.candidates).filter((c) => c && typeof c === 'object');
-  for (const c of s.candidates) { fixStaff(c); c.expiresDay = num(c.expiresDay, s.day); }
+  for (const c of s.candidates) {
+    fixStaff(c);
+    c.expiresDay = num(c.expiresDay, s.day);
+    // candidates from older saves were shown in full: treat them as interviewed
+    if (typeof c.interviewed !== 'boolean') c.interviewed = true;
+    const r = obj<Staff & { skill: [number, number] }>(c.range) as Partial<Record<'skill' | 'speed' | 'bedside', unknown>>;
+    const rng2 = (k: 'skill' | 'speed' | 'bedside'): [number, number] => {
+      const v = r[k];
+      if (!c.interviewed && Array.isArray(v) && v.length === 2 && Number.isFinite(v[0]) && Number.isFinite(v[1])) return [Number(v[0]), Number(v[1])];
+      return [c[k], c[k]];
+    };
+    c.range = { skill: rng2('skill'), speed: rng2('speed'), bedside: rng2('bedside') };
+  }
   s.reports = arr<GameState['reports'][number]>(s.reports).filter((r) => r && typeof r === 'object');
   s.ledger = arr<GameState['ledger'][number]>(s.ledger).filter((e) => e && typeof e === 'object' && Number.isFinite(e.amount));
   s.achievements = arr<string>(s.achievements).filter((a) => typeof a === 'string');
@@ -183,6 +218,17 @@ export function migrate(state: GameState): GameState {
   }
   if (s.phase === 'owner') s.active = clamp(Math.round(num(s.active, 0)), 0, Math.max(0, s.locations.length - 1));
   else s.active = -1;
+  // manager layer (v3)
+  s.focus = arr<FocusId>(s.focus).filter((f) => f in FOCUSES);
+  if (!s.focus.length) s.focus = ['steady'];
+  if (!hadHuddle) s.huddleDay = s.day;
+  s.huddleDay = Math.round(num(s.huddleDay, s.day));
+  const ids = new Set(s.locations.map((c) => c.id));
+  s.pendingEvents = arr<PendingEvent>(s.pendingEvents).filter((e) => e && typeof e === 'object' && EVENTS.some((x) => x.id === e.eventId) && ids.has(e.clinicId));
+  for (const e of s.pendingEvents) { e.vars = obj<Record<string, string>>(e.vars) as Record<string, string>; e.day = num(e.day, s.day); }
+  s.eventLog = arr<GameState['eventLog'][number]>(s.eventLog).filter((e) => e && typeof e === 'object').slice(-30);
+  const st = obj<GameState['settings']>(s.settings);
+  s.settings = { autoHuddle: st.autoHuddle === true };
   s.version = SAVE_VERSION;
   s.player.title = title(s);
   return s;
@@ -201,7 +247,8 @@ function makeEmployer(state: GameState): Clinic {
   const staff: Staff[] = [];
   const base = (o: Partial<Staff> & Pick<Staff, 'name' | 'role' | 'portrait'>): Staff => ({
     id: nextId(state, 's'), skill: 60, speed: 60, bedside: 60, salary: 0, ask: 0, morale: 80, traits: [],
-    level: 3, xp: 0, hiredDay: 0, offUntilDay: 0, patientsToday: 0, task: 'idle', targetOpId: null, busyUntil: null, ...o,
+    level: 3, xp: 0, hiredDay: 0, offUntilDay: 0, patientsToday: 0, task: 'idle', targetOpId: null, busyUntil: null,
+    perks: [], pendingPerks: null, ...o,
   });
   for (const c of COLLEAGUES) staff.push(base({ name: c.name, role: 'hygienist', portrait: `staff_${c.portrait}`, skill: c.skill, speed: c.speed, bedside: c.bedside, traits: c.traits }));
   staff.push(base({ name: 'Tina Minty', role: 'receptionist', portrait: 'staff_14', skill: 70 }));
@@ -217,7 +264,7 @@ function makeEmployer(state: GameState): Clinic {
     id: 'employer', name: EMPLOYER_NAME, tier: 't2', ownedByPlayer: false, ops,
     equipment: ['deepCert', 'sterilizer', 'espresso', 'fishTank'],
     staff, prices: defaultPrices(), marketing: 2, rating: 4.2, reviews: [], served: 600,
-    patients: [], day: emptyDayStats(), checkinBusyUntil: 0,
+    patients: [], day: emptyDayStats(), checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
   };
   c.rating = computeRating(c);
   c.rating = 4.2;
@@ -329,7 +376,28 @@ function setupFor(state: GameState, c: Clinic, p: SimPatient, consumeGel: boolea
     patientId: p.id, name: p.name, archetype: p.archetype, service: p.service, caseType: ct, twists: p.twists ?? [],
     dirtLevel: p.dirtLevel, level: caseLevel(state, c), tutorial: false, consumeGel,
     firstOfCase: !state.flags[`case_seen_${ct}`],
+    bonus: p.bonus === undefined ? undefined : p.bonus,
+    gas: c.ownedByPlayer && hasNitrous(c, opById(c, p.opId)),
   });
+}
+
+/** Laughing gas: a nervous patient never walks out of that chair (DESIGN 10.5). The clean is scored as
+ * finished with the comfort floored, so they stay (and pay) even if the scene ran out of comfort. */
+function gasHolds(c: Clinic, p: SimPatient, r: CleanResult): CleanResult {
+  if (r.quit !== 'walkout' || p.archetype !== 'nervous' || !c.ownedByPlayer || !hasNitrous(c, opById(c, p.opId))) return r;
+  const clean = clamp(num(r.clean, 0), 0, 1);
+  const comfort = Math.max(20, num(r.comfort, 0));
+  const quality = clamp(0.8 * clean + 0.2 * comfort / 100, 0, 1);
+  return { ...r, quit: 'done', comfort, quality, stars: starsFor(quality) };
+}
+
+/** Review comfort of a hands-on clean at an owned clinic: the scene's comfort, Aromatherapy, laughing gas
+ * and today's comfort modifiers. */
+function handsComfort(state: GameState, c: Clinic, p: SimPatient, comfort: number): number {
+  if (!c.ownedByPlayer) return comfort;
+  const op = opById(c, p.opId);
+  const gas = op?.upgrades.includes('nitrous') ? 0.15 : hasEquip(c, 'nitrousSystem') ? 0.1 : 0;
+  return clamp((comfort + (hasEquip(c, 'aromatherapy') ? 0.05 : 0) + gas) * modAgg(state, c).comfort, 0, 1);
 }
 
 /** Build the clean for a patient waiting in your chair. Throws when the patient is not ready. */
@@ -427,21 +495,23 @@ function settle(state: GameState, c: Clinic, p: SimPatient, o: {
   // review from the hands-on quality and comfort; the owner's own clean counts double
   const bossClean = !employee && !o.quick && c.ownedByPlayer;
   withRng(state, (rng) => {
-    const always = ARCHETYPES[p.archetype].reviewWeight >= 3 || bossClean;
+    const always = ARCHETYPES[p.archetype].reviewWeight >= 3 || bossClean || p.vip;
     if (always || rng.chance(0.6)) {
       const stars = reviewStars(q, o.comfort, p.waitedMin, p.patience, priceOf(c, p, p.service));
-      addReview(state, c, p, stars, o.ev, bossClean && stars >= 4 ? 'The owner cleaned my teeth personally. What a treat.' : undefined, bossClean ? 2 : 1);
+      const vipW = p.vip ? (p.vipWeight ?? VIP_WEIGHT) * (bossClean ? 2 : 1) : undefined;
+      addReview(state, c, p, stars, o.ev, bossClean && stars >= 4 ? 'The owner cleaned my teeth personally. What a treat.' : undefined, bossClean ? 2 : 1, vipW);
     }
   });
   p.reviewed = true;
   return out;
 }
 
-export function completeHandsOn(state: GameState, patientId: string, result: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } {
+export function completeHandsOn(state: GameState, patientId: string, result0: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } {
   const ev: SimEvent[] = [];
   const f = findPatient(state, patientId);
   if (!f || !ready(f.p)) return { payout: emptyPayout(), events: ev };
   const { clinic: c, p } = f;
+  const result = gasHolds(c, p, result0);
   if (result.quit === 'abort') {
     // back to waiting in the chair; no pay, no fast-forward
     p.awaitingPlayer = true;
@@ -467,7 +537,7 @@ export function completeHandsOn(state: GameState, patientId: string, result: Cle
     return { payout: out, events: [...ev, ...more] };
   }
   const q = clamp(num(result.quality, 0), 0, 1);
-  const comfort = clamp(num(result.comfort, 60) / 100, 0, 1);
+  const comfort = handsComfort(state, c, p, clamp(num(result.comfort, 60) / 100, 0, 1));
   const stars = clamp(Math.round(num(result.stars, starsFor(q))), 1, 5);
   const a = ARCHETYPES[p.archetype];
   const count0 = masteryCount(state, ct);
@@ -531,7 +601,7 @@ export function quickClean(state: GameState, patientId: string): { payout: Hands
   const q = autoQuality(state);
   const op = opById(c, p.opId);
   const chair = op ? CHAIRS[op.chair] : CHAIRS.basic;
-  const comfort = clamp(0.4 + 0.45 * 0.6 + chair.comfort + (op?.upgrades.includes('tv') ? 0.08 : 0), 0, 1);
+  const comfort = clamp((0.4 + 0.45 * 0.6 + chair.comfort + (op?.upgrades.includes('tv') ? 0.08 : 0)) * (c.ownedByPlayer ? modAgg(state, c).comfort : 1), 0, 1);
   const stars = starsFor(q);
   state.stats.quickCleans += 1;
   const payout = settle(state, c, p, {

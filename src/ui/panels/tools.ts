@@ -51,7 +51,7 @@ export function toolsPanel(_ctx: PanelCtx): PanelInst {
         });
         return h('div.tool-slot',
           sectionTitle(TOOL_SLOT_NAMES[slot], SLOT_ICON[slot], h('span.small.muted', `In use: ${cur.name}`)),
-          h('div.tool-row.scroll-x', ...cards),
+          h('div.tool-row', ...cards),
         );
       });
 

@@ -18,8 +18,11 @@ import { dirtLabel, moodFromPatient } from './logic';
 import { openModal } from './modal';
 import { avatarPortrait, patientPortrait, staffPortrait } from './portrait';
 import { caseChip, twistChips } from './casebits';
+import * as mgr from './mgr';
 import { staffPanelIntent } from './panels/staff';
 import { btn, chip, priceTag, seg, stars, thumb } from './widgets';
+
+const OP_UPGRADE_ICON: Record<OpUpgradeId, string> = { tv: 'eye', whiteningLamp: 'caseWhitening', intraoralCam: 'camera', ergoStool: 'chair', nitrous: 'smile' };
 
 function findOp(c: Clinic | null, opId: string): Operatory | null {
   return c?.ops.find((o) => o.id === opId) ?? null;
@@ -96,16 +99,23 @@ function ownerOp(c: Clinic, op: Operatory, close: () => void): HTMLElement {
     thumb(chairDef.model, 'chair', 72),
     h('div.grow', h('div.bold', chairDef.name), h('div.small.muted', chairDef.blurb)),
     next
-      ? btn(`Upgrade`, { variant: 'sun', size: 'sm', sub: money(CHAIRS[next].price), disabled: !canAfford(CHAIRS[next].price), title: canAfford(CHAIRS[next].price) ? `Upgrade to ${CHAIRS[next].name}` : 'Not enough cash', onClick: () => act(() => sim.upgradeChair(store.state, idx, op.id, next), { success: `${CHAIRS[next].name} installed` }) })
+      ? (() => {
+        const price = mgr.chairPrice(s, idx, next);
+        return btn(`Upgrade`, { variant: 'sun', size: 'sm', sub: money(price), disabled: !canAfford(price), title: canAfford(price) ? `Upgrade to ${CHAIRS[next].name}` : 'Not enough cash', onClick: () => act(() => sim.upgradeChair(store.state, idx, op.id, next), { success: `${CHAIRS[next].name} installed` }) });
+      })()
       : chip('Top chair', 'mint', 'check'),
   );
   const upRows = (Object.keys(OP_UPGRADES) as OpUpgradeId[]).map((id) => {
     const u = OP_UPGRADES[id];
     const owned = op.upgrades.includes(id);
-    return h('div.op-item',
-      thumb(u.model, 'sparkle', 72, false),
+    const lock = owned ? '' : mgr.opUpgradeLock(c, id);
+    const price = mgr.opUpgradePrice(s, idx, op.id, id);
+    return h('div.op-item', { class: { 'is-locked': !!lock }, 'data-upgrade': id },
+      thumb(u.model, OP_UPGRADE_ICON[id] ?? 'sparkle', 72, !!lock),
       h('div.grow', h('div.bold', u.name), h('div.small.muted', u.blurb)),
-      owned ? chip('Installed', 'mint', 'check') : btn('Buy', { variant: 'sun', size: 'sm', sub: money(u.price), disabled: !canAfford(u.price), title: canAfford(u.price) ? '' : 'Not enough cash', onClick: () => act(() => sim.buyOpUpgrade(store.state, idx, op.id, id), { success: `${u.name} installed` }) }),
+      owned ? chip('Installed', 'mint', 'check')
+        : lock ? h('div.tool-lock.small.op-lock', icon('lock'), lock)
+          : btn('Buy', { variant: 'sun', size: 'sm', sub: money(price), disabled: !canAfford(price), title: canAfford(price) ? '' : 'Not enough cash', onClick: () => act(() => sim.buyOpUpgrade(store.state, idx, op.id, id), { success: `${u.name} installed` }) }),
     );
   });
 

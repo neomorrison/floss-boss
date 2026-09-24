@@ -2,7 +2,7 @@
 import { EXTRA_OP_PRICE, LOAN_DAILY_PAYMENT, LOAN_DAILY_RATE, MAX_LOCATIONS, PLAYER_ID } from '../../core/constants';
 import { money } from '../../core/format';
 import { store } from '../../core/store';
-import type { OfficeTierId } from '../../core/types';
+import type { EquipId, OfficeTierId } from '../../core/types';
 import { OFFICES, TIER_ORDER } from '../../data/offices';
 import { CHAIRS, EQUIPMENT, EQUIP_ORDER, OP_UPGRADES } from '../../data/upgrades';
 import * as sim from '../../sim';
@@ -14,7 +14,19 @@ import { select } from '../live';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { attempt } from '../safe';
 import { officeArt } from '../art';
+import * as mgr from '../mgr';
+import { equipmentByTier } from '../mgrlogic';
 import { btn, chip, priceTag, sectionTitle, seg, slider, thumb } from '../widgets';
+
+/** Icons for equipment without a rendered thumbnail yet. */
+export const EQUIP_ICON: Record<EquipId, string> = {
+  deepCert: 'medal', espresso: 'clock', waterFilter: 'drop', aromatherapy: 'sparkle', kidsCorner: 'balloon', staffLockers: 'lock',
+  fishTank: 'droplet', loyaltyProgram: 'tag', sterilizer: 'shield', onlineBooking: 'calendar', ultrasonicKits: 'scaler', xray: 'eye',
+  breakRoom: 'heart', soundMasking: 'volume', digitalXray: 'eye', patientApp: 'bell', nitrousSystem: 'smile',
+  rooftopGarden: 'sun', laserWhitening: 'caseWhitening', spaLounge: 'heart', cadcam: 'box',
+  aiScheduler: 'calendar', researchWing: 'graduation', smileStudio: 'star', helipad: 'flag',
+};
+const CHAIN_WIDE: EquipId[] = ['researchWing', 'helipad'];
 
 type MoveQuote = { price: number; tradeIn: number; net: number; maxLoan: number; ok: boolean; reason?: string };
 type LocQuote = { price: number; maxLoan: number; ok: boolean; reason?: string };
@@ -57,7 +69,7 @@ export function officePanel(ctx: PanelCtx): PanelInst {
       const s = store.state;
       const c = s.locations[activeIndex(s)];
       if (!c) return 'none';
-      return JSON.stringify([s.active, s.day, s.loan, Math.floor(s.cash / 100), s.locations.length, c.tier, c.name, c.equipment, c.ops.map((o) => [o.id, o.chair, o.upgrades, o.staffId]), c.staff.map((x) => x.id)]);
+      return JSON.stringify([s.active, s.day, s.loan, Math.floor(s.cash / 100), s.locations.length, c.tier, c.name, c.equipment, c.ops.map((o) => [o.id, o.chair, o.upgrades, o.staffId]), c.staff.map((x) => x.id), s.player.skills.length, EQUIP_ORDER.map((id) => mgr.equipmentPrice(s, activeIndex(s), id).price)]);
     },
     render() {
       const s = store.state;
@@ -107,21 +119,41 @@ export function officePanel(ctx: PanelCtx): PanelInst {
         ));
       }
 
-      // ---- equipment
+      // ---- equipment, grouped by the office tier that unlocks it
       const tierRank = (t: OfficeTierId) => TIER_ORDER.indexOf(t);
-      const equip = EQUIP_ORDER.map((id) => {
+      const equipCard = (id: EquipId) => {
         const e = EQUIPMENT[id];
         const owned = c.equipment.includes(id);
         const locked = tierRank(c.tier) < tierRank(e.minTier);
-        const afford = canAfford(e.price);
-        return h('div.equip-card', { class: { 'is-owned': owned, 'is-locked': locked } },
-          thumb(e.model, 'sparkle', 76, locked),
+        const p = mgr.equipmentPrice(s, idx, id);
+        const afford = canAfford(p.price);
+        const chain = CHAIN_WIDE.includes(id);
+        return h('div.equip-card', { class: { 'is-owned': owned, 'is-locked': locked, 'is-sale': !owned && !locked && p.sale > 0 }, 'data-equip': id },
+          p.sale > 0 && !owned && !locked ? h('span.equip-sale', `-${p.sale}%`) : null,
+          thumb(e.model, EQUIP_ICON[id] ?? 'sparkle', 76, locked),
           h('div.equip-name', e.name),
           h('div.equip-blurb', e.blurb),
+          chain ? h('div.equip-chain.tiny.bold', icon('building2'), 'Every location') : null,
           h('div.equip-action',
             owned ? chip('Installed', 'mint', 'check')
               : locked ? h('div.tool-lock.small', icon('lock'), `Needs ${OFFICES[e.minTier].name}`)
-                : btn('Buy', { variant: 'sun', size: 'sm', sub: money(e.price), disabled: !afford, title: afford ? '' : 'Not enough cash', onClick: () => act(() => sim.buyEquipment(store.state, idx, id), { success: `${e.name} installed` }) })),
+                : btn('Buy', {
+                  variant: 'sun', size: 'sm', sub: p.sale > 0 ? `${money(p.price)}, was ${money(Math.round(p.base))}` : money(p.price), disabled: !afford, title: afford ? '' : 'Not enough cash',
+                  onClick: () => act(() => sim.buyEquipment(store.state, idx, id), { success: `${e.name} installed` }),
+                })),
+        );
+      };
+      const owned = EQUIP_ORDER.filter((id) => c.equipment.includes(id)).length;
+      const groups = equipmentByTier(EQUIP_ORDER, (id) => EQUIPMENT[id].minTier).map((g) => {
+        const locked = tierRank(c.tier) < tierRank(g.tier);
+        const have = g.ids.filter((id) => c.equipment.includes(id)).length;
+        return h('div.equip-group', { class: { 'is-locked': locked } },
+          h('div.equip-group-head',
+            officeArt(g.tier, 44),
+            h('div.grow', h('div.bold', OFFICES[g.tier].name), h('div.tiny.bold.faint', locked ? `Needs ${OFFICES[g.tier].name}` : `${have} of ${g.ids.length} installed`)),
+            locked ? chip('Locked', '', 'lock') : null,
+          ),
+          h('div.grid.grid-auto-sm.equip-grid', ...g.ids.map(equipCard)),
         );
       });
 
@@ -192,8 +224,8 @@ export function officePanel(ctx: PanelCtx): PanelInst {
         header,
         sectionTitle('Operatories', 'chair'),
         h('div.grid.grid-auto-lg', ...opCards),
-        sectionTitle('Equipment', 'sparkle'),
-        h('div.grid.grid-auto-sm.equip-grid', ...equip),
+        sectionTitle('Equipment', 'sparkle', chip(`${owned} of ${EQUIP_ORDER.length}`, 'teal')),
+        h('div.equip-groups', ...groups),
         sectionTitle('Grow', 'trendUp'),
         h('div.grow-grid', moveBlock, newBlock),
       );

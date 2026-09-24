@@ -7,6 +7,7 @@ import './styles/hud.css';
 import './styles/screens.css';
 import './styles/panels.css';
 import './styles/modals.css';
+import './styles/manager.css';
 
 import { audio } from './audio';
 import { loadGame } from './core/save';

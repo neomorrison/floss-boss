@@ -56,6 +56,18 @@ describe.each(TIER_ORDER as OfficeTierId[])('clinic layout %s', (tier) => {
     for (const id of EQUIP_ORDER) expect(l.equipment[id], id).toBeDefined();
   });
 
+  it('has an op-upgrade spot for the ergonomic stool and the laughing gas tank in every operatory, inside the building', () => {
+    for (const o of l.ops) {
+      for (const key of ['ergoStool', 'nitrous'] as const) {
+        const p = o[key];
+        expect(Number.isFinite(p.x) && Number.isFinite(p.z), `op${o.slot} ${key} position`).toBe(true);
+        expect(inside(l.floor, p), `op${o.slot} ${key} on floor`).toBe(true);
+      }
+      // beside the chair and behind the headrest are two different spots, not aliases of each other
+      expect(o.ergoStool.x !== o.nitrous.x || o.ergoStool.z !== o.nitrous.z, `op${o.slot} ergoStool/nitrous distinct`).toBe(true);
+    }
+  });
+
   it('keeps every footprint on the floor', () => {
     for (const f of furnitureRects(l)) {
       expect(f.rect.x0 >= l.floor.x0 - EPS && f.rect.x1 <= l.floor.x1 + EPS && f.rect.z0 >= l.floor.z0 - EPS && f.rect.z1 <= l.floor.z1 + EPS, `${f.what} on floor`).toBe(true);

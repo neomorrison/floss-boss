@@ -73,6 +73,7 @@ export interface Actor {
   hit: HitInfo;
   headY: number;
   hat: THREE.Object3D | null;   // pirate case: a small tricorn, worn for as long as the case does
+  glasses: THREE.Object3D | null;   // VIP patient: sunglasses, worn for as long as DayPatient.vip does
   patient: DayPatient | null;
   staff: Staff | null;
   /** Patients visit their stops in order (desk, seat, chair, desk, door) even when the sim is ahead. */
@@ -128,6 +129,26 @@ function makePirateHat(): THREE.Group {
   return g;
 }
 
+// ------------------------------------------------------------------ VIP sunglasses (DESIGN 10.2)
+// A simple procedural dark band, worn for as long as the patient stays VIP (mystery shopper, celebrity,
+// Smile Studio patron). Same shared-geometry, cheap-clone pattern as the pirate hat above.
+
+let vipLensGeo: THREE.BufferGeometry | null = null;
+let vipBridgeGeo: THREE.BufferGeometry | null = null;
+
+function makeVipGlasses(): THREE.Group {
+  vipLensGeo ??= new THREE.BoxGeometry(0.14, 0.08, 0.03);
+  vipBridgeGeo ??= new THREE.BoxGeometry(0.06, 0.02, 0.02);
+  const g = new THREE.Group();
+  g.name = 'vipGlasses';
+  const m = mat(C.ink, 0.25, 0.35, C.ink, 0.2);
+  const l = new THREE.Mesh(vipLensGeo, m); l.position.set(-0.1, 0, 0.02); l.castShadow = true;
+  const r = new THREE.Mesh(vipLensGeo, m); r.position.set(0.1, 0, 0.02); r.castShadow = true;
+  const bridge = new THREE.Mesh(vipBridgeGeo, m); bridge.position.set(0, 0, 0.02);
+  g.add(l, r, bridge);
+  return g;
+}
+
 export function staffTint(id: string, scrubs: string): Tint {
   return {
     skin: pickBy(SKINS, id, 21), hair: pickBy(HAIRS, id, 22), shirt: scrubs, pants: scrubs,
@@ -176,6 +197,7 @@ export class Actors {
       a.person.hit.userData.hit = a.hit;
       a.person.blob.visible = this.blobs;
       if (a.hat) a.person.root.add(a.hat);
+      if (a.glasses) a.person.root.add(a.glasses);
       this.group.add(a.person.root);
     }
   }
@@ -199,7 +221,7 @@ export class Actors {
       pose: { walk: 0, phase: hash01(id, 3) * 6, sit: 0, recline: 0, work: 0, angry: 0, t: 0, seed: hash01(id, 4) },
       scale: 1, growing: false, shrinking: false, gone: false, frame: 0,
       speedMul: kind === 'senior' ? 0.8 : kind === 'kid' ? 1.1 : 1, angry: false, chimed: false, entering: false,
-      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, hat: null, patient: null, staff: null,
+      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, hat: null, glasses: null, patient: null, staff: null,
       plan: [], cur: 0, dwell: 0, drive: null as unknown as Target, pendingPaid: 0, pendingStars: 0, paid: false,
     };
     a.drive = a.tgt;
@@ -212,6 +234,7 @@ export class Actors {
   private remove(map: Map<string, Actor>, a: Actor): void {
     if (a.pendingPaid > 0 || a.pendingStars > 0) this.flushPay(a);
     if (a.hat) { a.person.root.remove(a.hat); a.hat = null; }
+    if (a.glasses) { a.person.root.remove(a.glasses); a.glasses = null; }
     this.group.remove(a.person.root);
     disposePerson(a.person);
     map.delete(a.id);
@@ -280,6 +303,9 @@ export class Actors {
       const wantHat = p.caseType === 'pirate';
       if (wantHat && !a.hat) { a.hat = makePirateHat(); a.person.root.add(a.hat); }
       else if (!wantHat && a.hat) { a.person.root.remove(a.hat); a.hat = null; }
+      // VIP patient (DESIGN 10.2): sunglasses for as long as the visit stays VIP
+      if (p.vip && !a.glasses) { a.glasses = makeVipGlasses(); a.person.root.add(a.glasses); }
+      else if (!p.vip && a.glasses) { a.person.root.remove(a.glasses); a.glasses = null; }
       // clicks on a patient in the chair open the operatory
       const inChair = (p.state === 'inChair' || p.state === 'toChair') && p.opId !== null;
       a.hit.kind = inChair ? 'op' : 'patient';
@@ -528,6 +554,7 @@ export class Actors {
     r.scale.setScalar(Math.max(0.01, s));
     a.headY = a.person.height - (a.person.hipY - 0.52) * sitW - 0.55 * recW + 0.12;
     if (a.hat) a.hat.position.y = a.headY - 0.08;
+    if (a.glasses) a.glasses.position.y = a.headY - 0.2;
   }
 
   private senseDoor(a: Actor): void {

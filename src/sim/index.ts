@@ -12,9 +12,11 @@
 //   there (employees delegate with Quick clean, which needs Bronze mastery of the case).
 // - Every DayPatient has caseType and twists (DESIGN 5.5, 5.6), NPC patients too.
 import type {
-  ActionResult, AddonId, CaseType, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
-  GameState, HandsOnPayout, OfficeTierId, OfflineReport, OpUpgradeId, PriceKey, SimEvent, SkillId, ToolSlot,
+  ActionResult, AddonId, CampaignId, CaseType, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
+  FocusId, GameState, HandsOnPayout, OfficeTierId, OfflineReport, OpUpgradeId, PendingEvent, PerkId, PriceKey, SimEvent, SkillId,
+  ToolSlot,
 } from '../core/types';
+import * as manager from './manager';
 import * as career from './career';
 import * as economy from './economy';
 import * as staff from './staff';
@@ -111,6 +113,49 @@ export function takeLoan(state: GameState, amount: number): ActionResult { retur
 export function repayLoan(state: GameState, amount: number): ActionResult { return economy.repayLoan(state, amount); }
 export function maxLoan(state: GameState): number { return economy.maxLoan(state); }
 export function claimGoal(state: GameState, goalId: string): ActionResult { return claim(state, goalId); }
+
+// ------------------------------------------------------------------ manager layer (DESIGN 10)
+/** True while today's Morning Huddle waits for the owner (owner phase, after "Next day"). tick() completes
+ * it automatically (events answered with their first choice) if the clock starts first. */
+export function huddlePending(state: GameState): boolean { return manager.huddlePending(state); }
+/** Focus slots (1, 2 with Huddle Pro), today's selection, and every focus with ok/reason (office tier). */
+export function focusOptions(state: GameState): { slots: number; selected: FocusId[]; options: { id: FocusId; name: string; text: string; ok: boolean; reason?: string }[] } { return manager.focusOptions(state); }
+/** Pick today's Daily Focus (1 id, or 2 with Huddle Pro; [] = Steady). Validates the office tier. Before the
+ * doors open the day is rebooked with the new walk-in and speed effects. The focus is kept for later days. */
+export function setFocus(state: GameState, focusIds: FocusId[]): ActionResult { return manager.setFocus(state, focusIds); }
+/** Title, text, icon art, location name and choices (label + hint with cash scaled to the office) of a
+ * pending event, with {staff}, {clinic}, {op} and {equip} filled in. */
+export function eventText(state: GameState, pending: PendingEvent): { title: string; text: string; art: string; clinic: string; choices: { label: string; hint: string }[] } { return manager.eventText(state, pending); }
+/** Answer state.pendingEvents[pendingIndex] with a choice (0-based). Applies its effects (a risky choice
+ * rolls; Crisis Manager +20%), logs it in state.eventLog and the day report, and returns the outcome text
+ * and whether it went well. Before the doors open the location is rebooked to reflect the decision. */
+export function resolveEvent(state: GameState, pendingIndex: number, choice: number): { text: string; good: boolean } { return manager.resolveEvent(state, pendingIndex, choice); }
+/** "Open the doors": answers leftover events with their first choice and marks today's huddle done.
+ * Returns each auto-answered outcome. */
+export function completeHuddle(state: GameState): { eventId: string; clinicId: string; text: string; good: boolean }[] { return manager.completeHuddle(state); }
+/** Whether a campaign can start at a location now (reason when not), its cost (x tierScale, Brand Builder
+ * -25%), its length, what is running and the cooldown day. */
+export function campaignStatus(state: GameState, clinicIndex: number, id: CampaignId): { ok: boolean; cost: number; days: number; reason?: string; active: CampaignId | null; activeUntil: number | null; cooldownUntil: number } { return manager.campaignStatus(state, clinicIndex, id); }
+/** Start a campaign (one per location, cooldown after). Before the doors open it runs from today, otherwise
+ * from tomorrow. Adds a 'campaign:<id>:<day>' modifier (demand, case boost). */
+export function startCampaign(state: GameState, clinicIndex: number, id: CampaignId): ActionResult { return manager.startCampaign(state, clinicIndex, id); }
+/** Today's outlook of a location: expected new patients, capacity, booked and the waitlist booked first. */
+export function dayOutlook(state: GameState, clinicIndex: number): { lambda: number; capacity: number; booked: number; waitlist: number } { return manager.dayOutlook(state, clinicIndex); }
+/** Pick one of the two perks a staff member was offered at a level-up (Staff.pendingPerks). Unpicked perks
+ * are auto-picked (the first) after 2 days. */
+export function pickPerk(state: GameState, clinicIndex: number, staffId: string, perk: PerkId): ActionResult { return staff.pickPerk(state, clinicIndex, staffId, perk); }
+/** Interview a candidate: exact stats and traits (Candidate.interviewed, range collapses). */
+export function interview(state: GameState, candidateId: string): ActionResult { return staff.interview(state, candidateId); }
+/** What an interview costs now ($40 x tierScale of the active office, free with Talent Scout). */
+export function interviewCost(state: GameState): number { return staff.interviewCost(state); }
+/** What a training course costs now (HR Guru -40%, Research Wing halves it). */
+export function trainingCost(state: GameState): number { return staff.trainingCost(state); }
+/** What a piece of equipment costs at a location today: Bulk Buyer -10% and a salesman's discount. */
+export function equipmentPrice(state: GameState, clinicIndex: number, id: EquipId): number { return economy.equipmentPrice(state, clinicIndex, id); }
+/** Price of a chair tier (Bulk Buyer applies). */
+export function chairPrice(state: GameState, tier: ChairTier): number { return economy.chairPrice(state, tier); }
+/** Price of an operatory upgrade (Bulk Buyer applies). */
+export function opUpgradePrice(state: GameState, id: OpUpgradeId): number { return economy.opUpgradePrice(state, id); }
 
 // ------------------------------------------------------------------ selectors (read-only)
 export function activeClinic(state: GameState): Clinic | null { return sel.activeClinic(state); }

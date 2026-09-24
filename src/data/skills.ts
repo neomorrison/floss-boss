@@ -21,7 +21,7 @@ export const SKILLS: Skill[] = [
   { id: 'leader', branch: 'business', name: 'Leader', text: 'Staff morale +1 per day.', requires: 'negotiator', minLevel: 6 },
   { id: 'leanOps', branch: 'business', name: 'Lean Ops', text: 'Supplies cost 20% less.', requires: 'marketer', minLevel: 6 },
   { id: 'upseller', branch: 'business', name: 'Upseller', text: 'Add-ons accepted 15% more often.', requires: 'leanOps', minLevel: 8 },
-  { id: 'paperworkPro', branch: 'business', name: 'Paperwork Pro', text: 'Finished goals are claimed automatically at the end of the day.', requires: null, minLevel: 3 },
+  { id: 'paperworkPro', branch: 'business', name: 'Paperwork Pro', text: 'Goals you forget to claim pay in full at the end of the day, not half.', requires: null, minLevel: 3 },
   { id: 'bulkBuyer', branch: 'business', name: 'Bulk Buyer', text: 'Equipment, chairs and upgrades cost 10% less.', requires: 'paperworkPro', minLevel: 5 },
   { id: 'brandBuilder', branch: 'business', name: 'Brand Builder', text: 'New patients find you twice as fast. Campaigns cost 25% less.', requires: 'marketer', minLevel: 7 },
   { id: 'investorRelations', branch: 'business', name: 'Investor Relations', text: 'Loan interest halved. Valuation +10%.', requires: 'bulkBuyer', minLevel: 9 },

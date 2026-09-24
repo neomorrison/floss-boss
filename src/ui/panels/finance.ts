@@ -2,7 +2,8 @@
 import { FLOSS_BOSS_VALUATION, LOAN_DAILY_PAYMENT, LOAN_DAILY_RATE } from '../../core/constants';
 import { money, pct, signedMoney } from '../../core/format';
 import { store } from '../../core/store';
-import type { PriceKey } from '../../core/types';
+import type { CampaignId, Clinic, GameState, PriceKey } from '../../core/types';
+import { CAMPAIGNS, CAMPAIGN_ORDER } from '../../data/manager';
 import { MARKETING_LEVELS, OFFICES } from '../../data/offices';
 import { PRICE_KEYS, PRICE_MAX, PRICE_MIN, PRICE_STEP, SERVICES } from '../../data/services';
 import { EQUIPMENT, OP_UPGRADES } from '../../data/upgrades';
@@ -14,13 +15,29 @@ import { avgNet, barChart, operatingNet } from '../logic';
 import { locationPicker } from './office';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { attempt } from '../safe';
-import { bar, btn, chip, sectionTitle, seg, slider } from '../widgets';
+import { confetti, sfx } from '../fx';
+import * as mgr from '../mgr';
+import { activeModifiers, campaignSummary, daysLeftLabel, modifierSource, modifierSummary } from '../mgrlogic';
+import { bar, btn, chip, sectionTitle, seg, slider, tabs } from '../widgets';
+
+export const CAMPAIGN_ICON: Record<CampaignId, string> = {
+  grandOpening: 'ribbon', kidsWeek: 'balloon', smileMakeover: 'caseWhitening', goldenYears: 'caseDeep', bracesBonanza: 'caseBraces', pirateDay: 'flag',
+};
+
+type FinanceTab = 'money' | 'marketing';
+let pendingTab: FinanceTab | null = null;
+/** Open the Finance panel on a tab next time it is built or shown. */
+export function financePanelTab(tab: FinanceTab): void {
+  pendingTab = tab;
+}
 
 type Forecast = { demand: number; capacity: number; revenue: number; costs: number };
 
 export function financePanel(ctx: PanelCtx): PanelInst {
   let takeAmt = 0;
   let repayAmt = 0;
+  let tab: FinanceTab = pendingTab ?? 'money';
+  pendingTab = null;
   return {
     title: 'Finance',
     icon: 'finance',
@@ -28,13 +45,19 @@ export function financePanel(ctx: PanelCtx): PanelInst {
       const s = store.state;
       const c = s.locations[activeIndex(s)];
       if (!c) return 'none';
-      return JSON.stringify([s.active, s.day, Math.round(s.cash / 10), s.loan, s.reports.length, c.prices, c.marketing, c.staff.length, c.equipment, c.ops.length]);
+      return JSON.stringify([tab, s.active, s.day, Math.round(s.cash / 10), s.loan, s.reports.length, c.prices, c.marketing, c.staff.length, c.equipment, c.ops.length, c.campaign, c.campaignCooldownUntil, (c.modifiers ?? []).map((m) => m.id), s.player.skills.length]);
     },
     render() {
       const s = store.state;
+      if (pendingTab) { tab = pendingTab; pendingTab = null; }
       const idx = activeIndex(s);
       const c = s.locations[idx];
       if (!c) return h('div.empty', icon('finance'), h('b', 'No practice yet'));
+      const head = h('div.fin-top',
+        tabs<FinanceTab>([{ value: 'money', label: 'Money' }, { value: 'marketing', label: 'Marketing' }], tab, (v) => { tab = v; ctx.rerender(); }),
+        h('div.row.gap-6.fin-top-right', locationPicker() ?? h('span.small.muted', c.name)),
+      );
+      if (tab === 'marketing') return h('div.finance-panel', head, marketingTab(s, idx, c));
       const val = attempt(() => sim.valuation(s), 0, 'valuation');
       const net7 = avgNet(s.reports.filter((r) => r.phase === 'owner'), 7);
 
@@ -105,18 +128,6 @@ export function financePanel(ctx: PanelCtx): PanelInst {
         );
       });
 
-      // ---- marketing
-      const scale = OFFICES[c.tier].tierScale;
-      const marketing = seg(MARKETING_LEVELS.map((m) => ({
-        value: m.level,
-        label: h('span.mk-opt', h('b', m.name), h('span.tiny', m.cost ? `${money(Math.round(m.cost * scale))}/day` : 'Free')),
-        title: `Demand x${m.mult}`,
-      })), c.marketing, (v) => {
-        attempt(() => sim.setMarketing(store.state, idx, v as 0 | 1 | 2 | 3), undefined, 'setMarketing');
-        store.commit();
-        paintForecast();
-      }, 'seg-block mk-seg');
-
       // ---- loan: the bank lends up to its limit minus what you already owe
       const limit = attempt(() => sim.maxLoan(s), 0, 'maxLoan');
       const maxL = Math.max(0, Math.floor((limit - s.loan) / 100) * 100);
@@ -149,7 +160,7 @@ export function financePanel(ctx: PanelCtx): PanelInst {
       );
 
       return h('div.finance-panel',
-        h('div.row.row-between.row-wrap', h('div.small.muted', c.name), locationPicker()),
+        head,
         summary,
         bossProgress,
         sectionTitle('Last 14 days', 'report', h('span.small.muted', 'Profit before purchases and loans')),
@@ -158,8 +169,6 @@ export function financePanel(ctx: PanelCtx): PanelInst {
         forecast,
         sectionTitle('Prices', 'receipt', h('span.small.muted', 'Higher prices mean fewer patients and tougher reviews')),
         h('div.price-list', ...priceRows),
-        sectionTitle('Marketing', 'megaphone'),
-        marketing,
         sectionTitle('Bank loan', 'bank'),
         loanCard,
       );
@@ -205,4 +214,91 @@ function chart(data: { day: number; net: number; invested: number }[]): HTMLElem
   });
   show(data.length - 1);
   return h('div.fin-chart', h('div.fin-chart-svg', svg), cap);
+}
+
+// ---------------------------------------------------------------- marketing tab (DESIGN 10.3)
+
+function capacityMeter(s: GameState, idx: number): HTMLElement {
+  const f = mgr.outlook(s, idx);
+  if (!f) return h('div.small.muted', 'Forecast not available yet');
+  const demand = f.demand;
+  const cap = Math.max(0, f.capacity);
+  const fill = cap > 0 ? Math.min(1.25, demand / cap) : 1.25;
+  const over = cap <= 0 || demand > cap + 0.5;
+  const room = Math.max(0, Math.floor(cap - demand));
+  const advice: [string, string, string] = cap <= 0
+    ? ['alert', 'Nobody can clean yet. Staff an operatory before marketing.', 'bad']
+    : over
+      ? ['alert', `About ${Math.max(1, Math.round(demand - cap))} more want in than you can seat. Add operatories or hygienists before more marketing.`, 'bad']
+      : room >= 2
+        ? ['trendUp', `Room for about ${room} more patients a day. Marketing and campaigns fill it.`, 'good']
+        : ['check', 'Right at capacity. Campaigns still change which cases come in.', ''];
+  return h('div.cap-meter', { class: { 'is-over': over } },
+    h('div.cap-nums',
+      h('div', h('b.num', demand.toFixed(1)), h('span.tiny.bold.faint', 'Patients want in')),
+      h('div', h('b.num', String(Math.round(cap))), h('span.tiny.bold.faint', 'Chair slots a day')),
+      f.waitlist > 0 ? h('div', h('b.num', String(f.waitlist)), h('span.tiny.bold.faint', 'On the waitlist')) : null,
+    ),
+    h('div.cap-track', h('i', { style: { width: `${(Math.min(1, fill / 1.25) * 100).toFixed(1)}%` } }), h('span.cap-line')),
+    h('div.cap-scale', h('span', 'Full')),
+    h('div.cap-advice', { class: advice[2] }, icon(advice[0]), h('span', advice[1])),
+  );
+}
+
+function campaignCard(s: GameState, idx: number, c: Clinic, id: CampaignId): HTMLElement {
+  const def = CAMPAIGNS[id];
+  const info = mgr.campaignInfo(s, idx, id);
+  const afford = s.cash >= info.cost;
+  let action: HTMLElement;
+  if (info.state === 'active') {
+    const done = def.days - info.days;
+    action = h('div.camp-live',
+      h('div.row.row-between.tiny.bold', h('span.good', info.startsIn > 0 ? 'Starts tomorrow' : 'Running'), h('span', info.days <= 1 ? 'Last day' : `${info.days} days left`)),
+      bar(info.startsIn > 0 ? 0.04 : Math.max(0.06, Math.min(1, done / def.days)), 'gum', 'sm'));
+  } else if (info.state === 'ready') {
+    action = btn('Start', {
+      variant: 'sun', size: 'sm', icon: 'megaphone', block: true, sub: money(info.cost), sound: null, disabled: !afford, title: afford ? '' : 'Not enough cash',
+      onClick: (ev) => {
+        const from = ev.currentTarget as HTMLElement;
+        if (act(() => mgr.startCampaign(store.state, idx, id), { sound: null, success: `${def.name} starts at ${c.name}` })) { sfx('campaign_start'); confetti(from, 40); }
+      },
+    });
+  } else {
+    action = h('div.camp-wait', icon(info.state === 'locked' ? 'lock' : 'clock'), h('span', info.reason));
+  }
+  return h('div.camp-card', { class: `is-${info.state}`, 'data-campaign': id },
+    h('div.camp-head', h('div.camp-icon', icon(CAMPAIGN_ICON[id] ?? 'megaphone')), h('div.grow', h('div.camp-name', def.name), h('div.camp-blurb', def.blurb))),
+    h('div.camp-effect', icon('bolt'), h('span', campaignSummary(def))),
+    h('div.row.row-wrap.gap-6', chip(`${def.days} days`, '', 'calendar'), def.cooldown >= 10 ? chip(`${def.cooldown}-day cooldown`, '', 'clock') : null),
+    h('div.camp-action', action),
+  );
+}
+
+function marketingTab(s: GameState, idx: number, c: Clinic): HTMLElement {
+  const scale = OFFICES[c.tier].tierScale;
+  const marketing = seg(MARKETING_LEVELS.map((m) => ({
+    value: m.level,
+    label: h('span.mk-opt', h('b', m.name), h('span.tiny', m.cost ? `${money(Math.round(m.cost * scale))}/day` : 'Free')),
+    title: `Demand x${m.mult}`,
+  })), c.marketing, (v) => {
+    attempt(() => sim.setMarketing(store.state, idx, v as 0 | 1 | 2 | 3), undefined, 'setMarketing');
+    store.commit();
+  }, 'seg-block mk-seg');
+  const mods = activeModifiers(c.modifiers, s.day);
+  const SRC: Record<string, string> = { event: 'Event', campaign: 'Campaign', focus: 'Focus' };
+  const modRows = mods.map((m) => h('div.mod-row', { class: `src-${modifierSource(m)}` },
+    h('span.mod-src', SRC[modifierSource(m)] ?? 'Event'),
+    h('div.grow', h('div.bold.small', m.label), h('div.tiny.muted', modifierSummary(m))),
+    h('span.tiny.bold.faint', daysLeftLabel(m.untilDay, s.day)),
+  ));
+  return h('div.marketing-tab',
+    sectionTitle('Demand and capacity', 'user', h('span.small.muted', 'A day at these settings')),
+    capacityMeter(s, idx),
+    sectionTitle('Advertising', 'megaphone', h('span.small.muted', 'More patients every day')),
+    marketing,
+    sectionTitle('Campaigns', 'balloon', h('span.small.muted', 'A few days of special patients, one at a time')),
+    h('div.grid.camp-grid', ...CAMPAIGN_ORDER.map((id) => campaignCard(s, idx, c, id))),
+    sectionTitle('In effect', 'bolt', h('span.small.muted', c.name)),
+    modRows.length ? h('div.mod-list', ...modRows) : h('div.small.muted.mod-empty', 'Nothing special today.'),
+  );
 }

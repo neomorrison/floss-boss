@@ -5,6 +5,7 @@ import * as sim from '../src/sim/index';
 import type { GameState, SimEvent } from '../src/core/types';
 import { encodeSave, decodeSave } from '../src/core/save';
 import { ledgerSum, nonFinite, result } from './sim.helpers';
+import { OFFICES } from '../src/data/offices';
 
 function invariants(s: GameState, where: string): void {
   const bad = nonFinite(s);
@@ -182,7 +183,7 @@ describe('full career flow', () => {
     }
     const q = sim.moveQuote(s, 0, 't2');
     expect(q.ok).toBe(true);
-    expect(q.tradeIn).toBe(Math.round(5000 * 0.5));
+    expect(q.tradeIn).toBe(Math.round(OFFICES.t1.price * 0.5));
     const loan = Math.max(0, Math.min(q.maxLoan, q.net - s.cash + 1000));
     const res = sim.moveOffice(s, 0, 't2', loan);
     expect(res.ok).toBe(true);

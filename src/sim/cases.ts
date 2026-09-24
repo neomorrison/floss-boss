@@ -57,18 +57,33 @@ export function caseAllowed(state: GameState, c: Clinic, ct: CaseType): boolean 
  * else is possible. Owner phase: whitening odds follow the whitening price like an add-on would.
  */
 export function pickCase(state: GameState, c: Clinic, arch: ArchetypeId, rng: Rng, avoid: CaseType | null = null): CaseType {
-  const whitePrice = c.ownedByPlayer ? Math.pow(c.prices.whitening ?? 1, -2) : 1;
-  const w = (ct: CaseType) => {
-    if (!caseAllowed(state, c, ct)) return 0;
-    const base = CASES[ct].weight[arch] ?? 0;
-    return base * (ct === 'whitening' ? whitePrice : 1);
-  };
+  const w = (ct: CaseType) => caseWeight(state, c, arch, ct);
   let total = 0;
   let others = 0;
   for (const ct of CASE_ORDER) { const x = w(ct); total += x; if (ct !== avoid) others += x; }
   if (total <= 0) return 'routine';
   const skip = avoid != null && others > 0;
   return rng.weighted(CASE_ORDER, (ct) => (skip && ct === avoid ? 0 : w(ct)));
+}
+
+/** Relative odds of a case for an archetype at a clinic (0 when the clinic cannot take it). Owner phase:
+ * whitening odds follow the whitening price like an add-on would. */
+export function caseWeight(state: GameState, c: Clinic, arch: ArchetypeId, ct: CaseType): number {
+  if (!caseAllowed(state, c, ct)) return 0;
+  const base = CASES[ct].weight[arch] ?? 0;
+  if (ct === 'whitening' && c.ownedByPlayer) return base * Math.pow(c.prices.whitening ?? 1, -2);
+  return base;
+}
+
+/** The patient's bonus objective, decided at booking so the chair card can show it (DESIGN 5.6). A pirate
+ * brings a doubloon 70% of the time (then the bonus is to find it); combos need 4+ deposits (routine,
+ * pirate and deep cases). */
+export function pickBonus(state: GameState, patientId: string, ct: CaseType): BonusId {
+  const r = makeRng(hashSeed(state.seed, patientId, state.day, 'bonus'));
+  if (ct === 'pirate' && r.chance(0.7)) return 'treasure';
+  const opts: BonusId[] = ['noSlips', 'fast', 'spotless'];
+  if (ct === 'routine' || ct === 'pirate' || ct === 'deep') opts.push('combo');
+  return opts[r.int(0, opts.length - 1)];
 }
 
 /** An archetype likely to bring this case (for scheduling a newly unlocked case). */
@@ -176,6 +191,10 @@ export interface SetupInput {
   consumeGel: boolean;
   firstOfCase: boolean;
   school?: 1 | 2;
+  /** The patient's booked bonus (DayPatient.bonus). Undefined: decided here from the seed. */
+  bonus?: BonusId | null;
+  /** Laughing gas at this chair: calmer start, slower comfort drain. */
+  gas?: boolean;
 }
 
 /** The v2 CleanSetup per the spawn contract (DESIGN 5.5 table). Deterministic from the seed. */
@@ -221,6 +240,7 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
       sp.barnacles = r.int(3, 5);
       sp.seaweed = r.int(2, 3);
       sp.treasure = r.chance(0.7);
+      if (o.bonus !== undefined) sp.treasure = o.bonus === 'treasure';
       break;
     case 'deep':
       dirt = { tartarCount: r.int(3, 5), tartarSize: 1.2, plaque: 0.6, stain: 0.3, debrisCount: 1 };
@@ -253,8 +273,15 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
     fidget: tw.includes('fidget') ? Math.max(0.5, a.traits.fidget) : 0,
     gumSensitivity: a.traits.gumSensitivity * (tw.includes('sensitive') ? 2 : 1),
   };
+  if (o.gas) {
+    traits.comfortStart = Math.min(100, traits.comfortStart + 15);
+    traits.comfortDrain = Math.round(traits.comfortDrain * 0.7 * 100) / 100;
+  }
   let bonus: BonusId | null = null;
-  if (!o.school) {
+  if (o.bonus !== undefined && !o.school) {
+    bonus = o.bonus === 'combo' && dirt.tartarCount + sp.barnacles + sp.pockets < 4 ? 'spotless' : o.bonus;
+    if (bonus === 'treasure' && !(ct === 'pirate' && sp.treasure)) bonus = 'noSlips';
+  } else if (!o.school) {
     if (ct === 'pirate' && sp.treasure) bonus = 'treasure';
     else {
       const opts: BonusId[] = ['noSlips', 'fast', 'spotless'];

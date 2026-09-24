@@ -28,6 +28,7 @@ const CSS = `
 .fbc-badge{width:16px;height:16px;filter:drop-shadow(0 2px 3px rgba(22,50,58,.3))}
 .fbc-tag{background:#fff;color:#16323A;font:800 13px/1 Nunito,system-ui,sans-serif;padding:5px 10px;border-radius:12px;white-space:nowrap;box-shadow:0 3px 10px rgba(22,50,58,.2)}
 .fbc-tag.you{background:#FF7AA8;color:#fff}
+.fbc-tag.vip{background:#FFD166;color:#5C3A00;box-shadow:0 3px 10px rgba(22,50,58,.2),0 0 0 2px #fff inset}
 .fbc-plus{pointer-events:auto;cursor:pointer;width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.9);border:3px dashed #0E8F8A;color:#0E8F8A;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(22,50,58,.18);transition:transform .15s}
 .fbc-plus:hover{transform:scale(1.08)}
 .fbc-pop{animation:fbc-rise 1.5s cubic-bezier(.2,.8,.3,1) forwards}
@@ -239,9 +240,17 @@ export class OverlayLayer {
     this.place(it.wrap, it, x, y, z);
   }
 
-  tag(id: string, x: number, y: number, z: number, text: string, you = false): void {
+  /** `vip` gives the tag the gold treatment (DESIGN 10.2: a mystery shopper, celebrity or Smile Studio
+   * patron), independent of `you` (never both at once in practice, but `you` wins if they were). */
+  tag(id: string, x: number, y: number, z: number, text: string, you = false, vip = false): void {
     const it = this.item('tag', id, () => { const d = document.createElement('div'); d.className = 'fbc-tag'; return d; });
-    if (it.str !== text) { it.str = text; it.inner.textContent = text; it.inner.classList.toggle('you', you); }
+    const flagKey = text + '|' + you + '|' + vip;
+    if (it.str !== flagKey) {
+      it.str = flagKey;
+      it.inner.textContent = text;
+      it.inner.classList.toggle('you', you);
+      it.inner.classList.toggle('vip', vip && !you);
+    }
     this.place(it.wrap, it, x, y, z);
   }
 

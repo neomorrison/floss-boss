@@ -43,6 +43,8 @@ export interface OpSlotLayout {
   entry: V2;            // corridor point in front of the opening
   lamp: Piece; cart: Piece; counter: Piece; monitor: Piece;
   tv: Piece; whiteningLamp: Piece; intraoralCam: Piece;
+  ergoStool: Piece;   // op upgrade: beside the chair, floor-standing
+  nitrous: Piece;      // op upgrade: behind the headrest, wall-mounted (see props.ts note)
 }
 
 export interface SeatLayout extends Spot {
@@ -95,6 +97,16 @@ export const FOOTPRINTS: Record<string, [number, number]> = {
   espresso_machine: [0.84, 0.6], sterilizer: [0.95, 0.62], kiosk: [0.5, 0.45], ultrasonic_cart: [0.68, 0.46],
   xray_unit: [0.6, 1.0], break_table: [1.7, 1.5], trash_bin: [0.36, 0.38], coat_rack: [0.55, 0.55],
   office_desk: [1.4, 0.7], tooth_sign: [1.06, 0.64],
+  // v3 op upgrades and equipment (DESIGN 10.5). Most of these are small enough, or wall/counter mounted
+  // (rendered with onFloor = false below), that they never need a reserved floor footprint; only the
+  // handful placed loose on the floor (water filter, diffuser, staff lockers, the central nitrous tank,
+  // the ergonomic stool) get a real collision box.
+  ergo_stool: [0.32, 0.32], water_filter: [0.34, 0.34], aroma_diffuser: [0.28, 0.28],
+  staff_lockers: [1.0, 0.42], nitrous_tank: [0.3, 0.3],
+  loyalty_board: [0.9, 0.06], digital_xray: [0.46, 0.36], sound_panel: [0.8, 0.06],
+  patient_tablet: [0.24, 0.18], laser_whitening: [0.7, 0.5], spa_lounge: [1.6, 1.1],
+  cadcam_mill: [0.8, 0.6], rooftop_planter: [1.0, 0.3], smile_studio: [1.6, 1.1],
+  research_desk: [1.2, 0.6], helipad_sign: [0.5, 0.5], ai_screen: [0.26, 0.18],
 };
 
 // ------------------------------------------------------------------ tier parameters
@@ -284,6 +296,13 @@ function buildLayout(tier: OfficeTierId): ClinicLayout {
         intraoralCam: Pc('intraoral_cam', -1.22, 1.35, HALF_PI),
         whiteningLamp: Pc('whitening_lamp', 1.18, 1.35, Math.PI),
         tv: Pc('op_tv', -0.95, 0.9, 2.67, false),
+        // beside the chair and behind the headrest: both wall/floor-adjacent accents rather than real
+        // floor obstacles, like the op_tv above. The cubicle has no spare floor once the counter, cart,
+        // camera and chair are placed, so a stool with a real footprint there either overlaps one of
+        // them or squeezes the assistant's own path along the back partition; onFloor false keeps both
+        // visible at their spot without fighting the nav grid for the last inches of floor.
+        ergoStool: Pc('ergo_stool', -0.62, 0, 0, false),
+        nitrous: Pc('nitrous_tank', 0.2, -1.8, 0, false, 0.62),
       });
     }
     // half walls: one at every cubicle boundary, from the row's wall to just short of the opening
@@ -336,6 +355,31 @@ function buildLayout(tier: OfficeTierId): ClinicLayout {
     sterilizer: P.nB === 0 ? piece('sterilizer', wingX0 + 2.55, Z1 - 0.34, Math.PI) : piece('sterilizer', sx(S - 0.33), sz(corrV0 + 0.75), -HALF_PI),
     ultrasonicKits: P.nB === 0 ? piece('ultrasonic_cart', wingX0 + 3.7, Z1 - 0.26, Math.PI) : piece('ultrasonic_cart', sx(S - 0.26), sz(corrV0 + 1.75), -HALF_PI),
     breakRoom: piece('break_table', sx(S / 2), sz(breakV), 0),
+    // v3 equipment (DESIGN 10.5). Small counter and wall pieces are elevated (onFloor false, like the
+    // certificate and op_tv above) so they never compete with the lobby or staff zone floor for space;
+    // only the handful of genuine floor pieces below reserve a footprint the nav grid has to keep clear.
+    waterFilter: piece('water_filter', ...xz(at(L - 0.35, D - 3.0)), 0),
+    aromatherapy: piece('aroma_diffuser', ...xz(at(L - 0.35, D - 3.75)), 0),
+    loyaltyProgram: piece('loyalty_board', X0 + deskU - 1.3, Z0 + 0.03, 0, false, 1.35),
+    // small offices (no front operatory row) leave the whole corridor-to-break stretch open; bigger
+    // ones already fill it with the lab cart cluster, so these two sit in the gap just past it instead
+    staffLockers: piece('staff_lockers', sx(S - 0.4), P.nB === 0 ? sz(3.3) : sz(7.0), -HALF_PI),
+    digitalXray: P.nB === 0
+      ? piece('digital_xray', wingX0 + 5.0, Z1 - 1.15, Math.PI, false, 1.3)
+      : piece('digital_xray', sx(S - 0.55), sz(1.55), -HALF_PI, false, 1.3),
+    soundMasking: piece('sound_panel', ...xz(at(1.6, 0.05)), 0, false, 2.3),
+    patientApp: piece('patient_tablet', X0 + deskU + 1.3, Z0 + 1.2, Math.PI, false, 1.0),
+    nitrousSystem: piece('nitrous_tank', sx(S - 0.9), P.nB === 0 ? sz(3.3) : sz(7.0), 0),
+    laserWhitening: piece('laser_whitening', sx(S - 0.4), sz(D - 3.6), -HALF_PI, false, 0.9),
+    spaLounge: piece('spa_lounge', sx(S / 2), sz(D - 4.4), 0, false, 0.05),
+    cadcam: piece('cadcam_mill', sx(S - 0.4), sz(D - 5.0), -HALF_PI, false, 0.85),
+    rooftopGarden: piece('rooftop_planter', sx(S / 2), Z0 + 0.03, 0, false, 0.3),
+    smileStudio: piece('smile_studio', sx(0.4), sz(D - 4.4), HALF_PI, false, 0.05),
+    researchWing: piece('research_desk', sx(0.4), sz(D - 5.4), HALF_PI, false, 0.75),
+    // grounded like the tooth pylon it stands beside, not actually on the roof: the fallback model is
+    // its own ground-to-sign pole, and a real rooftop mount is an art-model concern, not a layout one
+    helipad: piece('helipad_sign', sign.x - 2.2, sign.z, 0, false, 0),
+    aiScheduler: piece('ai_screen', X0 + deskU - 0.6, Z0 + 0.03, 0, false, 1.05),
   };
 
   // ---------------------------------------------------------------- walls
@@ -390,6 +434,8 @@ export function furnitureRects(l: ClinicLayout): { rect: Rect; what: string }[] 
     add(o.whiteningLamp, `op${o.slot}:whitening`);
     add(o.intraoralCam, `op${o.slot}:cam`);
     add(o.tv, `op${o.slot}:tv`);
+    add(o.ergoStool, `op${o.slot}:ergoStool`);
+    add(o.nitrous, `op${o.slot}:nitrous`);
   }
   for (const p of l.partitions) out.push({ rect: p, what: 'partition' });
   return out;

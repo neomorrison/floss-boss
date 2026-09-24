@@ -1,7 +1,7 @@
 # Floss Boss clinic + people models: headless Blender build.
 #
 #   "C:/Program Files/Blender Foundation/Blender 5.1/blender.exe" --background --factory-startup \
-#       --python art/blender/clinic/build.py -- [--only key,key] [--preview] [--no-thumbs] [--no-export]
+#       --python art/blender/clinic/build.py -- [--only key,key | --only v3] [--preview] [--no-thumbs] [--no-export]
 #
 # Writes public/models/<key>.glb for every key in CLINIC_MODELS and PEOPLE_MODELS (src/data/assets.ts),
 # public/img/thumbs/<key>.png for the chairs, op upgrades and equipment, and with --preview a 384 px
@@ -26,12 +26,14 @@ import chairs  # noqa: E402
 import operatory  # noqa: E402
 import front  # noqa: E402
 import people  # noqa: E402
+import equipment  # noqa: E402
+import props  # noqa: E402
 
-for _m in (lib, chairs, operatory, front, people):
+for _m in (lib, chairs, operatory, front, people, equipment, props):
     importlib.reload(_m)
 
 REGISTRY = {}
-for _m in (chairs, operatory, front, people):
+for _m in (chairs, operatory, front, people, equipment, props):
     REGISTRY.update(_m.MODELS)
 
 # Keys listed in src/data/assets.ts, in order.
@@ -41,7 +43,15 @@ CLINIC_KEYS = [
     'reception_desk', 'waiting_chair', 'plant_tall', 'plant_small', 'water_cooler', 'magazine_table',
     'fish_tank', 'kids_corner', 'espresso_machine', 'sterilizer', 'kiosk', 'ultrasonic_cart', 'xray_unit',
     'break_table', 'certificate', 'wall_tv', 'entrance_door', 'partition', 'tooth_sign', 'trash_bin', 'coat_rack',
+    # v3 equipment and op upgrades (DESIGN 10.5)
+    'water_filter', 'aroma_diffuser', 'loyalty_board', 'staff_lockers', 'digital_xray', 'sound_panel', 'patient_tablet',
+    'nitrous_tank', 'laser_whitening', 'spa_lounge', 'cadcam_mill', 'rooftop_planter', 'smile_studio', 'research_desk',
+    'helipad_sign', 'ai_screen', 'ergo_stool',
+    # v3 event props (DESIGN 10.2)
+    'prop_puppy', 'prop_balloons', 'prop_jolly_roger', 'prop_rival_sign', 'prop_red_carpet', 'prop_generator',
+    'prop_camera_crew',
 ]
+V3_KEYS = CLINIC_KEYS[CLINIC_KEYS.index('water_filter'):]
 PEOPLE_KEYS = ['char_adult', 'char_kid', 'char_senior', 'char_staff', 'char_dentist']
 ALL_KEYS = CLINIC_KEYS + PEOPLE_KEYS
 
@@ -51,6 +61,11 @@ THUMB_KEYS = [
     'op_tv', 'whitening_lamp', 'intraoral_cam',
     'certificate', 'espresso_machine', 'kids_corner', 'fish_tank', 'sterilizer', 'kiosk', 'ultrasonic_cart',
     'xray_unit', 'break_table',
+    # v3: OP_UPGRADES ergoStool, nitrous and the new EQUIPMENT
+    'ergo_stool', 'nitrous_tank',
+    'water_filter', 'aroma_diffuser', 'loyalty_board', 'staff_lockers', 'digital_xray', 'sound_panel', 'patient_tablet',
+    'laser_whitening', 'spa_lounge', 'cadcam_mill', 'rooftop_planter', 'smile_studio', 'research_desk', 'helipad_sign',
+    'ai_screen',
 ]
 # Thumbnail camera direction overrides (Blender space, pointing from the model toward the camera). Tall thin
 # props get a higher camera, which foreshortens the pole so the whole object still reads at card size.
@@ -62,6 +77,15 @@ THUMB_DIR = {
     'intraoral_cam': HIGH,
     'xray_unit': HIGH,
     'kiosk': HIGH,
+    # wall pieces read best nearly face on; tall thin ones from higher up
+    'water_filter': (0.75, -1.4, 0.45),
+    'digital_xray': (0.75, -1.4, 0.45),
+    'sound_panel': (0.5, -1.4, 0.3),
+    'ai_screen': (0.5, -1.4, 0.3),
+    'loyalty_board': (0.75, -1.4, 0.5),
+    'patient_tablet': HIGH,
+    'laser_whitening': (1.15, -1.1, 0.3),
+    'helipad_sign': (0.8, -1.3, 0.9),
 }
 # Optional: frame the thumbnail on the part above this height (meters, Blender Z), letting the rest run off
 # the bottom edge. Unused for now: whole objects read better as shop cards.
@@ -116,6 +140,11 @@ def check(key, spec):
         mats = {m.name for o in lib.mesh_objects() for m in o.data.materials}
         if not (mats & PEOPLE_MATS):
             problems.append('no tintable materials')
+    if key == 'prop_puppy':
+        names = {o.name for o in bpy.context.scene.objects}
+        for n in ('Body', 'Head', 'Tail'):
+            if n not in names:
+                problems.append(f'missing node {n}')
     if key.startswith('chair_'):
         mats = {m.name for o in lib.mesh_objects() for m in o.data.materials}
         if 'Upholstery' not in mats:
@@ -127,6 +156,8 @@ def main():
     import bpy
     opts = parse_args()
     keys = opts['only'] or ALL_KEYS
+    if keys == ['v3']:
+        keys = V3_KEYS
     unknown = [k for k in keys if k not in REGISTRY]
     if unknown:
         print('UNKNOWN KEYS', unknown)

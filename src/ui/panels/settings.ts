@@ -7,6 +7,7 @@ import { sfx } from '../fx';
 import { loadState } from '../flow';
 import { persist } from '../game';
 import { icon } from '../icons';
+import { autoHuddle, setAutoHuddle } from '../mgr';
 import { confirmModal, openModal } from '../modal';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { settings, updateSettings } from '../settings';
@@ -82,6 +83,11 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
       row('hand', 'Haptics', 'Small buzzes on supported devices', toggle(st.haptics, (v) => updateSettings({ haptics: v }), 'Haptics')),
       row('bulb', 'Hints', 'Tip line under the clock', toggle(st.showHints, (v) => updateSettings({ showHints: v }), 'Hints')),
     ),
+    inGame && store.loaded && store.state.phase === 'owner' ? sectionTitle('Mornings', 'calendar') : null,
+    inGame && store.loaded && store.state.phase === 'owner' ? h('div.list',
+      row('staff', 'Morning huddle', 'Pick the focus and answer events before the doors open. Off: the focus stays and events take the first choice.',
+        toggle(!autoHuddle(store.state), (v) => { if (!store.loaded) return; setAutoHuddle(store.state, !v); store.commit(); }, 'Morning huddle')),
+    ) : null,
     sectionTitle('Save', 'export', h('span.small.muted', 'Saved on this device automatically')),
     h('div.list',
       inGame ? h('div.list-row.list-col',

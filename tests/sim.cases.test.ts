@@ -8,6 +8,7 @@ import { encodeSave, decodeSave } from '../src/core/save';
 import { serviceFor } from '../src/sim/patients';
 import { treasureBonus } from '../src/sim/career';
 import { employeeRate } from '../src/sim/progress';
+import { caseFeeMult } from '../src/sim/patients';
 import { NON_OPERATING_LABELS } from '../src/sim/economy';
 import { graduated, grant, ledgerSum, playDay, result } from './sim.helpers';
 
@@ -434,7 +435,8 @@ describe('QA fixes (out/fix/sim.md)', () => {
     playDay(s, 'quick');
     for (const p of s.locations[0].patients) {
       if (p.state !== 'gone' || p.walkIn || p.fee === 0) continue;
-      if (p.service === 'cleaning' && p.addons.length === 0) expect(p.fee).toBe(Math.round(120 * 0.7));
+      // the owner case premium (sugar bugs, braces, pirates) multiplies the locked price (DESIGN 10.3)
+      if (p.service === 'cleaning' && p.addons.length === 0) expect(p.fee).toBe(Math.round(120 * 0.7 * caseFeeMult(s.locations[0], p)));
     }
   });
 
@@ -529,7 +531,8 @@ describe('QA fixes (out/fix/sim.md)', () => {
     sim.assignHygienist(s, 0, s.locations[0].ops[0].id, null);
     for (let d = 0; d < 12; d++) {
       sim.closeDay(s);
-      for (const g of s.goals) expect(['served', 'fiveStars', 'addons']).toContain(g.kind);
+      // management goals only (DESIGN 10.7): nothing that needs your own hands
+      for (const g of s.goals) expect(['chunks', 'fastClean', 'combo', 'perfect']).not.toContain(g.kind);
     }
   });
 

@@ -6,6 +6,8 @@
 //   /harness/models-clinic.html?view=op          an operatory: chair, lamp, cart, counter, monitor, tv, patient
 //   /harness/models-clinic.html?view=lobby       reception, waiting area, kids corner, fish tank, door, sign
 //   /harness/models-clinic.html?view=thumbs      the shop thumbnails on light, mint and dark cards
+//   /harness/models-clinic.html?view=v3          manager-layer equipment, op upgrades and event props through the
+//                                                game's diorama camera (&cam=iso for the orthographic grid camera)
 //   /harness/models-clinic.html?focus=chair_deluxe   one model, orbit with mouse or touch
 //   &origin=1  show model origins     &still=1  freeze the animation (for screenshots)     &t=1.2  animation time
 //
@@ -40,7 +42,7 @@ const bar = document.getElementById('bar')!;
 // ------------------------------------------------------------------ nav
 const links: [string, string][] = [
   ['Grid', '?view=grid'], ['People', '?view=people'], ['Operatory', '?view=op'], ['Lobby', '?view=lobby'],
-  ['Thumbs', '?view=thumbs'], ['Chair', '?focus=chair_deluxe'],
+  ['Thumbs', '?view=thumbs'], ['Manager', '?view=v3'], ['Chair', '?focus=chair_deluxe'],
 ];
 for (const [name, href] of links) {
   const a = document.createElement('a');
@@ -133,7 +135,7 @@ function trisOf(o: THREE.Object3D): number {
 
 const PEOPLE_NODES = ['Body', 'Head', 'LegL', 'LegR', 'ArmL', 'ArmR'];
 const TINTABLE = ['Skin', 'Hair', 'Shirt', 'Pants', 'Shoes', 'Scrubs', 'Coat'];
-const BUDGET_KB = (k: string) => (k.startsWith('char_') ? 100 : 150);
+const BUDGET_KB = (k: string) => (k.startsWith('char_') ? 100 : k.startsWith('prop_') ? 90 : 120);
 
 /** Contract checks on a fresh (unposed) instance. Returns short problem strings. */
 function check(k: string, root: THREE.Object3D, kb: number): string[] {
@@ -169,6 +171,20 @@ interface Rig {
   path?: { from: THREE.Vector3; to: THREE.Vector3; speed: number };
 }
 const rigs: Rig[] = [];
+
+/** Event-prop pets: the view wags Tail about the vertical axis and tilts Head (prop_puppy contract). */
+interface Pet { tail: THREE.Object3D; head: THREE.Object3D; phase: number }
+const pets: Pet[] = [];
+function makePet(root: THREE.Object3D, phase = 0): void {
+  const tail = root.getObjectByName('Tail');
+  const head = root.getObjectByName('Head');
+  if (!tail || !head || !root.getObjectByName('Body')) { problems.push('prop_puppy: missing Body, Head or Tail'); return; }
+  pets.push({ tail, head, phase });
+}
+function animatePet(pt: Pet, t: number): void {
+  pt.tail.rotation.y = Math.sin(t * 14 + pt.phase) * 0.6;
+  pt.head.rotation.z = Math.sin(t * 1.7 + pt.phase) * 0.12;
+}
 
 function makeRig(root: THREE.Object3D, mode: Rig['mode'], phase = 0): Rig | null {
   const get = (n: string) => root.getObjectByName(n);
@@ -447,6 +463,64 @@ async function viewLobby(): Promise<void> {
   if (w) w.path = { from: new THREE.Vector3(-1.2, 0, 1.6), to: new THREE.Vector3(-0.4, 0, -1.2), speed: 0.9 };
 }
 
+/** Place a wall-mounted or against-the-wall model so its back touches the wall plane at z = wallZ. */
+async function placeAgainst(k: string, x: number, wallZ: number, label = true): Promise<THREE.Object3D | null> {
+  const obj = await place(k, x, 0, 0, label);
+  if (!obj) return null;
+  const b = new THREE.Box3().setFromObject(obj);
+  obj.position.z = wallZ - b.min.z;
+  return obj;
+}
+
+async function viewV3(): Promise<void> {
+  // a back wall like the diorama's (2.7 m, warm white with a mint wainscot)
+  const wallZ = -3.2;
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(22, 2.7, 0.16), new THREE.MeshStandardMaterial({ color: '#FFF7EC', roughness: 0.85 }));
+  wall.position.set(0.5, 1.35, wallZ - 0.08);
+  wall.receiveShadow = true;
+  scene.add(wall);
+  const wain = new THREE.Mesh(new THREE.BoxGeometry(22, 0.9, 0.17), new THREE.MeshStandardMaterial({ color: '#D4F2E9', roughness: 0.85 }));
+  wain.position.set(0.5, 0.45, wallZ - 0.08);
+  scene.add(wain);
+  // along the wall: the wall pieces and the tall cabinets
+  await placeAgainst('water_filter', -9.2, wallZ);
+  await placeAgainst('digital_xray', -7.6, wallZ);
+  await placeAgainst('sound_panel', -5.7, wallZ);
+  await placeAgainst('ai_screen', -3.8, wallZ);
+  await placeAgainst('staff_lockers', -1.8, wallZ);
+  await placeAgainst('loyalty_board', 0.0, wallZ);
+  await placeAgainst('cadcam_mill', 1.6, wallZ);
+  await placeAgainst('research_desk', 3.4, wallZ);
+  await placeAgainst('patient_tablet', 4.8, wallZ);
+  await placeAgainst('aroma_diffuser', 5.6, wallZ);
+  await placeAgainst('smile_studio', 7.6, wallZ);
+  // an operatory with the op upgrades, then the big pieces
+  const ch = await place('chair_basic', -8.2, -0.5, 0, false);
+  const pat = await person('char_adult', -8.2, -0.5, 0, 'lie', 0, TINTS[0]);
+  if (pat && ch) seatInChair(pat, ch);
+  await place('ergo_stool', -7.35, -0.9, -Math.PI / 2, true);
+  await place('nitrous_tank', -9.3, -0.2, Math.PI / 2, true);
+  await place('laser_whitening', -9.3, -1.3, Math.PI / 2 - 0.3, true);
+  await place('spa_lounge', -5.0, -0.6, 0, true);
+  await person('char_senior', -3.9, -0.3, -0.4, 'idle', 1, TINTS[1]);
+  await place('rooftop_planter', -1.4, -0.7, 0, true);
+  await place('helipad_sign', 1.3, -0.9, 0, true);
+  await place('waiting_chair', 2.6, -0.8, 0, false);
+  // event props
+  const pup = await place('prop_puppy', -8.0, 2.0, 0.5, true);
+  if (pup) makePet(pup, 0);
+  await person('char_kid', -8.7, 1.8, 0.6, 'idle', 2, TINTS[2]);
+  await place('prop_balloons', -6.6, 1.8, 0, true);
+  await place('prop_jolly_roger', -5.0, 1.8, 0, true);
+  await place('prop_rival_sign', -2.6, 1.9, 0, true);
+  await place('prop_red_carpet', 0.3, 1.9, Math.PI / 2, true);
+  await place('prop_generator', 2.6, 1.8, -0.3, true);
+  await place('prop_camera_crew', 4.4, 1.8, 0.4, true);
+  await person('char_staff', 5.4, 2.0, -0.5, 'idle', 3, TINTS[3]);
+  await place('ultrasonic_cart', 6.6, -0.8, 0, false);
+  await place('kiosk', 7.8, -0.8, 0, false);
+}
+
 async function viewFocus(k: string): Promise<void> {
   if (k.startsWith('char_')) await person(k, 0, 0, 0, 'walk', 0, undefined, true);
   else await place(k, 0, 0, 0, true);
@@ -494,12 +568,51 @@ function viewThumbs(): void {
 // ------------------------------------------------------------------ camera fit + frame loop
 let controls: OrbitControls | null = null;
 
+// The diorama's camera (src/clinic/camera.ts): perspective, FOV 30, 50 degrees down, 17 degrees to the right.
+const GAME_CAM = VIEW === 'v3' && q.get('cam') !== 'iso';
+const persp = new THREE.PerspectiveCamera(30, 1, 0.5, 400);
+function fitGame(w: number, h: number): void {
+  persp.aspect = w / h;
+  persp.updateProjectionMatrix();
+  const box = new THREE.Box3();
+  for (const it of items) box.union(new THREE.Box3().setFromObject(it.obj));
+  const center = box.getCenter(new THREE.Vector3());
+  center.y = 0;
+  const el = THREE.MathUtils.degToRad(50), az = THREE.MathUtils.degToRad(17);
+  const dir = new THREE.Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az));
+  const corners: THREE.Vector3[] = [];
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z));
+  let lo = 2, hi = 200;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    persp.position.copy(center).addScaledVector(dir, mid);
+    persp.lookAt(center);
+    persp.updateMatrixWorld(true);
+    const ok = corners.every((c) => { const pr = c.clone().project(persp); return Math.abs(pr.x) < 0.97 && Math.abs(pr.y) < 0.93; });
+    if (ok) hi = mid; else lo = mid;
+  }
+  persp.position.copy(center).addScaledVector(dir, hi);
+  persp.lookAt(center);
+  persp.updateMatrixWorld(true);
+  const r = box.getSize(new THREE.Vector3()).length() / 2 + 2;
+  key.position.copy(center).add(new THREE.Vector3(6, 12, 8));
+  key.target.position.copy(center);
+  const sc = key.shadow.camera as THREE.OrthographicCamera;
+  sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.5; sc.far = 60;
+  sc.updateProjectionMatrix();
+  if (!controls) { controls = new OrbitControls(persp, renderer.domElement); controls.enableDamping = true; }
+  controls.target.copy(center);
+  controls.update();
+}
+const viewCam = (): THREE.Camera => (GAME_CAM ? persp : camera);
+
 function fit(): void {
   const w = stage.clientWidth || window.innerWidth;
   const h = stage.clientHeight || window.innerHeight;
   renderer.setSize(w, h, false);
   renderer.domElement.style.width = w + 'px';
   renderer.domElement.style.height = h + 'px';
+  if (GAME_CAM) { fitGame(w, h); return; }
   const box = new THREE.Box3();
   const boxes = items.map((it) => new THREE.Box3().setFromObject(it.obj));
   for (const b of boxes) box.union(b);
@@ -547,7 +660,7 @@ function placeLabels(): void {
   for (const [it, el] of labelEls) {
     const box = new THREE.Box3().setFromObject(it.obj);
     tmp.set((box.min.x + box.max.x) / 2, 0, box.max.z);
-    tmp.project(camera);
+    tmp.project(viewCam());
     el.style.left = `${((tmp.x + 1) / 2) * w}px`;
     el.style.top = `${((1 - tmp.y) / 2) * h + 4}px`;
   }
@@ -558,6 +671,7 @@ async function main(): Promise<void> {
   if (VIEW === 'people') await viewPeople();
   else if (VIEW === 'op') await viewOp();
   else if (VIEW === 'lobby') await viewLobby();
+  else if (VIEW === 'v3') await viewV3();
   else if (VIEW === 'focus' && FOCUS) await viewFocus(FOCUS);
   else await viewGrid();
   for (const r of rigs) animate(r, T0, 0);
@@ -569,8 +683,9 @@ async function main(): Promise<void> {
     const dt = Math.min(clock.getDelta(), 0.05);
     if (!STILL) t += dt;
     for (const r of rigs) animate(r, t, dt);
+    for (const pt of pets) animatePet(pt, t);
     controls?.update();
-    renderer.render(scene, camera);
+    renderer.render(scene, viewCam());
     placeLabels();
     requestAnimationFrame(loop);
   };
