@@ -24,17 +24,55 @@ export type ExtraId = 'loupes' | 'headlamp' | 'disclosing' | 'headphones';
 export type SkillId =
   | 'steady1' | 'steady2' | 'power' | 'polishPro' | 'eagleEye' | 'speedCleaner'
   | 'calmingVoice' | 'smallTalk' | 'kidWhisperer' | 'gagGuru' | 'tipMagnet'
-  | 'negotiator' | 'marketer' | 'leader' | 'leanOps' | 'upseller';
+  | 'negotiator' | 'marketer' | 'leader' | 'leanOps' | 'upseller'
+  // business (v3)
+  | 'paperworkPro' | 'bulkBuyer' | 'brandBuilder' | 'investorRelations' | 'franchiseSavvy'
+  // management (v3)
+  | 'talentScout' | 'hrGuru' | 'huddlePro' | 'crisisManager' | 'delegator' | 'nightShift' | 'mentorProgram' | 'moraleOfficer';
 
 export type StaffRole = 'hygienist' | 'receptionist' | 'assistant' | 'dentist' | 'manager';
 export type TraitId = 'perfectionist' | 'speedy' | 'charmer' | 'clumsy' | 'nightOwl' | 'loyal' | 'ambitious';
 
 export type OfficeTierId = 't1' | 't2' | 't3' | 't4';
 export type ChairTier = 'basic' | 'comfort' | 'deluxe';
-export type OpUpgradeId = 'tv' | 'whiteningLamp' | 'intraoralCam';
+export type OpUpgradeId = 'tv' | 'whiteningLamp' | 'intraoralCam' | 'ergoStool' | 'nitrous';
 export type EquipId =
   | 'deepCert' | 'xray' | 'sterilizer' | 'ultrasonicKits' | 'espresso'
-  | 'fishTank' | 'kidsCorner' | 'onlineBooking' | 'breakRoom';
+  | 'fishTank' | 'kidsCorner' | 'onlineBooking' | 'breakRoom'
+  // v3: more equipment, some exclusive to bigger offices (EquipDef.minTier)
+  | 'waterFilter' | 'aromatherapy' | 'loyaltyProgram' | 'staffLockers'
+  | 'digitalXray' | 'soundMasking' | 'patientApp' | 'nitrousSystem'
+  | 'laserWhitening' | 'spaLounge' | 'cadcam' | 'rooftopGarden'
+  | 'smileStudio' | 'researchWing' | 'helipad' | 'aiScheduler';
+
+// ------------------------------------------------------------------ manager layer (v3, DESIGN 10)
+export type FocusId = 'steady' | 'speed' | 'quality' | 'walkin' | 'upsell' | 'team' | 'training';
+export type CampaignId = 'kidsWeek' | 'smileMakeover' | 'goldenYears' | 'bracesBonanza' | 'pirateDay' | 'grandOpening';
+export type PerkId =
+  | 'whiteningPro' | 'kidMagnet' | 'bracesWhiz' | 'deepDiver' | 'pirateWhisperer'
+  | 'speedDemon' | 'gentleHands' | 'mentor' | 'ironLungs' | 'upsellStar';
+
+/** A temporary or permanent effect on one clinic, from an event, a campaign or the daily focus. Multipliers default to 1. */
+export interface ClinicModifier {
+  id: string;
+  label: string;                 // shown in the office and huddle ("Pirate Festival: pirates x4")
+  source: 'event' | 'campaign' | 'focus';
+  untilDay: number | null;       // last day it applies; null = permanent
+  demand?: number; fees?: number; supplies?: number; speed?: number; comfort?: number;
+  quality?: number;              // additive
+  addons?: number; walkins?: number; noShows?: number;
+  caseBoost?: Partial<Record<CaseType, number>>;
+  closedOpId?: string;           // this operatory cannot take patients
+  openDelay?: number;            // minutes the clinic opens late today
+}
+
+/** An event card waiting for the owner's decision (DESIGN 10.2). */
+export interface PendingEvent {
+  eventId: string;
+  clinicId: string;
+  day: number;
+  vars: Record<string, string>;  // {staff}, {staffId}, {clinic}, {op} ... filled into the texts
+}
 
 export type Phase = 'school' | 'employee' | 'owner';
 export type Speed = 0 | 1 | 2 | 4;
@@ -178,6 +216,8 @@ export interface DayPatient {
   isPlayerPatient: boolean;   // employee phase: patient for your chair
   caseType: CaseType;
   twists: TwistId[];
+  bonus: BonusId | null;      // decided at booking so the chair card can show it
+  vip: boolean;               // event or Smile Studio VIP: big fee, review weight 5
   mood: 'happy' | 'ok' | 'grumpy' | 'angry';
 }
 
@@ -212,9 +252,16 @@ export interface Staff {
   task: 'idle' | 'cleaning' | 'checkin' | 'walking' | 'exam' | 'break' | 'off';
   targetOpId: string | null;  // dentist walking to / working at
   busyUntil: number | null;
+  perks: PerkId[];            // specialties picked at level-ups (DESIGN 10.4)
+  pendingPerks: PerkId[] | null;  // two offered perks awaiting the owner's pick
+  tempUntilDay?: number;      // temporary staff (intern event) leave after this day
 }
 
-export interface Candidate extends Staff { expiresDay: number }
+export interface Candidate extends Staff {
+  expiresDay: number;
+  interviewed: boolean;       // exact stats and traits hidden until interviewed; the UI shows ranges
+  range: { skill: [number, number]; speed: [number, number]; bedside: [number, number] };
+}
 
 export interface Review {
   day: number;
@@ -257,6 +304,9 @@ export interface Clinic {
   patients: DayPatient[];             // today
   day: ClinicDayStats;
   checkinBusyUntil: number;           // front desk queue
+  modifiers: ClinicModifier[];        // events, campaigns, focus (expired ones removed at day close)
+  campaign: { id: CampaignId; untilDay: number } | null;
+  campaignCooldownUntil: number;      // no new campaign before this day
 }
 
 // ------------------------------------------------------------------ economy and records
@@ -349,6 +399,12 @@ export interface GameState {
   stats: LifetimeStats;
   flags: Record<string, boolean>;   // tutorial and one-shot flags
   nextId: number;
+  // manager layer (v3, owner phase)
+  focus: FocusId[];            // today's daily focus (2 slots with Huddle Pro)
+  huddleDay: number;           // day the morning huddle was last completed
+  pendingEvents: PendingEvent[];   // event cards awaiting a decision this morning (at most one per location)
+  eventLog: { day: number; eventId: string; clinicId: string; choice: number; text: string }[];   // last 30
+  settings: { autoHuddle: boolean };   // skip the huddle and keep yesterday's focus (events auto-resolve with the first choice)
 }
 
 // ------------------------------------------------------------------ sim events (UI toasts, audio, clinic view)

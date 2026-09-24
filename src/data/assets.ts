@@ -36,6 +36,12 @@ export const CLINIC_MODELS = [
   'reception_desk', 'waiting_chair', 'plant_tall', 'plant_small', 'water_cooler', 'magazine_table',
   'fish_tank', 'kids_corner', 'espresso_machine', 'sterilizer', 'kiosk', 'ultrasonic_cart', 'xray_unit',
   'break_table', 'certificate', 'wall_tv', 'entrance_door', 'partition', 'tooth_sign', 'trash_bin', 'coat_rack',
+  // v3 equipment and op upgrades (DESIGN 10.5)
+  'water_filter', 'aroma_diffuser', 'loyalty_board', 'staff_lockers', 'digital_xray', 'sound_panel', 'patient_tablet',
+  'nitrous_tank', 'laser_whitening', 'spa_lounge', 'cadcam_mill', 'rooftop_planter', 'smile_studio', 'research_desk',
+  'helipad_sign', 'ai_screen', 'ergo_stool',
+  // v3 event props in the diorama (DESIGN 10.2)
+  'prop_puppy', 'prop_balloons', 'prop_jolly_roger', 'prop_rival_sign', 'prop_red_carpet', 'prop_generator', 'prop_camera_crew',
 ] as const;
 
 // People: child nodes named Body, Head, LegL, LegR, ArmL, ArmR with pivots at the joints (walk and sit
@@ -66,6 +72,8 @@ export const SFX_KEYS = [
   // cases
   'squish', 'floss_creak', 'floss_thwip', 'floss_zip', 'lamp_loop', 'gel_paint', 'gold_ting', 'arr',
   'pocket_open', 'shade_tick', 'check', 'hiccup', 'snore', 'coin_clink', 'shell_crack', 'tooth_done',
+  // manager layer
+  'event_card', 'event_good', 'event_bad', 'campaign_start', 'perk_pick', 'huddle', 'interview',
   // clinic and UI
   'door_chime', 'cash', 'coins', 'ui_click', 'ui_tab', 'purchase', 'level_up', 'hire', 'error', 'day_end',
   'review_good', 'review_bad', 'notify',

@@ -360,3 +360,47 @@ Three daily goals from templates (remove N tartar chunks, N five-star reviews, s
 - Fonts: Baloo 2 (display), Nunito (UI).
 - 3D: low-poly, soft shading, gentle ambient + key light, no harsh blacks.
 - Everything works by touch: no hover-only controls, 44 px targets, drag to scrape, two-finger drag or drag on empty space to orbit.
+
+## 10. The manager layer (v3, owner phase)
+
+Playtest verdict (2026-09-24): once you own offices, the only things to do were fast-forward and collect money; marketing was useless because every office was always over capacity; the Piezo Pro card fell off the Tools screen; wait walkouts spammed 1-star reviews. v3 gives the owner decisions every day, levers that matter at every stage, and more to buy. Catalog: `src/data/manager.ts`, `src/data/upgrades.ts`, `src/data/skills.ts`.
+
+### 10.1 Morning huddle and daily focus
+After "Next day" on the day report (owner phase) the **Morning Huddle** opens: today's booked patients per location with case-type icons, who is on duty, active campaigns and modifiers, and the event cards drawn this morning (10.2). The owner picks the **Daily Focus** (`FOCUSES`, one slot, two with Huddle Pro) and answers the events, then "Open the doors". Focus effects are runtime effects for that day only (speed, quality, walk-ins, fees, add-on acceptance, morale at close, staff XP). `state.settings.autoHuddle` skips the huddle: the last focus is kept and events resolve with choice 0. `sim.setFocus(state, focusIds)`, `sim.resolveEvent(state, index, choice)` returns the outcome text.
+
+### 10.2 Events
+Each owner morning every location draws an event with `EVENT_CHANCE[tier]` from `EVENTS` (weights, `minTier`, `needs`, never the same event twice in 5 days at a location). Choices are real trade-offs; `chance` effects roll with the day's RNG (+0.2 with Crisis Manager) and show win or lose text. Effects are applied generically by kind (cash scaled by `tierScale`, rating, awareness, modifier for N days or permanent, morale, skill, salary, quit chance, VIP patient added to today with its own fee and review weight 5, closed operatory, late opening, temporary staff, discounted or free equipment, XP). Every resolution goes in `state.eventLog` and the day report. Unanswered events at "Open the doors" resolve with choice 0. The diorama shows a prop for active events where one fits (puppy, balloons for a party or campaign, Jolly Roger, SmileCo sign across the street, camera crew, generator, red carpet).
+
+### 10.3 Demand, capacity and marketing
+- **Offices start under capacity.** A new office at the default price and no marketing should fill about 70 to 90% of its staffed capacity in its first week; awareness growth alone takes it to about 100% over 2 to 3 weeks. Every operatory you add creates spare capacity that marketing and campaigns fill. Turned-away demand should stay under about 15% unless you over-market.
+- **Waitlist.** Turned-away patients are not lost: up to one day of capacity carries over as a waitlist that is booked first the next day (`ClinicDayStats.turnedAway` still reports the overflow, the day report shows the waitlist).
+- **Marketing levels** stay (volume). **Campaigns** (`CAMPAIGNS`) run 4 to 5 days per location, cost scales with `tierScale` (Brand Builder -25%), and shift the case mix (`caseBoost`) toward specific cases: kids, whitening, deep cleans, braces, pirates. Premium cases pay more (whitening add-on, deep service) and feed mastery, so campaigns are worth running even when an office is full. Grand Opening is for a new location (big demand and awareness boost, long cooldown). One campaign per location at a time, cooldown after it ends.
+- **Wait walkouts review gently**: a patient who leaves the waiting room reviews only half the time, at 2 stars, weight 0.5 ("Waited too long"). A comfort walkout during a clean is still 1 star.
+
+### 10.4 Staff depth
+- **Perks.** At staff levels 2, 4, 6 and 8 the owner picks one of two offered perks (`PERKS`, filtered by role) from a card ("Ava leveled up: choose a perk"). Unpicked perks auto-pick the first after 2 days. Case perks make a hygienist a **specialist**: seating prefers routing a patient to a free specialist of that case type.
+- **Interviews.** Candidates show stat ranges (width about 30, true value inside) and hidden traits until interviewed. Interview costs $40 x `tierScale` (free with Talent Scout) and reveals exact stats and traits.
+- Temporary staff (intern event) leave after `tempUntilDay`.
+
+### 10.5 Equipment and upgrades
+25 equipment items and 5 operatory upgrades, some exclusive to bigger offices (`minTier`); locked ones show "Needs Main Street Office" and so on. Every blurb is implemented exactly as written. Chain-wide items (Research Wing, Helipad) apply at every location. The diorama renders every owned item at its spot.
+
+### 10.6 Skills
+Four branches: Technique, Bedside, Business, Management (`SKILLS`). Paperwork Pro claims finished goals at day close. Owners keep earning skill points from staff patients, so the Management branch fills in while managing.
+
+### 10.7 Owner goals
+Owner daily goals come from management verbs: run a campaign, zero walkouts at a location, serve N, operating net over N, sell N add-ons, answer N events, reach a rating. Hands-on goals only appear when the owner staffs a chair in hands mode.
+
+### 10.8 Pacing (v3 targets, replaces section 2 targets where they differ)
+Hands-on only (no Quick clean until Bronze), median bot 80 s per v2 clean plus 15 s hub time:
+| Milestone | Target |
+|---|---|
+| First tool upgrade affordable | by cleaning 2 |
+| Level 2 | cleaning 2 |
+| A level-up | every 2 to 3 cleanings through level 4 |
+| Level 4 (practice license) | cleaning 9 to 12 |
+| Own practice opened | cleaning 15 to 20, about 25 to 35 min |
+| Office T2 | 1.25 to 2 h |
+| Office T3 | 2.5 to 3.5 h |
+| Second location | 3.5 to 4.5 h |
+| Floss Boss | 7 to 10 h |
