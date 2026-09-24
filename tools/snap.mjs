@@ -12,6 +12,9 @@
 //   {"goto": "/"}  {"wait": 1000}  {"waitFor": "js expr", "timeout": 30000}
 //   {"eval": "js expr (may use await)"}  {"click": [x, y]}  {"clickSel": "css selector"}
 //   {"move": [x, y]}  {"key": "w"}  {"keyDown": "w"}  {"keyUp": "w"}  {"hold": "w", "ms": 1500}
+//   {"down": [x, y]}  {"up": [x, y]}  {"tap": [x, y]} (touch, needs --mobile)
+//   {"drag": [[x1, y1], [x2, y2], ...], "ms": 800}   mouse down, glide through the points over ms, mouse up
+//   {"scrub": [x, y], "radius": 30, "ms": 2000}       down, zig-zag around a point for ms (scraping), up
 //   {"shot": "out/name.png"}  {"size": [1600, 900]}
 // Flags: --size WxH (default 1440x900), --mobile (390x844 touch), --verbose
 import puppeteer from 'puppeteer-core';
@@ -121,6 +124,25 @@ for (const s of steps) {
     } else if (s.click) await page.mouse.click(s.click[0], s.click[1]);
     else if (s.clickSel) await page.click(s.clickSel);
     else if (s.move) await page.mouse.move(s.move[0], s.move[1]);
+    else if (s.down) { await page.mouse.move(s.down[0], s.down[1]); await page.mouse.down(); }
+    else if (s.up) { if (Array.isArray(s.up)) await page.mouse.move(s.up[0], s.up[1]); await page.mouse.up(); }
+    else if (s.tap) await page.touchscreen.tap(s.tap[0], s.tap[1]);
+    else if (s.drag) {
+      const pts = s.drag; const ms = s.ms || 800; const per = Math.max(2, Math.round(ms / 16 / Math.max(1, pts.length - 1)));
+      await page.mouse.move(pts[0][0], pts[0][1]); await page.mouse.down();
+      for (let i = 1; i < pts.length; i++) {
+        const [ax, ay] = pts[i - 1]; const [bx, by] = pts[i];
+        for (let k = 1; k <= per; k++) { await page.mouse.move(ax + (bx - ax) * k / per, ay + (by - ay) * k / per); await sleep(16); }
+      }
+      await page.mouse.up();
+    }
+    else if (s.scrub) {
+      const [cx, cy] = s.scrub; const r = s.radius || 30; const ms = s.ms || 2000; const t0 = Date.now();
+      await page.mouse.move(cx, cy); await page.mouse.down();
+      let i = 0;
+      while (Date.now() - t0 < ms) { i++; await page.mouse.move(cx + Math.sin(i * 0.9) * r, cy + Math.cos(i * 0.37) * r * 0.6); await sleep(16); }
+      await page.mouse.up();
+    }
     else if (s.key) await page.keyboard.press(s.key);
     else if (s.keyDown) await page.keyboard.down(s.keyDown);
     else if (s.keyUp) await page.keyboard.up(s.keyUp);
