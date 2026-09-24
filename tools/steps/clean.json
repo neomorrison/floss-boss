@@ -1,0 +1,12 @@
+[
+  {"goto": "/"}, {"wait": 2000},
+  {"eval": "window.__fb.debug.newGame('Neo', 1)"}, {"wait": 1500},
+  {"eval": "[...document.querySelectorAll('button')].find(b => /Start practical/.test(b.textContent)).click()"}, {"wait": 7000},
+  {"shot": "out/smoke/10_clean_start.png"},
+  {"eval": "window.__fbClean && window.__fbClean.summary()"},
+  {"scrub": [720, 560], "radius": 80, "ms": 3000},
+  {"eval": "window.__fbClean && window.__fbClean.summary()"},
+  {"shot": "out/smoke/11_clean_scrub.png"},
+  {"eval": "window.__fbClean.cheat(0.6)"}, {"wait": 1500}, {"shot": "out/smoke/12_clean_half.png"},
+  {"eval": "window.__fbClean.finish()"}, {"wait": 3500}, {"shot": "out/smoke/13_result.png"}
+]

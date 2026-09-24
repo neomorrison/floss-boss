@@ -1,0 +1,10 @@
+[
+  {"goto": "/"}, {"wait": 2500}, {"shot": "out/smoke/01_title.png"},
+  {"eval": "window.__fb.debug.newGame('Neo', 1)"}, {"wait": 5000}, {"shot": "out/smoke/02_school.png"},
+  {"scrub": [720, 520], "radius": 60, "ms": 2500}, {"shot": "out/smoke/03_scrub.png"},
+  {"eval": "window.__fbClean && window.__fbClean.summary()"},
+  {"eval": "window.__fbClean && (window.__fbClean.cheat(0.9), window.__fbClean.finish())"}, {"wait": 3000}, {"shot": "out/smoke/04_result.png"},
+  {"eval": "window.__fb.debug.skipSchool()"}, {"wait": 4000}, {"shot": "out/smoke/05_hub.png"},
+  {"eval": "window.__fb.debug.fastForward(40)"}, {"wait": 2500}, {"shot": "out/smoke/06_hub_later.png"},
+  {"eval": "window.__fb.debug.openPractice()"}, {"wait": 5000}, {"shot": "out/smoke/07_practice.png"}
+]

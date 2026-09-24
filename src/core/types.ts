@@ -317,7 +317,7 @@ export type SimEvent =
   | { type: 'awaitingPlayer'; clinicId: string; patientId: string; opId: string }
   | { type: 'cleaned'; clinicId: string; patientId: string; staffId: string; quality: number }
   | { type: 'paid'; clinicId: string; patientId: string; amount: number }
-  | { type: 'review'; clinicId: string; stars: number; text: string; name: string }
+  | { type: 'review'; clinicId: string; stars: number; text: string; name: string; patientId?: string }
   | { type: 'walkout'; clinicId: string; patientId: string; reason: 'wait' | 'comfort' }
   | { type: 'staffQuit'; clinicId: string; staffId: string; name: string }
   | { type: 'raiseRequest'; clinicId: string; staffId: string; name: string; ask: number }

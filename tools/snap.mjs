@@ -16,7 +16,7 @@
 //   {"drag": [[x1, y1], [x2, y2], ...], "ms": 800}   mouse down, glide through the points over ms, mouse up
 //   {"scrub": [x, y], "radius": 30, "ms": 2000}       down, zig-zag around a point for ms (scraping), up
 //   {"shot": "out/name.png"}  {"size": [1600, 900]}
-// Flags: --size WxH (default 1440x900), --mobile (390x844 touch), --verbose
+// Flags: --size WxH (default 1440x900), --mobile (390x844 touch), --touch (touch + mobile UA at --size, e.g. iPad 1024x768), --verbose
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,7 +89,8 @@ const browser = await puppeteer.launch({
   args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage();
-await page.setViewport({ width: w, height: h, deviceScaleFactor: 1, isMobile: has('mobile'), hasTouch: has('mobile') });
+const touch = has('mobile') || has('touch');
+await page.setViewport({ width: w, height: h, deviceScaleFactor: 1, isMobile: touch, hasTouch: touch });
 const errors = [];
 page.on('console', (m) => {
   const t = m.type();

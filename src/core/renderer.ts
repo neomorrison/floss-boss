@@ -12,7 +12,7 @@ export function getRenderer(): THREE.WebGLRenderer {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   applyQuality();
   const c = renderer.domElement;
   c.style.display = 'block';

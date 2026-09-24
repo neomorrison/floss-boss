@@ -10,7 +10,7 @@ import type { CleanModel, Debris, LooseBit, TartarDeposit } from './dirt';
 import { sideU } from './dirt';
 import {
   cavityGeometry, debrisGeometry, skirtGeometry, gumGeometry, lipsGeometry, normalizeToothGeometry, palateGeometry, skinGeometry,
-  tartarGeometry, throatGeometry, toolModel, toothGeometry, tongueGeometry, uvulaGeometry, type ToolParts,
+  tartarGeometry, throatGeometry, toolModel, toothGeometry, tongueGeometry, type ToolParts,
 } from './geometry';
 import {
   cavityMaterial, getEnvironment, gumMaterial, lipsMaterial, makeSharedToothUniforms, makeToothMaterial, makeWaterMaterial,
@@ -154,11 +154,6 @@ export class MouthScene {
     const cav = this.mesh(cavityGeometry(), cavityMaterial(), 'soft');
     cav.name = 'cavity';
     this.root.add(cav);
-    const uvula = this.mesh(uvulaGeometry(), new THREE.MeshPhysicalMaterial({ color: '#E77586', roughness: 0.4, clearcoat: 0.4 }), 'soft');
-    this.upper.add(uvula);
-    const palate = this.mesh(palateGeometry(), new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.5, clearcoat: 0.3, side: THREE.BackSide }), 'soft');
-    palate.name = 'palate'; uvula.name = 'uvula';
-    this.upper.add(palate);
 
     const tongueSrc = opts.procedural ? null : models.tongue;
     const tongue = tongueSrc ? this.adopt(tongueSrc, 'tongue') : this.mesh(tongueGeometry(), tongueMaterial(), 'tongue');
@@ -193,6 +188,12 @@ export class MouthScene {
         g = m;
       }
       (arch === 'upper' ? this.upper : this.lower).add(g);
+      // the art gum_upper carries its own palate; the procedural gum needs one
+      if (arch === 'upper' && !(src && missing.size === 0)) {
+        const palate = this.mesh(palateGeometry(), new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.5, clearcoat: 0.3, side: THREE.BackSide }), 'soft');
+        palate.name = 'palate';
+        this.upper.add(palate);
+      }
     }
 
     const skirt = this.mesh(skirtGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, side: THREE.DoubleSide }), 'gum');
