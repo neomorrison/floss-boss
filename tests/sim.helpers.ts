@@ -6,7 +6,8 @@ export function result(q: number, o: Partial<CleanResult> = {}): CleanResult {
   const stars = q >= 0.92 ? 5 : q >= 0.8 ? 4 : q >= 0.65 ? 3 : q >= 0.45 ? 2 : 1;
   return {
     quit: 'done', tartar: q, plaque: q, stain: q, debris: q, polish: q, mess: 0, clean: q, comfort: 80,
-    quality: q, stars, seconds: 95, chunks: 8, bestCombo: 4, gumHits: 1, gags: 0, perfect: q >= 0.97, ...o,
+    quality: q, stars, seconds: 95, chunks: 8, bestCombo: 4, gumHits: 1, gags: 0, perfect: q >= 0.97,
+    caseType: 'routine', objectives: [], bonusMet: false, treasure: false, shadeGain: 0, before: null, after: null, ...o,
   };
 }
 
@@ -24,9 +25,10 @@ export function playDay(s: GameState, how: 'hands' | 'quick' = 'hands', q = 0.85
     const queue = sim.playerQueue(s);
     if (queue.length) {
       const p = queue[0];
-      if (how === 'hands') {
-        sim.beginHandsOn(s, p.id);
-        sim.completeHandsOn(s, p.id, result(q));
+      // quick clean needs Bronze on the case: fall back to a hands-on clean when it is locked
+      if (how === 'hands' || !sim.quickCleanStatus(s, p.id).ok) {
+        const setup = sim.beginHandsOn(s, p.id);
+        sim.completeHandsOn(s, p.id, result(q, { caseType: setup.caseType }));
       } else {
         sim.quickClean(s, p.id);
       }

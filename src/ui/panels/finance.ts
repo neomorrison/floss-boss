@@ -10,7 +10,7 @@ import * as sim from '../../sim';
 import { h, svgEl } from '../dom';
 import { act, activeIndex } from '../game';
 import { icon } from '../icons';
-import { avgNet, barChart } from '../logic';
+import { avgNet, barChart, operatingNet } from '../logic';
 import { locationPicker } from './office';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { attempt } from '../safe';
@@ -117,12 +117,17 @@ export function financePanel(ctx: PanelCtx): PanelInst {
         paintForecast();
       }, 'seg-block mk-seg');
 
-      // ---- loan
-      const maxL = Math.max(0, Math.floor(attempt(() => sim.maxLoan(s), 0, 'maxLoan') / 100) * 100);
+      // ---- loan: the bank lends up to its limit minus what you already owe
+      const limit = attempt(() => sim.maxLoan(s), 0, 'maxLoan');
+      const maxL = Math.max(0, Math.floor((limit - s.loan) / 100) * 100);
       const maxRepay = Math.max(0, Math.floor(Math.min(s.cash, s.loan)));
-      takeAmt = Math.min(Math.max(takeAmt, maxL ? 100 : 0), maxL);
+      takeAmt = Math.min(takeAmt, maxL);
       repayAmt = Math.min(repayAmt || maxRepay, maxRepay);
       const takeVal = h('span.num', money(takeAmt));
+      const takeBtn = btn('Take loan', {
+        variant: 'sun', size: 'sm', icon: 'bank', disabled: maxL <= 0 || takeAmt <= 0, title: maxL <= 0 ? 'The bank will not lend more right now' : undefined,
+        onClick: () => { if (takeAmt > 0 && act(() => sim.takeLoan(store.state, takeAmt), { sound: 'cash', success: `Borrowed ${money(takeAmt)}` })) takeAmt = 0; },
+      });
       const repayVal = h('span.num', money(repayAmt));
       const loanCard = h('div.loan-card',
         h('div.loan-now',
@@ -132,8 +137,8 @@ export function financePanel(ctx: PanelCtx): PanelInst {
         h('div.loan-actions',
           h('div.field',
             h('div.row.row-between', h('span.label', 'Borrow'), takeVal),
-            slider({ min: 0, max: Math.max(100, maxL), step: 100, value: takeAmt, disabled: maxL <= 0, label: 'Borrow', onInput: (v) => { takeAmt = v; takeVal.textContent = money(v); } }),
-            btn('Take loan', { variant: 'sun', size: 'sm', icon: 'bank', disabled: maxL <= 0, title: maxL <= 0 ? 'The bank will not lend more right now' : '', onClick: () => act(() => sim.takeLoan(store.state, takeAmt), { sound: 'cash', success: `Borrowed ${money(takeAmt)}` }) }),
+            slider({ min: 0, max: Math.max(100, maxL), step: 100, value: takeAmt, disabled: maxL <= 0, label: 'Borrow', onInput: (v) => { takeAmt = v; takeVal.textContent = money(v); takeBtn.disabled = v <= 0; } }),
+            takeBtn,
           ),
           h('div.field',
             h('div.row.row-between', h('span.label', 'Repay'), repayVal),
@@ -147,8 +152,8 @@ export function financePanel(ctx: PanelCtx): PanelInst {
         h('div.row.row-between.row-wrap', h('div.small.muted', c.name), locationPicker()),
         summary,
         bossProgress,
-        sectionTitle('Last 14 days', 'report'),
-        chart(s.reports.slice(-14).map((r) => ({ day: r.day, net: r.net }))),
+        sectionTitle('Last 14 days', 'report', h('span.small.muted', 'Profit before purchases and loans')),
+        chart(s.reports.slice(-14).map((r) => ({ day: r.day, net: operatingNet(r), invested: r.net - operatingNet(r) }))),
         sectionTitle('Forecast', 'calendar', h('span.small.muted', 'Tomorrow at these settings')),
         forecast,
         sectionTitle('Prices', 'receipt', h('span.small.muted', 'Higher prices mean fewer patients and tougher reviews')),
@@ -166,17 +171,28 @@ function tile(ic: string, label: string, value: string, tone: string): HTMLEleme
   return h('div.fin-tile', h('div.fin-tile-icon', icon(ic)), h('div', h('div.tiny.bold.faint', label), h('div.fin-tile-val.num', { class: tone }, value)));
 }
 
-function chart(data: { day: number; net: number }[]): HTMLElement {
+function chart(data: { day: number; net: number; invested: number }[]): HTMLElement {
   const W = 640;
   const H = 190;
   if (!data.length) return h('div.fin-chart.is-empty', icon('report'), h('span', 'Your first day report will show here'));
   const g = barChart(data.map((d) => d.net), W, H, { t: 16, r: 10, b: 26, l: 10 }, 14);
-  const bars = g.bars.map((b, i) => `<g class="fc-bar ${b.positive ? 'pos' : 'neg'}" data-i="${i}"><rect x="${b.x.toFixed(1)}" y="${b.y.toFixed(1)}" width="${b.w.toFixed(1)}" height="${b.h.toFixed(1)}" rx="5"/><text x="${(b.x + b.w / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${data[i].day}</text></g>`).join('');
+  // days with purchases or loans get a small marker above the bar
+  const bars = g.bars.map((b, i) => {
+    const mark = Math.abs(data[i].invested) >= 1 ? `<circle class="fc-mark ${data[i].invested < 0 ? 'out' : 'in'}" cx="${(b.x + b.w / 2).toFixed(1)}" cy="${Math.max(6, Math.min(b.y, g.zeroY) - 7).toFixed(1)}" r="4"/>` : '';
+    return `<g class="fc-bar ${b.positive ? 'pos' : 'neg'}" data-i="${i}"><rect x="${b.x.toFixed(1)}" y="${b.y.toFixed(1)}" width="${b.w.toFixed(1)}" height="${b.h.toFixed(1)}" rx="5"/>${mark}<text x="${(b.x + b.w / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${data[i].day}</text></g>`;
+  }).join('');
   const svg = svgEl(`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Net per day"><line x1="0" x2="${W}" y1="${g.zeroY.toFixed(1)}" y2="${g.zeroY.toFixed(1)}" class="fc-zero"/>${bars}</svg>`);
   const cap = h('div.fin-chart-cap.small', h('span.muted', 'Tap a bar'), h('span.num', ''));
   const show = (i: number) => {
     const d = data[i];
-    cap.replaceChildren(h('span.muted', `Day ${d.day}`), h('span.num', { class: d.net >= 0 ? 'good' : 'bad' }, signedMoney(Math.round(d.net))));
+    // purchases, loans and goal rewards move cash without being profit: show both when they differ
+    const cash = Math.round(d.net + d.invested);
+    cap.replaceChildren(
+      h('span.muted', `Day ${d.day}`),
+      h('span.row.gap-6',
+        Math.round(d.invested) ? h('span.small.muted', `Cash ${signedMoney(cash)}, profit`) : h('span.small.muted', 'Profit'),
+        h('span.num', { class: d.net >= 0 ? 'good' : 'bad' }, signedMoney(Math.round(d.net)))),
+    );
     svg.querySelectorAll('.fc-bar').forEach((x, j) => x.classList.toggle('is-on', j === i));
   };
   svg.addEventListener('click', (e) => {

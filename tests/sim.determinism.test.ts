@@ -28,11 +28,18 @@ describe('determinism', () => {
 
   it('how tick() is sliced does not change the outcome', () => {
     const base = graduated(99);
+    grant(base, 30000);
+    base.player.level = 4;
+    sim.openPractice(base, { name: 'Slice Dental', loan: 0 });
+    sim.closeDay(base);
+    const h = base.candidates.find((x) => x.role === 'hygienist') ?? base.candidates[0];
+    sim.buyOperatory(base, 0);
+    sim.hire(base, h.id, 0);
+    // your chair on autopilot so no player input is needed
+    expect(sim.setPlayerMode(base, 0, base.locations[0].ops[0].id, 'auto').ok).toBe(true);
     const a: GameState = JSON.parse(JSON.stringify(base));
     const b: GameState = JSON.parse(JSON.stringify(base));
     const c: GameState = JSON.parse(JSON.stringify(base));
-    // put every chair on autopilot so no player input is needed
-    for (const s of [a, b, c]) sim.setPlayerMode(s, -1, s.employer!.ops[0].id, 'auto');
     const evA = sim.tick(a, 240);
     const evB: unknown[] = [];
     for (let i = 0; i < 240 * 3; i++) evB.push(...sim.tick(b, 1 / 3));

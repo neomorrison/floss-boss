@@ -134,7 +134,7 @@ export function createPanelHost(links: { openOp(id: string): void; openStaff(id:
     get current() { return name; },
     open(p) {
       if (p && OWNER_ONLY.includes(p) && store.loaded && !isOwner(store.state)) p = null;
-      if (p === name) return;
+      if (p === name) { if (p) render(); return; }
       inst?.dispose?.();
       inst = null;
       name = p;

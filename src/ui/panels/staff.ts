@@ -13,9 +13,16 @@ import type { PanelCtx, PanelInst } from '../panelhost';
 import { candidateBlock, staffBlock } from '../staffcard';
 import { empty, tabs } from '../widgets';
 
+let intent: { tab: 'team' | 'hire'; role: StaffRole | 'all' } | null = null;
+/** Open the Staff panel on a given tab and role filter next time it is built (for example from the operatory panel). */
+export function staffPanelIntent(tab: 'team' | 'hire', role: StaffRole | 'all' = 'all'): void {
+  intent = { tab, role };
+}
+
 export function staffPanel(ctx: PanelCtx): PanelInst {
-  let tab: 'team' | 'hire' = 'team';
-  let roleFilter: StaffRole | 'all' = 'all';
+  let tab: 'team' | 'hire' = intent?.tab ?? 'team';
+  let roleFilter: StaffRole | 'all' = intent?.role ?? 'all';
+  intent = null;
   return {
     title: 'Staff',
     icon: 'staff',
@@ -25,7 +32,8 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
       if (!c) return 'none';
       return JSON.stringify([
         s.active, s.day, s.locations.length,
-        c.staff.map((x) => [x.id, x.salary, x.ask, Math.round(x.morale), x.level, x.xp, x.patientsToday, x.offUntilDay]),
+        c.staff.map((x) => [x.id, x.salary, x.ask, Math.round(x.morale), x.level, x.xp, x.patientsToday, x.offUntilDay, x.offFrom ?? 0]),
+        s.player.skills.includes('negotiator'),
         c.ops.map((o) => [o.id, o.staffId, o.assistantId]),
         s.candidates.map((x) => x.id),
         [1500, ...s.candidates.map((x) => x.ask)].map((p) => (s.cash >= p ? 1 : 0)).join(''),
@@ -33,11 +41,15 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
     },
     render() {
       const s = store.state;
+      if (intent) { tab = intent.tab; roleFilter = intent.role; intent = null; }
+      if (roleFilter !== 'all' && !s.candidates.some((x) => x.role === roleFilter)) roleFilter = 'all';
       const loc = activeIndex(s);
       const c = s.locations[loc];
       if (!c) return empty('staff', 'No practice yet', 'Open a practice to build a team.');
       const staffed = c.ops.filter((o) => o.staffId).length;
-      const payroll = c.staff.reduce((a, x) => a + x.salary, 0);
+      // what the day close charges: Negotiator takes 10% off (sim salaryCost)
+      const negotiator = s.player.skills.includes('negotiator');
+      const payroll = c.staff.reduce((a, x) => a + Math.round(x.salary * (negotiator ? 0.9 : 1)), 0);
       const locPick = locationPicker();
       const head = h('div.staff-top',
         tabs([{ value: 'team', label: 'Team' }, { value: 'hire', label: 'Hire board', badge: s.candidates.length }], tab, (v) => { tab = v; ctx.rerender(); }),

@@ -14,13 +14,20 @@ import {
   STAFF_HIDDEN, STAFF_IDLE, type Target,
 } from './flow';
 import { createPerson, applyPose, disposePerson, type Person, type PersonKind, type Tint, type PoseState, SKINS, HAIRS, SENIOR_HAIRS, SHIRTS, PANTS } from './people';
-import { hash01, pickBy } from './palette';
+import { hash01, pickBy, mat, C } from './palette';
+import { seatCatchupBoost, walkRate } from './pace';
 import type { HitInfo } from './office';
 
 const SETTLE_TIME = 0.4;
 const BASE_SPEED = 3.5;       // m/s at 1x (brisk cartoon pace; the sim's walks last seconds, not minutes)
 const STRIDE = 5.2;           // walk phase radians per meter
 const MAX_PLAN = 6;
+// Headroom above the shipped max speed (Speed = 0|1|2|4, so gameRate/5 tops out at 4) so debug/test
+// speeds and any future pacing lever (DESIGN 2, "Known tension") never sit exactly at the walk-rate
+// ceiling with no margin (out/fix/clinic.md #2).
+const RATE_HEADROOM = 8;
+// Cap on the "hurry to be seated before the cleaning starts" boost (out/fix/clinic.md #3).
+const SEAT_BOOST_CAP = 6;
 
 type StopKind = 'qin' | 'seat' | 'op' | 'qout' | 'exit' | 'other';
 function stopKind(key: string): StopKind {
@@ -65,6 +72,7 @@ export interface Actor {
   entering: boolean;
   hit: HitInfo;
   headY: number;
+  hat: THREE.Object3D | null;   // pirate case: a small tricorn, worn for as long as the case does
   patient: DayPatient | null;
   staff: Staff | null;
   /** Patients visit their stops in order (desk, seat, chair, desk, door) even when the sim is ahead. */
@@ -94,6 +102,30 @@ export function patientTint(id: string, a: ArchetypeId): Tint {
     scrubs: '#2BB3A3',
     hairStyle: Math.floor(hash01(id, 16) * 3),
   };
+}
+
+// ------------------------------------------------------------------ pirate hat (DESIGN 5, Pirate Visit)
+// A small procedural tricorn worn only while the patient's case is pirate. Geometry and materials are
+// shared module-level (pirates are rare, per DESIGN 5.5), each patient just gets a cheap clone.
+
+let hatCone: THREE.BufferGeometry | null = null;
+let hatBrim: THREE.BufferGeometry | null = null;
+
+function makePirateHat(): THREE.Group {
+  hatCone ??= new THREE.ConeGeometry(0.17, 0.2, 10);
+  hatBrim ??= new THREE.TorusGeometry(0.16, 0.035, 8, 16);
+  const g = new THREE.Group();
+  g.name = 'pirateHat';
+  const cone = new THREE.Mesh(hatCone, mat(C.ink, 0.55, 0));
+  cone.position.y = 0.1;
+  cone.rotation.z = 0.14;
+  cone.castShadow = true;
+  g.add(cone);
+  const band = new THREE.Mesh(hatBrim, mat(C.sunshine, 0.35, 0.2, C.sunshine, 0.2));
+  band.rotation.x = Math.PI / 2;
+  band.position.y = 0.01;
+  g.add(band);
+  return g;
 }
 
 export function staffTint(id: string, scrubs: string): Tint {
@@ -143,6 +175,7 @@ export class Actors {
       a.glb = a.person.fromGlb;
       a.person.hit.userData.hit = a.hit;
       a.person.blob.visible = this.blobs;
+      if (a.hat) a.person.root.add(a.hat);
       this.group.add(a.person.root);
     }
   }
@@ -166,7 +199,7 @@ export class Actors {
       pose: { walk: 0, phase: hash01(id, 3) * 6, sit: 0, recline: 0, work: 0, angry: 0, t: 0, seed: hash01(id, 4) },
       scale: 1, growing: false, shrinking: false, gone: false, frame: 0,
       speedMul: kind === 'senior' ? 0.8 : kind === 'kid' ? 1.1 : 1, angry: false, chimed: false, entering: false,
-      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, patient: null, staff: null,
+      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, hat: null, patient: null, staff: null,
       plan: [], cur: 0, dwell: 0, drive: null as unknown as Target, pendingPaid: 0, pendingStars: 0, paid: false,
     };
     a.drive = a.tgt;
@@ -178,6 +211,7 @@ export class Actors {
 
   private remove(map: Map<string, Actor>, a: Actor): void {
     if (a.pendingPaid > 0 || a.pendingStars > 0) this.flushPay(a);
+    if (a.hat) { a.person.root.remove(a.hat); a.hat = null; }
     this.group.remove(a.person.root);
     disposePerson(a.person);
     map.delete(a.id);
@@ -222,7 +256,7 @@ export class Actors {
     const fn = this.frameNo;
     this.ctx.update(c, l);
     // walk faster than real time at higher game speeds (the sim squeezes a day into two minutes)
-    const rate = Math.pow(Math.min(4, Math.max(1, gameRate / 5)), 1.35);
+    const rate = walkRate(gameRate, RATE_HEADROOM);
     this.rate = rate;
 
     // ---- patients
@@ -242,6 +276,10 @@ export class Actors {
       a.patient = p;
       a.frame = fn;
       a.angry = p.state === 'walkout';
+      // pirate case: wear the hat for as long as the case does (dropped if the sim ever falls back to routine)
+      const wantHat = p.caseType === 'pirate';
+      if (wantHat && !a.hat) { a.hat = makePirateHat(); a.person.root.add(a.hat); }
+      else if (!wantHat && a.hat) { a.person.root.remove(a.hat); a.hat = null; }
       // clicks on a patient in the chair open the operatory
       const inChair = (p.state === 'inChair' || p.state === 'toChair') && p.opId !== null;
       a.hit.kind = inChair ? 'op' : 'patient';
@@ -250,14 +288,15 @@ export class Actors {
       // hurry when behind the sim; reach the chair early in the cleaning
       const pending = a.plan.length - 1 - a.cur;
       let boost = Math.min(2.2, 1 + 0.45 * pending) * (a.angry ? 1.3 : 1);
-      if (pending === 0 && stopKind(a.drive.key) === 'op' && p.until !== null && !p.awaitingPlayer && a.path && a.dist < a.pathLen) {
-        // be seated within about 15% of the cleaning (and well before it ends)
-        const gr = Math.max(1, gameRate);
-        const realTotal = Math.max(0, p.until - p.since) / gr;
-        const realLeft = Math.max(0, p.until - minute) / gr;
-        const budget = Math.max(0.3, Math.min(0.15 * realTotal - (minute - p.since) / gr, 0.5 * realLeft));
-        const need = (a.pathLen - a.dist) / budget / (BASE_SPEED * a.speedMul * rate);
-        if (need > boost) boost = Math.min(3, need);
+      if (pending === 0 && stopKind(a.drive.key) === 'op' && p.until !== null && !p.awaitingPlayer) {
+        // approximate the walk left even before a route exists yet (out/fix/clinic.md #3): the very
+        // first frame after the target changes would otherwise skip this boost for a frame
+        const remaining = a.path && a.dist < a.pathLen ? a.pathLen - a.dist : Math.hypot(a.drive.x - a.x, a.drive.z - a.z);
+        const need = seatCatchupBoost({
+          remaining, sinceMin: p.since, untilMin: p.until, minute, gameRate,
+          speedMps: BASE_SPEED * a.speedMul, rate, cap: SEAT_BOOST_CAP,
+        });
+        if (need > boost) boost = need;
       }
       this.step(a, dt, live, rate * boost);
     }
@@ -488,6 +527,7 @@ export class Actors {
     const s = a.scale < 1 ? easeBack(a.scale) : 1;
     r.scale.setScalar(Math.max(0.01, s));
     a.headY = a.person.height - (a.person.hipY - 0.52) * sitW - 0.55 * recW + 0.12;
+    if (a.hat) a.hat.position.y = a.headY - 0.08;
   }
 
   private senseDoor(a: Actor): void {

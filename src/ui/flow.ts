@@ -60,7 +60,7 @@ export function showOffline(off: OfflineReport, cashBefore: number): void {
       body: h('div.col.gap-14.center',
         h('p.muted', 'Your team kept the office running.'),
         amount,
-        h('div.row.gap-6.small.faint', { style: 'justify-content:center' }, icon('info'), 'Offline earnings are capped at 6 hours.'),
+        h('div.row.gap-6.small.faint', { style: 'justify-content:center' }, icon('info'), 'Earnings stop growing after 12 hours away.'),
       ),
       actions: [collect],
       size: 'sm',

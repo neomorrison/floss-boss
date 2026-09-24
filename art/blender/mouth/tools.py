@@ -408,6 +408,71 @@ def tool_syringe():
     return p.finish(smooth_angle=45)
 
 
+# ------------------------------------------------------------------ case tools (whitening, sealants)
+
+def tool_gelbrush():
+    """Gel Brush: a slim applicator with a teal handle, a bendable white neck and a soft white brush tip."""
+    p = Part('tool_gelbrush')
+    teal, mint, white, chrome = M('Teal'), M('Mint'), M('White'), M('Chrome')
+    bristle = lib.material('Bristle', '#FFFFFF', 0.85, 0.0)
+    gel = lib.material('Gel', '#BFF5EA', 0.08, 0.0, alpha=0.55)
+    # the soft tip: a plump rounded tuft, tip at the origin, with a few splayed bristle bundles
+    p.lathe([(0.0, 0.0), (0.1, 0.03), (0.18, 0.14), (0.21, 0.3), (0.2, 0.48), (0.15, 0.62), (0.0, 0.66)],
+            bristle, verts=18)
+    for k in range(6):
+        a = 2 * math.pi * k / 6 + 0.3
+        p.sweep([(0.12 * math.cos(a), 0.58, 0.12 * math.sin(a)), (0.17 * math.cos(a), 0.28, 0.17 * math.sin(a)),
+                 (0.14 * math.cos(a), 0.05, 0.14 * math.sin(a))], 0.045, bristle, verts=6, cap_round=1)
+    # a bead of glossy gel loaded on the tip
+    p.sphere(0.11, (0.0, 0.16, 0.12), gel, seg=12, rings=8, scale=(1.1, 0.9, 0.8))
+    # ferrule and the bendable neck (angled like the other hand instruments)
+    taper(p, 0.6, 0.15, 0.95, 0.08, chrome, verts=14)
+    neck = [(0, 0.92, 0), (0, 1.35, 0.05), (0, 1.85, 0.22), (0, 2.4, 0.3), (0, 2.85, 0.3)]
+    p.sweep(neck, 0.06, white, verts=10, radii=[0.06, 0.062, 0.068, 0.078, 0.09])
+    # slim teal handle with soft mint grip rings and a rounded end
+    taper(p, 2.8, 0.09, 3.3, 0.21, teal, loc=(0, 0, 0.3), verts=16)
+    prof = [(0.0, 3.25), (0.21, 3.25), (0.23, 3.6), (0.23, 7.9), (0.2, 8.4), (0.0, 8.5)]
+    p.lathe(prof, teal, verts=18, loc=(0, 0, 0.3))
+    for k in range(7):
+        p.cyl(0.245, 0.12, (0, 3.75 + k * 0.28, 0.3), mint, axis='Y', verts=18, bevel=0.03, seg=2)
+    p.cyl(0.235, 0.18, (0, 7.2, 0.3), white, axis='Y', verts=18)
+    dome(p, 8.45, 0.08, mint, h=0.1, loc=(0, 0, 0.3))
+    return p.finish(smooth_angle=45)
+
+
+def tool_uvlamp():
+    """UV Lamp: a curing light wand. The bent light guide ends in the glowing blue tip at the origin; an
+    orange eye shield sits on the guide; white body with a teal band and button. LampBody, LampGlow (emissive)."""
+    p = Part('tool_uvlamp')
+    body = lib.material('LampBody', '#F4F7F8', 0.35, 0.0)
+    glowm = glow('LampGlow', '#58B4FF', 2.6)
+    guide = lib.material('LightGuide', '#34424E', 0.2, 0.1)
+    shield = lib.material('Shield', '#FF8A3D', 0.2, 0.0, alpha=0.6, double=True)
+    teal, mint, grey = M('Teal'), M('Mint'), M('GreyDark')
+    # glowing tip: a short bright lens facing -Y at the origin
+    p.cyl(0.16, 0.08, (0, 0.04, 0), glowm, axis='Y', verts=20, bevel=0.02, seg=2)
+    p.cyl(0.175, 0.1, (0, 0.12, 0), guide, axis='Y', verts=20)
+    # light guide: a stout fiber rod bending back toward the handle
+    rod = [(0, 0.15, 0), (0, 0.8, 0.02), (0, 1.35, -0.12), (0, 1.8, -0.4), (0, 2.2, -0.62), (0, 2.6, -0.7)]
+    p.sweep(rod, 0.13, guide, verts=16, radii=[0.14, 0.13, 0.13, 0.135, 0.15, 0.17])
+    # orange eye shield: a shallow cone clipped on the rod
+    p.lathe([(0.12, 0.0), (0.55, 0.12), (0.57, 0.16), (0.14, 0.05)], shield, verts=28, loc=(0, 0.72, 0.02))
+    p.cyl(0.16, 0.12, (0, 0.74, 0.02), grey, axis='Y', verts=16)
+    # head: the rod enters a rounded nose with a thin glowing ring
+    z0 = -0.7
+    taper(p, 2.5, 0.18, 3.2, 0.42, body, loc=(0, 0, z0), verts=22)
+    p.cyl(0.43, 0.06, (0, 3.2, z0), glowm, axis='Y', verts=22)
+    prof = [(0.0, 3.2), (0.44, 3.2), (0.48, 3.7), (0.47, 5.4), (0.42, 7.2), (0.44, 8.3), (0.38, 8.8), (0.0, 8.85)]
+    p.lathe(prof, body, verts=24, loc=(0, 0, z0))
+    p.cyl(0.485, 0.35, (0, 5.0, z0), teal, axis='Y', verts=24)
+    p.cyl(0.445, 0.5, (0, 8.1, z0), grey, axis='Y', verts=24)
+    # trigger button on the thumb side (+Z) and a little blue status light
+    p.box((0.22, 0.6, 0.16), (0, 4.1, z0 + 0.44), teal, bevel=0.07, seg=2)
+    p.sphere(0.06, (0, 4.65, z0 + 0.46), glowm, seg=10, rings=6)
+    p.box((0.28, 0.32, 0.08), (0, 5.65, z0 + 0.45), mint, bevel=0.03, seg=2)
+    return p.finish(smooth_angle=45)
+
+
 # ------------------------------------------------------------------ extras (display models)
 
 def extra_headlamp():
@@ -491,6 +556,7 @@ TOOLS = {
     'tool_polisher': tool_polisher, 'tool_cordless': tool_cordless, 'tool_airpolisher': tool_airpolisher,
     'tool_floss': tool_floss, 'tool_flosspick': tool_flosspick, 'tool_waterflosser': tool_waterflosser,
     'tool_suction': tool_suction, 'tool_hve': tool_hve, 'tool_syringe': tool_syringe,
+    'tool_gelbrush': tool_gelbrush, 'tool_uvlamp': tool_uvlamp,
     'extra_headlamp': extra_headlamp, 'extra_disclosing': extra_disclosing, 'extra_headphones': extra_headphones,
     'extra_loupes': extra_loupes,
 }

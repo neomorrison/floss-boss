@@ -36,7 +36,7 @@ describe('shop and skills', () => {
     const res = sim.buyTool(poor, 'polisher', 2);
     expect(res).toEqual({ ok: false, reason: 'Not enough cash' });
     expect(s.cash).toBe(ledgerSum(s));
-    expect(s.cash).toBe(5250 - TOOLS.scaler[1].price - TOOLS.scaler[2].price);
+    expect(s.cash).toBe(5200 - TOOLS.scaler[1].price - TOOLS.scaler[2].price);
   });
 
   it('extras and gel; the gel is used once per patient', () => {

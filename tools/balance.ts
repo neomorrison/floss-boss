@@ -6,7 +6,7 @@
 //   npm run balance              all bots, 5 seeds each
 //   npm run balance -- --seeds 9 --bot median --verbose
 import * as sim from '../src/sim/index';
-import type { CleanResult, Clinic, GameState, OfficeTierId, Staff } from '../src/core/types';
+import type { CaseType, CleanResult, CleanSetup, Clinic, GameState, OfficeTierId, Staff } from '../src/core/types';
 import { makeRng } from '../src/core/rng';
 import { REAL_SEC_PER_GAME_MIN } from '../src/core/constants';
 import { OFFICES, TIER_ORDER } from '../src/data/offices';
@@ -52,27 +52,46 @@ interface Run {
   maxLoanSeen: number;
   minCash: number;
   nets: number[];
+  treasure: number;
+  cases: Partial<Record<CaseType, number>>;
+  quicks: number;
+  lockedQuick: number;    // patients the bot wanted to quick clean but had to clean hands-on (no Bronze yet)
 }
 
 const M = (r: Run, key: string) => {
   if (r.m[key] == null) { r.m[key] = r.real; r.mc[key] = r.s.stats.cleanings; r.md[key] = r.ownerDays; }
 };
 
-function result(r: Run, q: number, secs: number, tartar: number): CleanResult {
+function result(r: Run, q: number, secs: number, setup: CleanSetup | null): CleanResult {
   const qq = Math.max(0.3, Math.min(0.99, q + r.rng.normal(0, 0.04)));
   const stars = qq >= 0.92 ? 5 : qq >= 0.8 ? 4 : qq >= 0.65 ? 3 : qq >= 0.45 ? 2 : 1;
+  const tartar = setup ? setup.dirt.tartarCount + setup.special.barnacles + setup.special.pockets : 6;
+  const bonusMet = !!setup?.bonus && r.rng.chance(Math.max(0, (qq - 0.6) * 1.6));
   return {
     quit: 'done', tartar: qq, plaque: qq, stain: qq, debris: qq, polish: qq, mess: 0, clean: qq, comfort: 70 + 25 * qq,
-    quality: qq, stars, seconds: secs, chunks: Math.round(tartar * Math.min(1, qq + 0.1)), bestCombo: Math.round(3 + 6 * qq),
-    gumHits: 1, gags: 0, perfect: qq >= 0.97,
+    quality: qq, stars, seconds: secs, chunks: Math.round(tartar * Math.min(1, qq + 0.1)), bestCombo: Math.round(Math.min(tartar, 3 + 6 * qq)),
+    gumHits: 1, gags: 0, perfect: qq >= 0.97 && bonusMet,
+    caseType: setup?.caseType ?? 'routine', objectives: [], bonusMet,
+    treasure: !!setup?.special.treasure && r.rng.chance(Math.min(1, qq + 0.05)),
+    shadeGain: setup?.caseType === 'whitening' ? Math.round((setup.special.startShade - setup.special.targetShade) * qq) : 0,
+    before: null, after: null,
   };
 }
+
+/** A case the bot has not cleaned much yet goes a little worse (learning curve up to Bronze). */
+function caseQuality(r: Run, setup: CleanSetup): number {
+  const n = r.s.player.mastery[setup.caseType] ?? 0;
+  return r.bot.quality - CASE_LEARNING * Math.max(0, 1 - n / 3);
+}
+const CASE_LEARNING = 0.08;
 
 function handsOn(r: Run, pid: string): void {
   const setup = sim.beginHandsOn(r.s, pid);
   const secs = r.bot.secs * (0.9 + 0.2 * r.rng.next());
   r.real += secs + r.bot.overhead;
-  sim.completeHandsOn(r.s, pid, result(r, r.bot.quality, secs, setup.dirt.tartarCount));
+  const out = sim.completeHandsOn(r.s, pid, result(r, caseQuality(r, setup), secs, setup));
+  r.treasure += out.payout.treasure;
+  r.cases[setup.caseType] = (r.cases[setup.caseType] ?? 0) + 1;
   if (r.s.phase === 'employee') {
     if (r.s.cash >= 300) M(r, 'firstTool');
     if (r.s.player.level >= 4) M(r, 'level4');
@@ -81,6 +100,7 @@ function handsOn(r: Run, pid: string): void {
 
 function quick(r: Run, pid: string): void {
   r.real += 3;
+  r.quicks++;
   sim.quickClean(r.s, pid);
 }
 
@@ -99,7 +119,8 @@ function playDay(r: RunExt): void {
     const q = sim.playerQueue(s);
     if (q.length) {
       if (s.phase === 'employee' || r.handsToday < handsQuota(r)) { handsOn(r, q[0].id); r.handsToday++; }
-      else quick(r, q[0].id);
+      else if (sim.quickCleanStatus(s, q[0].id).ok) quick(r, q[0].id);
+      else { r.lockedQuick++; handsOn(r, q[0].id); }   // no Bronze on this case yet: clean it yourself
       continue;
     }
     const before = s.minute;
@@ -112,7 +133,7 @@ function playDay(r: RunExt): void {
   if (s.cash < r.minCash) r.minCash = s.cash;
   if (process.argv.includes('--verbose')) {
     const c = s.locations[0];
-    r.log.push(`d${rep.day} ${s.phase} ${(r.real / 60).toFixed(1)}m cash ${s.cash} loan ${s.loan} net ${rep.net} op ${(rep as any).opNet} lvl ${s.player.level} ` +
+    r.log.push(`d${rep.day} ${s.phase} ${(r.real / 60).toFixed(1)}m cash ${s.cash} loan ${s.loan} net ${rep.net} op ${rep.operatingNet} lvl ${s.player.level} ` +
       (c ? `${c.tier} ops ${c.ops.length} staff ${c.staff.map((x) => x.role[0]).join('')} served ${rep.perLocation.map((l) => l.stats.served + "/" + l.stats.demand + " wo" + l.stats.walkouts + " ta" + l.stats.turnedAway + " ns" + l.stats.noShows).join(",")} rating ${c.rating} mk ${c.marketing} locs ${s.locations.length}` : ''));
   }
 }
@@ -268,12 +289,15 @@ function ownerShopping(r: RunExt): void {
 
 function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt {
   const s = sim.newGame({ name: 'Bot', avatar: 0, seed, nowMs: 0 });
-  const r: RunExt = { bot, s, real: 0, rng: makeRng(seed ^ 0x5eed), m: {}, mc: {}, md: {}, ownerDays: 0, log: [], handsToday: 0, maxLoanSeen: 0, minCash: 0, nets: [] };
+  const r: RunExt = {
+    bot, s, real: 0, rng: makeRng(seed ^ 0x5eed), m: {}, mc: {}, md: {}, ownerDays: 0, log: [], handsToday: 0, maxLoanSeen: 0, minCash: 0, nets: [],
+    treasure: 0, cases: {}, quicks: 0, lockedQuick: 0,
+  };
   for (const step of [1, 2] as const) {
     const setup = sim.schoolSetup(s, step);
     const secs = bot.secs * (step === 1 ? 1.4 : 1.0);   // the tutorial takes longer
     r.real += secs + bot.overhead;
-    sim.completeSchool(s, step, result(r, bot.quality, secs, setup.dirt.tartarCount));
+    sim.completeSchool(s, step, result(r, bot.quality, secs, setup));
   }
   r.real += 20; // title, name, graduation card
   M(r, 'school');
@@ -294,8 +318,7 @@ function playGame(bot: Bot, seed: number, stop?: (r: RunExt) => boolean): RunExt
     playDay(r);
     if (s.phase === 'employee' && s.player.level >= 4) M(r, 'level4');
     if (s.phase === 'owner') {
-      const rep = s.reports[s.reports.length - 1] as { opNet?: number };
-      r.nets.push(rep?.opNet ?? 0);
+      r.nets.push(s.reports[s.reports.length - 1]?.operatingNet ?? 0);
     }
   }
   return r;
@@ -350,7 +373,7 @@ function main() {
       const sum = s.ledger.reduce((a, e) => a + e.amount, 0);
       if (sum !== s.cash) console.log(`  !! ledger mismatch ${bot.name} seed ${i}: ${sum} vs ${s.cash}`);
       if (!Number.isFinite(s.cash)) console.log(`  !! cash not finite ${bot.name}`);
-      process.stderr.write(`  ${bot.name} seed ${i}: ${((Date.now() - t0) / 1000).toFixed(1)} s cpu, ${(r.real / 3600).toFixed(1)} h game\n`);
+      process.stderr.write(`  ${bot.name} seed ${i}: ${((Date.now() - t0) / 1000).toFixed(1)} s cpu, ${(r.real / 3600).toFixed(1)} h game, practice at cleaning ${r.mc.practice}, T2 ${((r.m.t2 ?? NaN) / 3600).toFixed(2)} h\n`);
     }
     all[bot.name] = runs;
   }
@@ -375,6 +398,12 @@ function main() {
     const win = (a: number, z: number) => median(runs.map((r) => { const xs = r.nets.slice(a, z); return xs.length ? xs.reduce((p, q) => p + q, 0) / xs.length : NaN; }));
     console.log(`  ${b.name.padEnd(20)} hire ${d('firstHire')}  T2 ${d('t2')}  T3 ${d('t3')}  loc2 ${d('loc2')}  boss ${d('flossBoss')}  | net d1-5 ${Math.round(win(0, 5))}  d6-15 ${Math.round(win(5, 15))}  d16-30 ${Math.round(win(15, 30))}  d31-60 ${Math.round(win(30, 60))}  d61-120 ${Math.round(win(60, 120))}  d121+ ${Math.round(win(120, 999))}`);
   }
+  console.log('\nCases (median per run): hands-on cleans by case, treasure paid, quick cleans, locked quick cleans cleaned by hand, bronze badges');
+  for (const b of bots) {
+    const runs = all[b.name];
+    const c = (ct: CaseType) => median(runs.map((r) => r.cases[ct] ?? 0));
+    console.log(`  ${b.name.padEnd(20)} routine ${c('routine')} candy ${c('candy')} whitening ${c('whitening')} braces ${c('braces')} pirate ${c('pirate')} deep ${c('deep')}  treasure $${median(runs.map((r) => r.treasure))}  quick ${median(runs.map((r) => r.quicks))}  locked ${median(runs.map((r) => r.lockedQuick))}  bronze ${median(runs.map((r) => Object.values(r.s.player.mastery).filter((n) => (n ?? 0) >= 3).length))}/6`);
+  }
   console.log('\nEnd state after the run (median):');
   for (const b of bots) {
     const runs = all[b.name];
@@ -393,15 +422,14 @@ function main() {
 
 const clone = (s: GameState): GameState => JSON.parse(JSON.stringify(s));
 
-/** Run plain owner days: the player's chair is quick-cleaned, nothing is bought. Returns cash per day. */
+/** Run plain owner days: the player's chair is on autopilot, nothing is bought. Returns cash per day. */
 function plainDays(s: GameState, days: number, each?: (s: GameState) => void): number[] {
   const out: number[] = [];
   for (let d = 0; d < days; d++) {
     each?.(s);
+    s.locations.forEach((c, li) => { for (const o of c.ops) if (o.staffId === 'player') sim.setPlayerMode(s, li, o.id, 'auto'); });
     let g = 0;
     while (!s.dayOver && g++ < 20000) {
-      const q = sim.playerQueue(s);
-      if (q.length) { sim.quickClean(s, q[0].id); continue; }
       sim.tick(s, 3);
     }
     sim.closeDay(s);

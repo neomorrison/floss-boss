@@ -10,8 +10,9 @@ export function sfx(key: SfxKey, opts: { volume?: number; rate?: number } = {}):
 }
 
 let currentMusic: MusicKey | null | undefined;
-export function music(key: MusicKey | null): void {
-  if (key === currentMusic) return;
+/** Switch the music. `force` re-sends it even when the UI thinks it is already playing (other modules may have changed it). */
+export function music(key: MusicKey | null, force = false): void {
+  if (key === currentMusic && !force) return;
   currentMusic = key;
   bus.emit('music', { key });
 }
@@ -74,6 +75,8 @@ export function flyCoins(from: Element, to: Element, count: number, onArrive?: (
   const a = center(from);
   const b = center(to);
   const jobs: Promise<void>[] = [];
+  // coins land out of order (random durations): count arrivals so the last one to land gets index n - 1
+  let arrived = 0;
   for (let i = 0; i < n; i++) {
     const coinEl = h('div.fly-coin', { html: coinSvg() });
     layer.appendChild(coinEl);
@@ -91,7 +94,7 @@ export function flyCoins(from: Element, to: Element, count: number, onArrive?: (
       ],
       { duration: dur, delay, easing: 'cubic-bezier(.45,.05,.4,1)', fill: 'both' },
     );
-    jobs.push(anim.finished.then(() => { coinEl.remove(); onArrive?.(i, n); }).catch(() => { coinEl.remove(); }));
+    jobs.push(anim.finished.then(() => { coinEl.remove(); onArrive?.(arrived++, n); }).catch(() => { coinEl.remove(); onArrive?.(arrived++, n); }));
   }
   return Promise.all(jobs).then(() => undefined);
 }

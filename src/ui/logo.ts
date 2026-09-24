@@ -1,5 +1,5 @@
 // The "Floss Boss" wordmark: CSS lettering with the tooth mark, swapped for LOGO_URL art when it exists.
-import { probeImage } from '../core/assets';
+import { probeImage } from './img';
 import { LOGO_URL } from '../data/assets';
 import { h } from './dom';
 import { toothMarkSvg } from './icons';

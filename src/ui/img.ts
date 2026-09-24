@@ -1,7 +1,22 @@
 // Image swap-in helper: known-good URLs appear instantly (no fade) so re-rendered panels never flicker,
 // and fallbacks are drawn only once a URL is known to be missing (no "different face" swap on load).
-import { probeImage } from '../core/assets';
 import { h } from './dom';
+
+// A local probe (same as core/assets probeImage) so the title screen's code does not pull in three.js.
+const probes = new Map<string, Promise<boolean>>();
+export function probeImage(url: string): Promise<boolean> {
+  let p = probes.get(url);
+  if (!p) {
+    p = new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+    probes.set(url, p);
+  }
+  return p;
+}
 
 const good = new Set<string>();
 const bad = new Set<string>();

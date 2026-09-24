@@ -511,15 +511,18 @@ def tri_count(objs=None):
     return sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in objs)
 
 
-def export_glb(key, texcoords=False, colors=False):
+def export_glb(key, texcoords=False, colors=False, morph=False):
+    """morph: export shape keys as glTF morph targets (positions only: the rest normals are kept, which also
+    keeps custom normals intact). Modifiers are not applied then, since the exporter drops shape keys otherwise."""
     os.makedirs(MODELS_DIR, exist_ok=True)
     path = os.path.join(MODELS_DIR, key + '.glb')
     bpy.ops.object.select_all(action='DESELECT')
     bpy.ops.export_scene.gltf(
-        filepath=path, export_format='GLB', export_yup=True, export_apply=True,
+        filepath=path, export_format='GLB', export_yup=True, export_apply=not morph,
         export_cameras=False, export_lights=False, export_texcoords=texcoords, export_normals=True,
         export_tangents=False, export_materials='EXPORT', export_animations=False, export_skins=False,
-        export_morph=False, export_extras=False, use_selection=False,
+        export_morph=morph, export_morph_normal=False, export_morph_tangent=False, export_extras=False,
+        use_selection=False,
         export_vertex_color='ACTIVE' if colors else 'NONE',
         export_all_vertex_colors=False,
         export_active_vertex_color_when_no_material=colors,

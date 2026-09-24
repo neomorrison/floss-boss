@@ -4,12 +4,11 @@ import { bus } from '../core/bus';
 import { REAL_SEC_PER_GAME_MIN } from '../core/constants';
 import { store } from '../core/store';
 import type { DayReport, SimEvent } from '../core/types';
-import * as clinicMod from '../clinic';
 import type { ClinicView } from '../clinic';
 import * as sim from '../sim';
 import { layers, setPanelOpener, type PanelName, type Screen } from './app';
 import { createBoard } from './board';
-import { createChairCard } from './chair';
+import { createChairCard, playerWaiting } from './chair';
 import { showDayReport } from './dayreport';
 import { h } from './dom';
 import { music, sfx } from './fx';
@@ -18,6 +17,7 @@ import { cleanPatient, isCleaning, quickCleanPatient, setHubBridge, type HubBrid
 import { createHud } from './hud';
 import { icon } from './icons';
 import { enqueue, modals } from './modal';
+import { toast } from './toasts';
 import { openDeskCard, openOpPanel, openPatientCard, openAddOperatory } from './oppanel';
 import { createPanelHost } from './panelhost';
 import { createPracticeCard } from './practice';
@@ -56,13 +56,57 @@ export function hubScreen(): Screen {
     clinicEvents(events) { if (view && events.length) attempt(() => view!.events(events), undefined); },
     focusOp(opId) { if (view) attempt(() => view!.focusOp(opId), undefined); },
     chairEl: () => chair.el,
+    chairAttention: () => chairAttention(),
   };
 
+  /** Show the clinic where the patient sits before starting (owner, chair at another location). */
+  function switchTo(clinicIndex: number): void {
+    const s = store.state;
+    if (s.phase !== 'owner' || clinicIndex < 0 || clinicIndex === s.active) return;
+    attempt(() => sim.setActive(s, clinicIndex), undefined, 'setActive');
+    store.commit();
+  }
+
   const chair = createChairCard({
-    clean: (id) => cleanPatient(id, bridge),
-    quick: (id) => quickCleanPatient(id, bridge),
+    clean: (id, idx) => { switchTo(idx); void cleanPatient(id, bridge); },
+    quick: (id, idx) => { switchTo(idx); quickCleanPatient(id, bridge); },
     openOp: (id) => openOpPanel(id),
   });
+
+  /** A patient sat down in your chair: slow the clock to 1x so there is time to reach Clean, and pulse the card. */
+  function chairAttention(): void {
+    if (!store.loaded || isCleaning()) return;
+    const s = store.state;
+    if (s.phase === 'school' || s.dayOver) return;
+    if (!playerWaiting(s).length) return;
+    if (s.speed > 1) { s.speed = 1; store.commit(); }
+    chair.pulse();
+  }
+
+  function onChairEvents(events: SimEvent[]): void {
+    if (!store.loaded || isCleaning()) return;
+    const s = store.state;
+    const seated = events.filter((e): e is Extract<SimEvent, { type: 'awaitingPlayer' }> => e.type === 'awaitingPlayer');
+    if (!seated.length) return;
+    const here = activeClinic(s);
+    const own = s.phase === 'owner' ? s.locations.map((c) => c.id) : [s.employer?.id ?? ''];
+    const mine = seated.filter((e) => (here && e.clinicId === here.id) || own.includes(e.clinicId));
+    if (!mine.length) return;
+    chairAttention();
+    const away = mine.find((e) => !here || e.clinicId !== here.id);
+    if (!away && panels.current) {
+      // the open panel covers the chair card: say it once, tap to get back to the chair
+      sfx('notify');
+      toast({ text: 'A patient is waiting in your chair', kind: 'info', icon: 'chair', key: 'chair-here', ms: 5000, onClick: () => { panels.open(null); syncNav(); } });
+    }
+    if (away && s.phase === 'owner') {
+      const idx = s.locations.findIndex((c) => c.id === away.clinicId);
+      if (idx >= 0) {
+        sfx('notify');
+        toast({ text: 'A patient is waiting in your chair', sub: s.locations[idx].name, kind: 'info', icon: 'chair', key: 'chair-away', ms: 5000, onClick: () => switchTo(idx) });
+      }
+    }
+  }
   const practice = createPracticeCard();
   const panels = createPanelHost({ openOp: (id) => openOpPanel(id), openStaff: (id) => openStaffCard(id) });
 
@@ -95,8 +139,12 @@ export function hubScreen(): Screen {
 
   // ---------------------------------------------------------------- clinic view
   let disposed = false;
-  function mountView(): void {
+  async function mountView(): Promise<void> {
     if (disposed || !el.isConnected) return;
+    // the 3D diorama is its own chunk (fetched early by the title screen)
+    const clinicMod = await import('../clinic').catch((e: unknown) => { console.warn('[ui] clinic module', e); return null; });
+    if (disposed || !el.isConnected) return;
+    if (!clinicMod) { board.el.style.display = ''; return; }
     const r = tryRun(() => clinicMod.createClinicView(stage, {
       onOpClick: (opId) => openOpPanel(opId),
       onEmptySlotClick: (slot) => openAddOperatory(slot),
@@ -114,9 +162,9 @@ export function hubScreen(): Screen {
       board.el.style.display = '';
     }
   }
-  requestAnimationFrame(mountView);
+  requestAnimationFrame(() => { void mountView(); });
 
-  const offEvents = bus.on('sim:events', (events) => bridge.clinicEvents(events));
+  const offEvents = bus.on('sim:events', (events) => { bridge.clinicEvents(events); onChairEvents(events); });
 
   // ---------------------------------------------------------------- sync (state changes)
   let lastLocKey = '';
@@ -142,14 +190,16 @@ export function hubScreen(): Screen {
   function syncLocTabs(): void {
     if (!store.loaded) return;
     const s = store.state;
-    const key = `${s.phase}|${s.active}|${s.locations.map((c) => c.name + c.tier).join(',')}`;
+    const waitingAt = new Set(isOwner(s) ? playerWaiting(s).map((w) => w.clinicIndex) : []);
+    const key = `${s.phase}|${s.active}|${s.locations.map((c) => c.name + c.tier).join(',')}|${[...waitingAt].join(',')}`;
     if (key === lastLocKey) return;
     lastLocKey = key;
     const show = isOwner(s) && s.locations.length > 1;
     locTabs.style.display = show ? '' : 'none';
     if (!show) { locTabs.replaceChildren(); return; }
     locTabs.replaceChildren(...s.locations.map((c, i) => {
-      const b = h('button.loc-tab', { type: 'button', class: { 'is-on': i === s.active } }, icon('pin'), h('span.ellipsis', c.name));
+      const b = h('button.loc-tab', { type: 'button', class: { 'is-on': i === s.active }, title: c.name }, icon('pin'), h('span.ellipsis', c.name),
+        waitingAt.has(i) && i !== s.active ? h('span.badge.loc-badge', { 'aria-label': 'Patient waiting in your chair' }, icon('chair')) : null);
       b.addEventListener('click', () => {
         if (i === store.state.active) return;
         sfx('ui_tab');
@@ -184,7 +234,11 @@ export function hubScreen(): Screen {
       if (!report) return;
       store.commit({ saveNow: true });
       sfx('day_end');
-      showDayReport(report);
+      // events raised while closing (achievements, level ups) show once the report is dismissed
+      void showDayReport(report).then(() => {
+        const ev = report.events ?? [];
+        if (ev.length) bus.emit('sim:events', ev);
+      });
     });
   }
 

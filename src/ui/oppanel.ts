@@ -17,6 +17,8 @@ import { liveModal, select } from './live';
 import { dirtLabel, moodFromPatient } from './logic';
 import { openModal } from './modal';
 import { avatarPortrait, patientPortrait, staffPortrait } from './portrait';
+import { caseChip, twistChips } from './casebits';
+import { staffPanelIntent } from './panels/staff';
 import { btn, chip, priceTag, seg, stars, thumb } from './widgets';
 
 function findOp(c: Clinic | null, opId: string): Operatory | null {
@@ -34,7 +36,7 @@ export function openOpPanel(opId: string): void {
   const op0 = findOp(c0, opId);
   if (!c0 || !op0) return;
   const owner = isOwner() && c0.ownedByPlayer;
-  liveModal({
+  const m0 = liveModal({
     eyebrow: c0.name,
     title: `Operatory ${op0.slot + 1}`,
     icon: 'chair',
@@ -45,7 +47,7 @@ export function openOpPanel(opId: string): void {
     const c = activeClinic(s);
     const op = findOp(c, opId);
     if (!c || !op) { m.close(); return h('div'); }
-    return owner ? ownerOp(c, op) : employeeOp(c, op);
+    return owner ? ownerOp(c, op, () => m0.close()) : employeeOp(c, op);
   });
 }
 
@@ -56,12 +58,12 @@ function patientRow(p: DayPatient | null, empty: string): HTMLElement {
     patientPortrait(p, moodFromPatient(p), 52),
     h('div.grow',
       h('div.bold', p.name),
-      h('div.row.row-wrap.gap-6', chip(ARCHETYPES[p.archetype]?.label ?? p.archetype, 'teal'), chip(PATIENT_STATE[p.state], ''), chip(`${d.label} gunk`, d.tone)),
+      h('div.row.row-wrap.gap-6', caseChip(p.caseType), chip(ARCHETYPES[p.archetype]?.label ?? p.archetype, 'teal'), chip(PATIENT_STATE[p.state], ''), chip(`${d.label} gunk`, d.tone)),
     ),
   );
 }
 
-function ownerOp(c: Clinic, op: Operatory): HTMLElement {
+function ownerOp(c: Clinic, op: Operatory, close: () => void): HTMLElement {
   const s = store.state;
   const idx = activeIndex(s);
   const hygienists = c.staff.filter((x) => x.role === 'hygienist');
@@ -120,7 +122,7 @@ function ownerOp(c: Clinic, op: Operatory): HTMLElement {
         ], op.playerMode, (v) => act(() => sim.setPlayerMode(store.state, idx, op.id, v), { sound: 'ui_click' }), 'seg-block'),
       ) : null,
       h('div.op-assign-row', h('div.op-nobody', icon('staff')), h('div.grow.col.gap-6', h('span.label', 'Assistant'), assistants.length ? asSelect : h('div.small.muted', 'No assistants on the team. Assistants make cleanings 20% faster.'))),
-      !hygienists.length && op.staffId !== PLAYER_ID ? btn('Hire a hygienist', { variant: 'soft', size: 'sm', icon: 'userPlus', onClick: () => go('staff') }) : null,
+      !hygienists.length && op.staffId !== PLAYER_ID ? btn('Hire a hygienist', { variant: 'soft', size: 'sm', icon: 'userPlus', onClick: () => { close(); staffPanelIntent('hire', 'hygienist'); go('staff'); } }) : null,
     ),
     h('div.op-section', h('span.label', 'In the chair'), patientRow(patient, op.staffId ? 'Free' : 'Nobody is assigned')),
     h('div.op-section', h('span.label', 'Chair'), chairRow),
@@ -198,6 +200,7 @@ export function openPatientCard(patientId: string): void {
     eyebrow: arch?.label ?? '',
     body: h('div.col.gap-14',
       h('p.muted', arch?.blurb ?? ''),
+      h('div.row.row-wrap.gap-6', caseChip(p.caseType), ...twistChips(p.twists)),
       h('div.row.row-wrap.gap-6',
         chip(PATIENT_STATE[p.state], 'teal'),
         chip(SERVICES[p.service].name, p.service === 'deep' ? 'grape' : ''),
@@ -232,6 +235,6 @@ export function openDeskCard(): void {
         : h('div.small.muted', owner ? 'Nobody at the desk. Check-in takes 7 minutes instead of 3, and more patients skip their appointment.' : 'The front desk team checks patients in.'),
       h('div.row.gap-6.row-wrap', chip(`${waiting} waiting`, 'sun', 'user'), chip(`${checking} checking in`, 'teal', 'report')),
     ),
-    actions: owner && !recs.length ? [btn('Hire a receptionist', { variant: 'primary', icon: 'userPlus', onClick: () => { m.close(); go('staff'); } })] : [],
+    actions: owner && !recs.length ? [btn('Hire a receptionist', { variant: 'primary', icon: 'userPlus', onClick: () => { m.close(); staffPanelIntent('hire', 'receptionist'); go('staff'); } })] : [],
   });
 }

@@ -4,6 +4,8 @@
 // music) are verified for real in a browser instead: `node tools/snap.mjs --path /harness/audio.html`
 // exercises decode, playback, looping, music crossfade and (via a simulated-offline fetch) the
 // synthesized fallback path itself, and confirmed no clipping (see the audio builder's report).
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { hashSeed, mulberry32, noteFreq, noiseBuffer, envGain } from '../src/audio/synthCore';
 import { SFX_KEYS, MUSIC_KEYS } from '../src/data/assets';
@@ -107,8 +109,16 @@ describe('envGain', () => {
 
 describe('SFX/music key lists (data/assets contract this module renders a fallback for)', () => {
   it('has the expected key counts (canary: fails loudly if the shared data contract changes)', () => {
-    expect(SFX_KEYS.length).toBe(37);
+    expect(SFX_KEYS.length).toBe(53);
     expect(MUSIC_KEYS.length).toBe(3);
+  });
+  it('ships a real mp3 for every SFX and music key (the synth recipes are only the fallback)', () => {
+    const dir = path.resolve(__dirname, '..', 'public', 'audio');
+    const missing = [...SFX_KEYS, ...MUSIC_KEYS].filter((k) => {
+      const f = path.join(dir, `${k}.mp3`);
+      return !fs.existsSync(f) || fs.statSync(f).size < 1000;
+    });
+    expect(missing).toEqual([]);
   });
   it('every SFX key is a non-empty lowercase_snake_case id', () => {
     for (const k of SFX_KEYS) expect(k).toMatch(/^[a-z][a-z0-9_]*$/);

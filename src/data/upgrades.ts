@@ -11,7 +11,7 @@ export const CHAIR_ORDER: ChairTier[] = ['basic', 'comfort', 'deluxe'];
 
 export interface OpUpgradeDef { id: OpUpgradeId; name: string; price: number; blurb: string; model: string }
 export const OP_UPGRADES: Record<OpUpgradeId, OpUpgradeDef> = {
-  tv: { id: 'tv', name: 'Ceiling TV', price: 1200, blurb: 'Comfort +8%. Patients wait longer in the chair.', model: 'op_tv' },
+  tv: { id: 'tv', name: 'Ceiling TV', price: 1200, blurb: 'Comfort +8%. Patients wait 25% longer in the chair.', model: 'op_tv' },
   whiteningLamp: { id: 'whiteningLamp', name: 'Whitening Lamp', price: 6000, blurb: 'Sell whitening in this operatory.', model: 'whitening_lamp' },
   intraoralCam: { id: 'intraoralCam', name: 'Intraoral Camera', price: 3000, blurb: 'Quality +3%. Add-ons accepted 10% more.', model: 'intraoral_cam' },
 };
@@ -20,7 +20,7 @@ export interface EquipDef { id: EquipId; name: string; price: number; blurb: str
 export const EQUIPMENT: Record<EquipId, EquipDef> = {
   deepCert: { id: 'deepCert', name: 'Deep Cleaning Certification', price: 2000, blurb: 'Offer deep cleanings ($260) to patients who need them.', model: 'certificate', minTier: 't1' },
   espresso: { id: 'espresso', name: 'Espresso Machine', price: 1500, blurb: 'Waiting patients stay 25% longer.', model: 'espresso_machine', minTier: 't1' },
-  kidsCorner: { id: 'kidsCorner', name: 'Kids Corner', price: 2000, blurb: 'Twice as many kids. Kids wait happier.', model: 'kids_corner', minTier: 't1' },
+  kidsCorner: { id: 'kidsCorner', name: 'Kids Corner', price: 2000, blurb: 'Twice as many kids. Kids wait 30% longer.', model: 'kids_corner', minTier: 't1' },
   fishTank: { id: 'fishTank', name: 'Fish Tank', price: 2500, blurb: 'Rating +0.1. Everyone loves fish.', model: 'fish_tank', minTier: 't1' },
   sterilizer: { id: 'sterilizer', name: 'Sterilizer Pro', price: 3500, blurb: 'Quality +3% in every operatory.', model: 'sterilizer', minTier: 't1' },
   onlineBooking: { id: 'onlineBooking', name: 'Online Booking', price: 4000, blurb: 'Half the no-shows. Demand +10%.', model: 'kiosk', minTier: 't1' },

@@ -329,3 +329,51 @@
   .dock.is-owner .dock-label { display: none; }
   .dock.is-owner .dock-btn { min-height: 50px; }
 }
+
+/* ------------------------------------------------------------ Your chair v2: case banner, twists, bonus */
+.chair-card { gap: 10px; }
+.chair-card.is-ready { border-color: color-mix(in srgb, var(--tone, var(--mint)) 55%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone, var(--mint)) 20%, transparent), var(--sh-2); }
+.chair-case {
+  display: flex; align-items: center; gap: 12px;
+  margin: -14px -16px 0; padding: 12px 14px 12px 16px;
+  border-radius: 20px 20px 0 0;
+  background: linear-gradient(115deg, var(--tone-l, var(--mint-l)) 0%, var(--tone-l, var(--mint-l)) 45%, #fff 100%);
+}
+.chair-case .eyebrow { color: var(--tone-d, var(--teal)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chair-case-name { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-weight: 800; font-size: 20px; line-height: 1.05; }
+.chair-case-name .chair-tier { box-shadow: 0 2px 0 rgba(22, 50, 58, .25); }
+.chair-case-blurb { font-size: 12.5px; font-weight: 700; color: var(--ink-2); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chair-body { gap: 12px; }
+.chair-name { font-size: 20px; margin-bottom: 5px; }
+.chair-bonus { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 12px; background: var(--sun-l); font-size: 13.5px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+.chair-bonus .icon { width: 18px; height: 18px; color: var(--sun-d); filter: drop-shadow(0 1px 0 var(--sun-dd)); }
+.chair-actions { align-items: stretch; }
+.chair-actions .btn.is-locked { --b-bg: var(--surface-2); --b-fg: var(--ink-2); --b-border: var(--line-2); }
+.chair-actions .btn.is-locked .icon { color: var(--ink-3); }
+.chair-actions .btn.is-locked .btn-sub { opacity: 1; color: var(--ink-3); }
+.chair-actions .btn.is-busy { filter: saturate(.6); opacity: .75; }
+.chair-card.anim-attn { animation: chair-attn 1.1s var(--ease-out) 2; }
+@keyframes chair-attn {
+  0% { transform: none; }
+  14% { transform: translateY(-6px) scale(1.025); box-shadow: 0 0 0 10px color-mix(in srgb, var(--tone, var(--mint)) 35%, transparent), var(--sh-3); }
+  30% { transform: translateY(1px) scale(.995); }
+  46% { transform: translateY(-2px) scale(1.01); }
+  100% { transform: none; }
+}
+.loc-tab .loc-badge { width: 22px; min-width: 22px; height: 22px; padding: 0; margin-right: -6px; background: var(--gum); animation: bump 1.4s var(--spring) infinite; }
+.loc-tab .loc-badge .icon { width: 14px; height: 14px; color: #fff; }
+/* panels carry their own location picker: tabs would cover the panel header */
+.panel-open .loc-tabs { visibility: hidden; }
+@media (min-width: 641px) {
+  .loc-tabs { flex-wrap: wrap; max-width: 72%; overflow: visible; }
+  .loc-tab { max-width: 190px; }
+}
+@media (max-width: 640px) {
+  .hud-speed-btn { width: 44px; height: 44px; }
+  .hud-speed { gap: 2px; padding: 2px; }
+  .chair-case { margin: -12px -12px 0; padding: 10px 12px; }
+  .chair-case-name { font-size: 18px; }
+  .chair-case-blurb { display: none; }
+  .chair-card .chair-portrait { --pz: 48px !important; }
+  .chair-name { font-size: 18px; }
+}

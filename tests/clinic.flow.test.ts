@@ -14,7 +14,7 @@ function patient(id: string, state: PatientState, extra: Partial<DayPatient> = {
     id, name: 'Pat ' + id, archetype: 'regular', portrait: 'regular', service: 'cleaning', addons: [], apptMin: 540,
     walkIn: false, state, since: 540, until: null, seat: null, opId: null, staffId: null, awaitingPlayer: false,
     arrivedMin: 540, waitedMin: 0, patience: 45, dirtLevel: 0.5, quality: null, comfort: null, stars: null,
-    fee: 120, tip: 0, isPlayerPatient: false, mood: 'ok', ...extra,
+    fee: 120, tip: 0, isPlayerPatient: false, mood: 'ok', caseType: 'routine', twists: [], ...extra,
   };
 }
 function staff(id: string, role: StaffRole, extra: Partial<Staff> = {}): Staff {

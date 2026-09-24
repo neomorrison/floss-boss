@@ -10,6 +10,7 @@ import { h } from './dom';
 import { act, activeClinic, canAfford, isOwner } from './game';
 import { icon } from './icons';
 import { liveModal, select } from './live';
+import { courseState } from './logic';
 import { confirmModal } from './modal';
 import { staffPortrait } from './portrait';
 import { bar, btn, chip, statRow } from './widgets';
@@ -82,7 +83,8 @@ export async function fireFlow(idx: number, st: Staff): Promise<void> {
 export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: boolean; onOpen?: () => void } = {}): HTMLElement {
   const s = store.state;
   const role = ROLES[st.role];
-  const off = st.offUntilDay >= s.day;
+  const course = courseState(st, s.day);
+  const off = course !== 'none';
   const lowPay = st.salary < st.ask * 0.9;
   const need = Math.max(1, 25 * st.level);
   const assign = assignSelect(c, idx, st);
@@ -90,7 +92,8 @@ export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: 
     staffPortrait(st, opts.compact ? 60 : 76, '', role.scrubs),
     h('div.grow',
       h('div.staff-name', st.name),
-      h('div.row.row-wrap.gap-6', chip(role.name, roleTone(st.role)), chip(`Level ${st.level}`, ''), off ? chip('Training', 'sun', 'graduation') : null),
+      h('div.row.row-wrap.gap-6', chip(role.name, roleTone(st.role)), chip(`Level ${st.level}`, ''),
+        course === 'away' ? chip('Training', 'sun', 'graduation') : course === 'booked' ? chip('Training tomorrow', 'sun', 'graduation') : null),
     ),
     opts.onOpen ? h('button.icon-btn', { type: 'button', 'aria-label': 'Details', onClick: opts.onOpen }, icon('chevronRight')) : null,
   );
@@ -104,7 +107,7 @@ export function staffBlock(c: Clinic, idx: number, st: Staff, opts: { compact?: 
   );
   const canRaise = st.salary < st.ask;
   const actions = h('div.staff-actions',
-    btn('Train', { variant: 'soft', size: 'sm', icon: 'graduation', sub: money(TRAINING_COST), disabled: off || !canAfford(TRAINING_COST), title: off ? 'Already training' : canAfford(TRAINING_COST) ? 'Skill +8, off for a day' : 'Not enough cash', onClick: () => act(() => sim.train(store.state, idx, st.id), { success: `${st.name} is off training tomorrow` }) }),
+    btn('Train', { variant: 'soft', size: 'sm', icon: 'graduation', sub: money(TRAINING_COST), disabled: off || !canAfford(TRAINING_COST), title: course === 'booked' ? 'Booked on a course tomorrow' : off ? 'Away training today' : canAfford(TRAINING_COST) ? 'Skill +8, off for a day' : 'Not enough cash', onClick: () => act(() => sim.train(store.state, idx, st.id), { success: `${st.name} is off training tomorrow` }) }),
     canRaise ? btn('Raise', { variant: 'sun', size: 'sm', icon: 'trendUp', sub: `to ${money(st.ask)}`, onClick: () => act(() => sim.setSalary(store.state, idx, st.id, st.ask), { sound: 'cash', success: `${st.name} is happy with the raise` }) }) : null,
     btn('Fire', { variant: 'ghost', size: 'sm', icon: 'door', class: 'btn-fire', onClick: () => fireFlow(idx, st) }),
   );
@@ -129,7 +132,7 @@ export function candidateBlock(cand: Candidate, onHire: () => void, hireLabel = 
       staffPortrait(cand, 64, '', role.scrubs),
       h('div.grow',
         h('div.staff-name', cand.name),
-        h('div.row.row-wrap.gap-6', chip(role.name, roleTone(cand.role)), left <= 0 ? chip('Leaves today', 'coral') : chip(`${left + 1} days left`, '')),
+        h('div.row.row-wrap.gap-6', chip(role.name, roleTone(cand.role)), left <= 0 ? chip('Last day', 'coral') : chip(`${left + 1} days left`, '')),
       ),
     ),
     cand.traits.length ? h('div.row.row-wrap.gap-6', ...traitChips(cand.traits)) : h('div.small.faint', 'No special traits'),

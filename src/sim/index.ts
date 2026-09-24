@@ -8,9 +8,11 @@
 // - Staff.portrait is 'staff_<n>' (see data/assets staffPortraitUrl), or 'boss' for Dr. Ruth Canal.
 //   DayPatient.portrait and CleanSetup.patient.portrait are the archetype id (portraitUrl(archetype, mood)).
 // - The employer clinic's first operatory (ops[0]) is the player's chair.
-// - setPlayerMode and addonsFor accept clinicIndex -1 for the employer in the employee phase.
+// - addonsFor accepts clinicIndex -1 for the employer in the employee phase. setPlayerMode refuses 'auto'
+//   there (employees delegate with Quick clean, which needs Bronze mastery of the case).
+// - Every DayPatient has caseType and twists (DESIGN 5.5, 5.6), NPC patients too.
 import type {
-  ActionResult, AddonId, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
+  ActionResult, AddonId, CaseType, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
   GameState, HandsOnPayout, OfficeTierId, OfflineReport, OpUpgradeId, PriceKey, SimEvent, SkillId, ToolSlot,
 } from '../core/types';
 import * as career from './career';
@@ -18,6 +20,7 @@ import * as economy from './economy';
 import * as staff from './staff';
 import * as sel from './selectors';
 import * as prog from './progress';
+import * as cases from './cases';
 import { tickWorld } from './clinic';
 import { claimGoal as claim } from './goals';
 
@@ -32,7 +35,8 @@ export function migrate(state: GameState): GameState { return career.migrate(sta
 export function tick(state: GameState, minutes: number): SimEvent[] { return tickWorld(state, minutes); }
 /** True when the clinics are closed and every patient has left (state.dayOver). */
 export function isDayOver(state: GameState): boolean { return state.dayOver; }
-/** Close the day: charge costs, build the report, advance to the next working day (8:00) and book it. */
+/** Close the day: charge costs, build the report, advance to the next working day (8:00) and book it.
+ * The returned report carries `events` (achievements, level-ups, quits) for the UI to emit after it. */
 export function closeDay(state: GameState): DayReport { return economy.closeDay(state); }
 
 // ------------------------------------------------------------------ school
@@ -44,16 +48,27 @@ export function completeSchool(state: GameState, step: 1 | 2, result: CleanResul
 // ------------------------------------------------------------------ hands-on
 /** Patients sitting in the player's chair(s) waiting for the player, in the active clinic. */
 export function playerQueue(state: GameState): DayPatient[] { return career.playerQueue(state); }
-/** Build the clean for a waiting patient. Freezes nothing by itself: the UI stops ticking while cleaning. */
+/**
+ * Build the clean for a patient waiting in your chair (v2 case setup). Throws 'This patient is not ready yet'
+ * unless the patient is in the chair waiting for you. Freezes nothing: the UI stops ticking while cleaning.
+ */
 export function beginHandsOn(state: GameState, patientId: string): CleanSetup { return career.beginHandsOn(state, patientId); }
 /**
- * Apply a finished clean (pay, tip, XP, review, goals), then fast-forward the clinic by
+ * Apply a finished clean (pay, tip, XP, review, goals, mastery, treasure), then fast-forward the clinic by
  * HANDS_ON_MINUTES[service]. Returns the payout and the events of that window ("while you were cleaning").
  * quit 'abort': no pay, the patient goes back to waiting (the fast-forward is skipped).
  */
 export function completeHandsOn(state: GameState, patientId: string, result: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } { return career.completeHandsOn(state, patientId, result); }
-/** Auto clean at autoQuality (no tip, half XP), fast-forwards QUICK_CLEAN_MINUTES. */
+/**
+ * Quick clean (DESIGN 5.9): needs Bronze mastery of the patient's case, else returns an empty payout and
+ * changes nothing. Auto quality, 50% of the wage (owner: the fee), no tip, no XP, no mastery, streak or
+ * goals; fast-forwards QUICK_CLEAN_MINUTES.
+ */
 export function quickClean(state: GameState, patientId: string): { payout: HandsOnPayout; events: SimEvent[] } { return career.quickClean(state, patientId); }
+/** Whether Quick clean can take this patient, and the Bronze progress for "Bronze needed: 1/3". */
+export function quickCleanStatus(state: GameState, patientId: string): { ok: boolean; count: number; need: number } { return career.quickCleanStatus(state, patientId); }
+/** Mastery of a case type: hands-on cleans of 3+ stars, tier (0 none, 1 bronze, 2 silver, 3 gold), next threshold. */
+export function caseMastery(state: GameState, caseType: CaseType): { count: number; tier: 0 | 1 | 2 | 3; next: number | null } { return cases.caseMastery(state, caseType); }
 
 // ------------------------------------------------------------------ player shop and skills
 export function buyTool(state: GameState, slot: ToolSlot, tier: number): ActionResult { return economy.buyTool(state, slot, tier); }

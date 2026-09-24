@@ -51,11 +51,14 @@ function runDay(s: GameState, mode: (i: number) => 'hands' | 'quick' | 'wait', l
   while (!s.dayOver && guard++ < 20000) {
     const q = sim.playerQueue(s);
     if (q.length) {
-      const m = mode(n++);
+      let m = mode(n++);
+      if (m === 'quick' && !sim.quickCleanStatus(s, q[0].id).ok) m = 'hands';   // quick clean needs Bronze
       if (m === 'hands') {
         const setup = sim.beginHandsOn(s, q[0].id);
         expect(setup.parSeconds).toBeGreaterThan(0);
-        const r = sim.completeHandsOn(s, q[0].id, result(0.8 + (n % 3) * 0.06, { chunks: setup.dirt.tartarCount }));
+        expect(setup.problemTeeth.length).toBeGreaterThan(0);
+        expect(setup.caseType).toBe(q[0].caseType);
+        const r = sim.completeHandsOn(s, q[0].id, result(0.8 + (n % 3) * 0.06, { chunks: setup.dirt.tartarCount, caseType: setup.caseType }));
         events.push(...r.events);
         continue;
       }

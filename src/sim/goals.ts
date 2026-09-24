@@ -3,6 +3,7 @@ import type { GameState, Goal, SimEvent } from '../core/types';
 import type { Rng } from '../core/rng';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { money } from '../core/format';
+import { PLAYER_ID } from '../core/constants';
 import { S, SimGoal, addCash, nextId, pushEvent } from './internal';
 import { avgNet, gainXp, tierIndex, valuation } from './progress';
 
@@ -25,8 +26,8 @@ export function makeGoals(state: GameState, rng: Rng): void {
   const L = state.player.level;
   const owner = state.phase === 'owner';
   let cashEach: number;
-  if (owner) cashEach = Math.max(100, Math.round((Math.max(0, avgNet(state, 3)) * 0.17) / 10) * 10);
-  else cashEach = Math.round((30 + 8 * L) / 5) * 5;
+  if (owner) cashEach = Math.max(100, Math.round((Math.max(0, avgNet(state, 3)) * GOAL_NET_SHARE) / 10) * 10);
+  else cashEach = Math.round((20 + 5 * L) / 5) * 5;
   const xpEach = 15 + 5 * L;
   const make = (kind: Kind, target: number, limit?: number): SimGoal => ({
     id: nextId(state, 'g'), kind, target, progress: 0, rewardCash: cashEach, rewardXp: xpEach,
@@ -54,16 +55,25 @@ export function makeGoals(state: GameState, rng: Rng): void {
     ];
     goals.push(second[rng.int(0, 1)]());
     const third: (() => SimGoal)[] = [
-      () => make('chunks', 10 + 5 * rng.int(1, 4)),
-      () => make('fastClean', 1, [120, 100, 90][rng.int(0, 2)]),
-      () => make('combo', rng.int(4, 7)),
       () => make(rng.chance(0.5) ? 'fiveStars' : 'addons', Math.max(2, Math.round(expected * 0.2))),
     ];
+    // hands-on goals only when you clean somewhere yourself
+    const hands = state.locations.some((c) => c.ops.some((o) => o.staffId === PLAYER_ID && o.playerMode === 'hands'));
+    if (hands) {
+      third.push(
+        () => make('chunks', 10 + 5 * rng.int(1, 4)),
+        () => make('fastClean', 1, [120, 100, 90][rng.int(0, 2)]),
+        () => make('combo', rng.int(4, 7)),
+      );
+    }
     goals.push(third[rng.int(0, third.length - 1)]());
   }
   state.goals = goals;
   state.goalsDay = state.day;
 }
+
+/** Each owner goal pays this share of the average operating net of the last 3 days (DESIGN 8.10). */
+export const GOAL_NET_SHARE = 0.2;
 
 export function shiftSize(level: number): number {
   return level >= 7 ? 6 : level >= 4 ? 5 : 4;

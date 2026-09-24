@@ -30,10 +30,16 @@ function pop(peakFreq: number, size: number): Builder {
   };
 }
 
-function loopTexture(kind: 'buzz' | 'whirr' | 'slurp' | 'hiss'): Builder {
+function loopTexture(kind: 'buzz' | 'whirr' | 'slurp' | 'hiss' | 'hum'): Builder {
   return (ctx, out, rng) => {
     const dur = 2.2;
-    if (kind === 'buzz') {
+    if (kind === 'hum') {
+      // curing light: a soft mains hum (120 Hz and harmonics, whole cycles in 2.2 s so it loops clean) and a faint whir
+      tone(ctx, out, { type: 'sine', freq: 120, duration: dur, peak: 0.26, loop: true });
+      tone(ctx, out, { type: 'sine', freq: 240, duration: dur, peak: 0.12, loop: true });
+      tone(ctx, out, { type: 'triangle', freq: 360, duration: dur, peak: 0.05, loop: true });
+      burst(ctx, out, { duration: dur, rng, filter: 'bandpass', freq: 1800, Q: 0.8, peak: 0.06, loop: true });
+    } else if (kind === 'buzz') {
       tone(ctx, out, { type: 'sine', freq: 8200, duration: dur, peak: 0.22, loop: true });
       burst(ctx, out, { duration: dur, rng, filter: 'highpass', freq: 6000, peak: 0.18, loop: true });
     } else if (kind === 'whirr') {
@@ -148,6 +154,149 @@ function doorChimeBuilder(): Builder {
   };
 }
 
+// ---------------------------------------------------------------- case sounds (DESIGN 5)
+
+function squishBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a wet low splat: noise through a closing low-pass, plus a sagging blob of pitch
+    burst(ctx, out, { duration: 0.2, rng, filter: 'lowpass', freq: 2200, freqEnd: 260, Q: 3, peak: 0.75, attack: 0.003, decay: 0.18 });
+    tone(ctx, out, { type: 'sine', freq: 460, freqEnd: 130, duration: 0.14, peak: 0.5, attack: 0.003, decay: 0.12 });
+    burst(ctx, out, { duration: 0.06, rng, start: 0.07, filter: 'bandpass', freq: 900, Q: 2, peak: 0.3, decay: 0.05 });
+  };
+}
+
+function creakBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // stick-slip: a run of tiny resonant squeaks, slightly irregular, like a taut string dragging on enamel
+    let t = 0;
+    for (let i = 0; i < 7; i++) {
+      const f = 1150 + rng() * 260;
+      tone(ctx, out, { type: 'sawtooth', freq: f, freqEnd: f * 0.92, duration: 0.03, start: t, peak: 0.3, attack: 0.002, decay: 0.028 });
+      burst(ctx, out, { duration: 0.025, rng, start: t, filter: 'bandpass', freq: f * 2, Q: 9, peak: 0.7, attack: 0.002, decay: 0.022 });
+      t += 0.04 + rng() * 0.025;
+    }
+  };
+}
+
+function thwipBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.02, rng, filter: 'highpass', freq: 3500, peak: 0.9, attack: 0.001, decay: 0.015 });
+    tone(ctx, out, { type: 'triangle', freq: 1500, freqEnd: 240, duration: 0.07, peak: 0.9, attack: 0.001, decay: 0.065 });
+  };
+}
+
+function zipBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.24, rng, filter: 'bandpass', freq: 1400, freqEnd: 5200, Q: 4, peak: 0.55, attack: 0.01, decay: 0.22 });
+    tone(ctx, out, { type: 'triangle', freq: 520, freqEnd: 1900, duration: 0.2, peak: 0.25, attack: 0.01, decay: 0.18 });
+  };
+}
+
+function dabBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.1, rng, filter: 'lowpass', freq: 1500, freqEnd: 420, Q: 1.6, peak: 0.9, attack: 0.004, decay: 0.09 });
+    tone(ctx, out, { type: 'sine', freq: 320, freqEnd: 210, duration: 0.06, peak: 0.45, attack: 0.003, decay: 0.05 });
+  };
+}
+
+function goldTingBuilder(): Builder {
+  return (ctx, out, rng) => {
+    bell(noteFreq(28), 2.76, 0.8, 0.55)(ctx, out, rng);
+    arpeggio([31, 35, 40], 0.05, 0.25, 'sine', 0.18)(ctx, out, rng);
+  };
+}
+
+function arrBuilder(): Builder {
+  return (ctx, out) => {
+    // a gruff rolled "arr": a low buzzy voice through a vowel formant, amplitude rolled by a fast LFO
+    const dur = 0.5;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(150, 0);
+    osc.frequency.linearRampToValueAtTime(118, dur);
+    const formant = ctx.createBiquadFilter();
+    formant.type = 'bandpass';
+    formant.frequency.setValueAtTime(760, 0);
+    formant.frequency.linearRampToValueAtTime(560, dur);
+    formant.Q.value = 1.8;
+    const roll = ctx.createGain();
+    roll.gain.value = 0.6;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 26;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.4;
+    lfo.connect(depth);
+    depth.connect(roll.gain);
+    const env = envGain(ctx, [[0, 0], [0.03, 1], [dur * 0.7, 0.8], [dur, 0]]);
+    osc.connect(formant);
+    formant.connect(roll);
+    roll.connect(env);
+    env.connect(out);
+    osc.start(0);
+    lfo.start(0);
+    osc.stop(dur + 0.02);
+    lfo.stop(dur + 0.02);
+  };
+}
+
+function pocketBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.22, rng, filter: 'lowpass', freq: 1100, freqEnd: 240, Q: 4, peak: 0.6, attack: 0.02, decay: 0.2 });
+    tone(ctx, out, { type: 'sine', freq: 240, freqEnd: 110, duration: 0.18, peak: 0.35, attack: 0.02, decay: 0.16 });
+  };
+}
+
+function checkBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.02, rng, filter: 'bandpass', freq: 2400, Q: 3, peak: 0.4, decay: 0.015 });
+    arpeggio([7, 14], 0.07, 0.22, 'triangle', 0.5)(ctx, out, rng);
+    tone(ctx, out, { type: 'sine', freq: noteFreq(26), duration: 0.25, start: 0.07, peak: 0.12, attack: 0.004, decay: 0.24 });
+  };
+}
+
+function hiccupBuilder(): Builder {
+  return (ctx, out, rng) => {
+    burst(ctx, out, { duration: 0.03, rng, filter: 'bandpass', freq: 1200, Q: 2, peak: 0.4, attack: 0.001, decay: 0.025 });
+    tone(ctx, out, { type: 'triangle', freq: 360, freqEnd: 640, duration: 0.09, peak: 0.6, attack: 0.002, decay: 0.08 });
+    tone(ctx, out, { type: 'sine', freq: 520, freqEnd: 300, duration: 0.08, start: 0.09, peak: 0.25, attack: 0.004, decay: 0.07 });
+  };
+}
+
+function snoreBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a raspy inhale (buzzy low saw plus breath noise), then a little whistle out
+    tone(ctx, out, { type: 'sawtooth', freq: 88, freqEnd: 72, duration: 0.55, peak: 0.3, attack: 0.25, decay: 0.3 });
+    burst(ctx, out, { duration: 0.55, rng, filter: 'bandpass', freq: 600, Q: 1.2, peak: 0.35, attack: 0.25, decay: 0.3 });
+    tone(ctx, out, { type: 'sine', freq: 1250, freqEnd: 880, duration: 0.3, start: 0.62, peak: 0.25, attack: 0.05, decay: 0.25 });
+    burst(ctx, out, { duration: 0.3, rng, start: 0.62, filter: 'highpass', freq: 2500, peak: 0.08, attack: 0.05, decay: 0.25 });
+  };
+}
+
+function coinClinkBuilder(): Builder {
+  return (ctx, out, rng) => {
+    bell(2350, 2.71, 0.35, 0.6)(ctx, out, rng);
+    // the spin: ticks that speed up and fade as the coin settles
+    let t = 0.18;
+    let gap = 0.085;
+    for (let i = 0; i < 12; i++) {
+      const f = 2900 + rng() * 700;
+      tone(ctx, out, { type: 'square', freq: f, duration: 0.03, start: t, peak: 0.16 * (1 - i / 13), attack: 0.001, decay: 0.028 });
+      t += gap;
+      gap *= 0.84;
+    }
+  };
+}
+
+function shellCrackBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // brittle crackle: a few quick high clicks over a short woody crack
+    pop(420, 0.7)(ctx, out, rng);
+    for (let i = 0; i < 4; i++) {
+      burst(ctx, out, { duration: 0.02, rng, start: 0.015 + i * (0.025 + rng() * 0.02), filter: 'highpass', freq: 3000 + rng() * 2000, peak: 0.5, attack: 0.001, decay: 0.018 });
+    }
+  };
+}
+
 // ---------------------------------------------------------------- key -> recipe table
 const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 | 2 }> = {
   scrape_1: { build: scrape(3200), duration: 0.5 },
@@ -174,6 +323,23 @@ const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 |
   perfect: { build: arpeggio([0, 4, 7, 12, 16], 0.09, 0.5, 'triangle', 0.6), duration: 1.1 },
   star: { build: bell(noteFreq(19), 2, 0.3, 0.6), duration: 0.35 },
   splash: { build: splashBuilder(), duration: 0.45 },
+  squish: { build: squishBuilder(), duration: 0.3 },
+  floss_creak: { build: creakBuilder(), duration: 0.45 },
+  floss_thwip: { build: thwipBuilder(), duration: 0.15 },
+  floss_zip: { build: zipBuilder(), duration: 0.3 },
+  lamp_loop: { build: loopTexture('hum'), duration: 2.2 },
+  gel_paint: { build: dabBuilder(), duration: 0.15 },
+  gold_ting: { build: goldTingBuilder(), duration: 0.9 },
+  arr: { build: arrBuilder(), duration: 0.55 },
+  pocket_open: { build: pocketBuilder(), duration: 0.3 },
+  shade_tick: { build: (ctx, out) => { tone(ctx, out, { type: 'sine', freq: noteFreq(33), duration: 0.06, peak: 0.9, attack: 0.002, decay: 0.055 }); tone(ctx, out, { type: 'triangle', freq: noteFreq(40), duration: 0.03, peak: 0.3, attack: 0.001, decay: 0.028 }); }, duration: 0.1 },
+  check: { build: checkBuilder(), duration: 0.4 },
+  hiccup: { build: hiccupBuilder(), duration: 0.25 },
+  snore: { build: snoreBuilder(), duration: 1.0 },
+  coin_clink: { build: coinClinkBuilder(), duration: 1.0 },
+  shell_crack: { build: shellCrackBuilder(), duration: 0.3 },
+  // a single clean pitched note: the clean scene steps it up (rate) with every snapped tooth
+  tooth_done: { build: bell(noteFreq(12), 3, 0.7, 0.7), duration: 0.8 },
   door_chime: { build: doorChimeBuilder(), duration: 0.7 },
   cash: { build: cashBuilder(), duration: 0.6 },
   coins: { build: coinsBuilder(), duration: 0.45 },

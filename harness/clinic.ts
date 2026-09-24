@@ -5,6 +5,7 @@
 // URL params: tier=t1..t4  speed=0|1|2|4|8  minute=600 (start clock, the clinic is warmed up to it)
 //   seed=1  owned=1|0  ops=<built operatories>  equip=all|none|some  player=1|0 (you at op 0, hands-on)
 //   clean=1 (hide the harness panels)  focus=<slot>  select=<slot>  standins=1 (ignore GLBs)
+//   case=routine|candy|whitening|braces|pirate|deep (force every patient's case, e.g. to check badges/hats)
 //   gallery=1 (every model on a grid; fallback=1 shows the procedural stand-ins)
 import * as THREE from 'three';
 import { createClinicView, preloadClinic } from '../src/clinic';
@@ -12,10 +13,11 @@ import { makeProp, modelBounds, loadedModel, useStandInsOnly } from '../src/clin
 import { createPerson, type PersonKind } from '../src/clinic/people';
 import { attachRenderer, getRenderer } from '../src/core/renderer';
 import { CLINIC_MODELS, PEOPLE_MODELS } from '../src/data/assets';
-import type { ArchetypeId, ChairTier, Clinic, DayPatient, EquipId, OfficeTierId, Operatory, OpUpgradeId, SimEvent, Staff, StaffRole } from '../src/core/types';
+import type { ArchetypeId, CaseType, ChairTier, Clinic, DayPatient, EquipId, OfficeTierId, Operatory, OpUpgradeId, SimEvent, Staff, StaffRole, TwistId } from '../src/core/types';
 import { OFFICES } from '../src/data/offices';
 import { EQUIP_ORDER } from '../src/data/upgrades';
 import { ARCHETYPES, PATIENT_ARCHETYPES, LAST_NAMES } from '../src/data/patients';
+import { CASES, CASE_ORDER, TWISTS } from '../src/data/cases';
 import { STAFF_FIRST, STAFF_LAST } from '../src/data/staff';
 import { defaultPrices } from '../src/data/services';
 import { makeRng } from '../src/core/rng';
@@ -33,6 +35,24 @@ const opsBuilt = Math.min(office.opSlots, Number(q.get('ops') ?? office.opSlots)
 const equipMode = q.get('equip') ?? (tier === 't1' ? 'some' : 'all');
 if (q.get('clean') === '1') document.body.classList.add('clean');
 const rng = makeRng(seed);
+const forceCase = q.get('case') as CaseType | null;
+const TWIST_IDS = Object.keys(TWISTS) as TwistId[];
+
+/** A plausible case for this archetype (or the forced one from ?case=), for exercising the case badge
+ * and pirate hat. The real mix and any equipment fallback are the sim's job, not this test bed's. */
+function pickCase(archetype: ArchetypeId): CaseType {
+  if (forceCase && (CASE_ORDER as string[]).includes(forceCase)) return forceCase;
+  if (archetype === 'pirate') return 'pirate';
+  const pool = CASE_ORDER.filter((c) => c !== 'pirate');
+  return rng.weighted(pool, (c) => Math.max(0.15, CASES[c].weight[archetype] ?? 0.15));
+}
+function pickTwists(): TwistId[] {
+  const n = rng.chance(0.45) ? (rng.chance(0.25) ? 2 : 1) : 0;
+  const pool = [...TWIST_IDS];
+  const out: TwistId[] = [];
+  for (let i = 0; i < n && pool.length; i++) out.push(pool.splice(rng.int(0, pool.length - 1), 1)[0]);
+  return out;
+}
 
 function runHarness(): void {
   // ------------------------------------------------------------------ fake clinic
@@ -102,6 +122,7 @@ function runHarness(): void {
       service: 'cleaning', addons: [], apptMin: minute, walkIn: false, state: 'entering', since: minute, until: minute + WALK_MIN,
       seat: null, opId: null, staffId: null, awaitingPlayer: false, arrivedMin: minute, waitedMin: 0, patience: Math.min(60, A.patience),
       dirtLevel: rng.next(), quality: null, comfort: null, stars: null, fee: 120, tip: 0, isPlayerPatient: false, mood: 'ok',
+      caseType: pickCase(archetype), twists: pickTwists(),
     };
     clinic.patients.push(p);
     evts.push({ type: 'arrive', clinicId: clinic.id, patientId: p.id });

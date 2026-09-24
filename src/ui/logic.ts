@@ -1,6 +1,7 @@
 // Pure UI helpers (no DOM): labels, summaries, chart geometry. Unit tested in tests/ui.test.ts.
-import type { Clinic, DayPatient, DayReport, SimEvent, ToolSlot } from '../core/types';
+import type { CaseType, Clinic, DayPatient, DayReport, SimEvent, ToolSlot } from '../core/types';
 import type { Mood } from '../data/assets';
+import { CASES, MASTERY_NAMES, MASTERY_PERKS, MASTERY_TIERS } from '../data/cases';
 import { TOOLS, type ToolTier } from '../data/tools';
 
 export function fmtSeconds(sec: number): string {
@@ -67,22 +68,101 @@ export function summarizeEvents(events: SimEvent[], ownedClinicIds: string[] = [
   return s;
 }
 
-/** The next scheduled appointment for the player's chair, or null. */
-export function nextPlayerAppointment(clinic: Clinic | null): DayPatient | null {
+const UPCOMING: DayPatient['state'][] = ['scheduled', 'entering', 'checkin', 'waiting', 'toChair'];
+
+/**
+ * The next patient for the player's chair, or null.
+ * Employee phase: the player's own bookings. Owner phase (`owner`): any patient not seated yet, since the
+ * front desk sends the next waiting patient to the first free chair (yours included).
+ */
+export function nextPlayerAppointment(clinic: Clinic | null, owner = false): DayPatient | null {
   if (!clinic) return null;
   let best: DayPatient | null = null;
   for (const p of clinic.patients) {
-    if (!p.isPlayerPatient && p.staffId !== 'player') continue;
-    if (p.state !== 'scheduled' && p.state !== 'entering' && p.state !== 'checkin' && p.state !== 'waiting' && p.state !== 'toChair') continue;
+    if (!owner && !p.isPlayerPatient && p.staffId !== 'player') continue;
+    if (owner && p.staffId && p.staffId !== 'player') continue;
+    if (!UPCOMING.includes(p.state)) continue;
     if (!best || p.apptMin < best.apptMin) best = p;
   }
   return best;
 }
 
+/** Patients already in the waiting room (owner chair card: "3 patients waiting"). */
+export function waitingCount(clinic: Clinic | null): number {
+  return clinic ? clinic.patients.filter((p) => p.state === 'waiting').length : 0;
+}
+
+/** Profit of a day without purchases, loans and hiring fees (falls back to the cash change on old saves). */
+export function operatingNet(r: DayReport): number {
+  const x = r as DayReport & { opNet?: number };
+  return x.operatingNet ?? x.opNet ?? x.net;
+}
+
 export function avgNet(reports: DayReport[], n: number): number {
   const r = reports.slice(-n);
   if (!r.length) return 0;
-  return r.reduce((s, x) => s + x.net, 0) / r.length;
+  return r.reduce((s, x) => s + operatingNet(x), 0) / r.length;
+}
+
+// ---------------------------------------------------------------- cases and mastery (DESIGN 5.9)
+
+export interface MasteryInfo {
+  count: number;
+  tier: 0 | 1 | 2 | 3;
+  name: string;            // Unranked, Bronze, Silver, Gold
+  nextName: string | null; // the tier after this one
+  nextAt: number | null;   // count needed for the next tier
+  prevAt: number;          // count where the current tier started
+  frac: number;            // count / nextAt (1 at gold)
+  perk: string;            // what the current tier gives
+  nextPerk: string | null;
+}
+
+/** Mastery tier from a count of 3+ star hands-on cleans. */
+export function masteryInfo(count: number, tiers: readonly number[] = MASTERY_TIERS): MasteryInfo {
+  const c = Math.max(0, Math.floor(count || 0));
+  let tier = 0;
+  while (tier < tiers.length && c >= tiers[tier]) tier++;
+  const t = tier as 0 | 1 | 2 | 3;
+  const nextAt = tier < tiers.length ? tiers[tier] : null;
+  const prevAt = tier > 0 ? tiers[tier - 1] : 0;
+  // absolute progress (matches the "4/10" label next to the bar)
+  const frac = nextAt === null ? 1 : Math.max(0, Math.min(1, c / Math.max(1, nextAt)));
+  return {
+    count: c, tier: t, name: MASTERY_NAMES[t], nextName: nextAt === null ? null : MASTERY_NAMES[t + 1],
+    nextAt, prevAt, frac, perk: MASTERY_PERKS[t], nextPerk: nextAt === null ? null : MASTERY_PERKS[t + 1],
+  };
+}
+
+export interface QuickGate { ok: boolean; count: number; need: number; label: string; reason: string }
+
+/** Quick clean needs Bronze mastery of the patient's case (DESIGN 5.9). */
+export function quickCleanGate(mastery: Partial<Record<CaseType, number>> | undefined, caseType: CaseType): QuickGate {
+  const need = MASTERY_TIERS[0];
+  const count = Math.max(0, Math.floor(mastery?.[caseType] ?? 0));
+  const ok = count >= need;
+  const name = CASES[caseType]?.name ?? 'this case';
+  return {
+    ok, count, need,
+    label: ok ? '' : `Bronze needed: ${Math.min(count, need)}/${need}`,
+    reason: ok ? '' : `Clean ${need} ${name} patients by hand with 3 stars or more to unlock Quick clean.`,
+  };
+}
+
+/** Training course window: booked for tomorrow, away today, or neither (the sim's isPresent uses offFrom..offUntilDay). */
+export function courseState(st: { offUntilDay: number; offFrom?: number }, day: number): 'none' | 'booked' | 'away' {
+  if (!(st.offUntilDay >= day)) return 'none';
+  const from = st.offFrom ?? day;
+  return from > day ? 'booked' : 'away';
+}
+
+/** Shade guide color: 1 (brightest) .. 16 (darkest). */
+export function shadeColor(shade: number): string {
+  const t = Math.max(0, Math.min(1, (shade - 1) / 15));
+  const a = [255, 253, 244];   // bright enamel
+  const b = [196, 158, 96];    // coffee yellow
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * Math.pow(t, 0.9)));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
 export interface BarGeom { x: number; y: number; w: number; h: number; value: number; positive: boolean }

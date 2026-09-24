@@ -33,10 +33,10 @@ export function schoolScreen(): Screen {
   function render(): void {
     const step = schoolStep();
     const objectives: [string, string][] = [
-      ['scaler', 'Scrape off every tartar chunk'],
-      ['polisher', 'Polish away plaque and stains'],
-      ['floss', 'Floss out the stuck food'],
-      ['suction', 'Rinse and suction the mess'],
+      ['scaler', 'Pop the tartar on the marked teeth'],
+      ['polisher', 'Polish off plaque and stains'],
+      ['floss', 'Floss out the food'],
+      ['rinse', 'Rinse, then suction the water'],
     ];
     const steps: HTMLElement[] = [];
     ['Practical 1', 'Practical 2', 'Graduation'].forEach((label, i) => {

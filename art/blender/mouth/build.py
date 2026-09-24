@@ -23,10 +23,11 @@ import teeth  # noqa: E402
 import gums  # noqa: E402
 import soft  # noqa: E402
 import tools  # noqa: E402
+import cases  # noqa: E402
 
-# budgets (docs: teeth 800 to 2,500 tris and < 80 KB, gums/frame < 250 KB, tools < 120 KB)
+# budgets (docs: teeth 800 to 2,500 tris and < 80 KB, gums/frame < 250 KB, tools < 120 KB, case props < 100 KB)
 BUDGET = {'tooth': (800, 2500, 80), 'gum': (0, 1e9, 250), 'frame': (0, 1e9, 250), 'tool': (0, 1e9, 120),
-          'soft': (0, 1e9, 120)}
+          'soft': (0, 1e9, 120), 'case': (0, 1e9, 100)}
 
 
 def registry():
@@ -37,6 +38,8 @@ def registry():
         reg[k] = {'fn': fn, 'kind': 'gum', 'uv': False, 'colors': True}
     for k, (fn, colors) in soft.builders().items():
         reg[k] = {'fn': fn, 'kind': 'frame' if k == 'mouth_frame' else 'soft', 'uv': False, 'colors': colors}
+    for k, (fn, colors) in cases.builders().items():
+        reg[k] = {'fn': fn, 'kind': 'case', 'uv': False, 'colors': colors}
     for k, fn in tools.builders().items():
         reg[k] = {'fn': fn, 'kind': 'tool', 'uv': False, 'colors': False, 'thumb': True}
     return reg
@@ -63,6 +66,7 @@ PREVIEW_VIEW = {
     'tooth': (0.9, 0.55, 1.4),
     'gum': (0.0, 1.2, 1.6),
     'frame': (0.25, 0.15, 1.6),
+    'case': (0.7, 0.9, 1.1),
 }
 
 
@@ -77,7 +81,7 @@ def main():
         lib.reset()
         meta['fn']()
         bpy.context.view_layer.update()
-        path = lib.export_glb(key, texcoords=meta['uv'], colors=meta['colors'])
+        path = lib.export_glb(key, texcoords=meta['uv'], colors=meta['colors'], morph=key == 'mouth_frame')
         P = lib.three_points()
         mn, mx = P.min(axis=0), P.max(axis=0)
         kb = os.path.getsize(path) / 1024

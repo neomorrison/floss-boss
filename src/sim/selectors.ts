@@ -86,15 +86,17 @@ export function nextHint(state: GameState): string {
   const c = activeClinic(state);
   if (!c) return '';
   const idx = state.locations.indexOf(c);
-  if (learnable) return 'Spend your skill point';
+  // staffing and demand first: the Skills badge already shows unspent points
   const openOp = c.ops.findIndex((o) => o.staffId == null);
   if (openOp >= 0) return `Hire a hygienist to staff operatory ${openOp + 1}`;
+  if (state.cash < 0) return 'Cash is below zero. Cut costs or take a loan';
   if (!c.staff.some((s) => s.role === 'receptionist')) return 'Hire a receptionist to speed up check-in';
   const last = state.reports[state.reports.length - 1];
   const turned = last?.perLocation.find((l) => l.clinicId === c.id)?.stats.turnedAway ?? 0;
   if (turned > 0 && c.ops.length < OFFICES[c.tier].opSlots) return 'Patients were turned away. Add an operatory';
   if (turned > 0 && c.marketing > 0) return 'Patients were turned away. Hire or grow before more marketing';
   if (c.rating < 3.2 && c.reviews.length >= 5) return 'Rating is slipping. Check prices and staff';
+  if (learnable) return 'Spend your skill point';
   const i = tierIndex(c.tier);
   if (i < TIER_ORDER.length - 1) {
     const q = moveQuote(state, idx, TIER_ORDER[i + 1]);

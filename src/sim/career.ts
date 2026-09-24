@@ -1,6 +1,7 @@
-// Career: new game, migration, school, the hands-on and quick-clean flows. DESIGN 3 and 4.
+// Career: new game, migration, school, the hands-on and quick-clean flows. DESIGN 3, 4 and 5.9.
 import type {
-  AddonId, CleanResult, CleanSetup, Clinic, DayPatient, GameState, HandsOnPayout, Operatory, SimEvent, Staff,
+  AddonId, CaseType, CleanResult, CleanSetup, Clinic, DayPatient, GameState, HandsOnPayout, Operatory, SimEvent, Staff,
+  TwistId,
 } from '../core/types';
 import { hashSeed, clamp } from '../core/rng';
 import {
@@ -8,15 +9,19 @@ import {
 } from '../core/constants';
 import { SAVE_VERSION } from '../core/save';
 import { ARCHETYPES } from '../data/patients';
+import { CASES, CASE_ORDER, MASTERY_NAMES, MASTERY_TIERS, TWISTS } from '../data/cases';
+import { OFFICES } from '../data/offices';
 import { SERVICES, defaultPrices } from '../data/services';
+import { SKILLS } from '../data/skills';
 import { CHAIRS } from '../data/upgrades';
 import {
-  S, SimPatient, addCash, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, withRng,
+  S, SimClinic, SimPatient, addCash, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, priceOf, withRng,
 } from './internal';
 import { autoQuality, employeeRate, gainXp, starsFor, title } from './progress';
-import { addonMinutes, buildSetup, difficultyScale, handsFee } from './patients';
+import { addonMinutes, downgradeCase, handsFee } from './patients';
+import { buildCaseSetup, caseLevel, masteryCount, masteryTier } from './cases';
 import { addReview, computeRating, reviewStars, shiftBonusCheck, tickWorld, walkoutFromChair } from './clinic';
-import { bookDay } from './booking';
+import { bookDay, onlyPlayerHands } from './booking';
 import { checkAchievements, makeGoals, progressGoal } from './goals';
 
 // ------------------------------------------------------------------ lifecycle
@@ -40,6 +45,7 @@ export function newGame(opts: { name: string; avatar: number; seed?: number; now
       tools: { scaler: 1, polisher: 1, floss: 1, suction: 1, rinse: 1 },
       extras: [],
       numbingGel: 0,
+      mastery: {},
       useGel: true,
       title: 'Hygiene Student',
     },
@@ -67,76 +73,121 @@ export function newGame(opts: { name: string; avatar: number; seed?: number; now
   };
 }
 
+
 const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+const obj = <T extends object>(v: unknown): Partial<T> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Partial<T>) : {});
+const isCase = (v: unknown): v is CaseType => typeof v === 'string' && (CASE_ORDER as string[]).includes(v);
+
+function fixStaff(s: Staff): void {
+  s.traits = arr<Staff['traits'][number]>(s.traits);
+  s.skill = num(s.skill, 50); s.speed = num(s.speed, 50); s.bedside = num(s.bedside, 50);
+  s.salary = num(s.salary, 0);
+  s.ask = num(s.ask, s.salary);
+  s.morale = num(s.morale, 60);
+  s.level = num(s.level, 1);
+  s.xp = num(s.xp, 0);
+  s.hiredDay = num(s.hiredDay, 0);
+  s.offUntilDay = num(s.offUntilDay, 0);
+  s.patientsToday = num(s.patientsToday, 0);
+  s.task ??= 'idle';
+  s.targetOpId ??= null;
+  s.busyUntil ??= null;
+}
 
 function fixClinic(c: Clinic): void {
-  c.ops ??= [];
-  c.equipment ??= [];
-  c.staff ??= [];
-  c.prices = { ...defaultPrices(), ...(c.prices ?? {}) };
-  c.marketing ??= 0;
+  if (!(c.tier in OFFICES)) c.tier = 't1';
+  c.ops = arr<Operatory>(c.ops).filter((o) => o && typeof o === 'object');
+  c.equipment = arr<Clinic['equipment'][number]>(c.equipment);
+  c.staff = arr<Staff>(c.staff).filter((s) => s && typeof s === 'object');
+  c.prices = { ...defaultPrices(), ...obj<Clinic['prices']>(c.prices) };
+  c.marketing = clamp(Math.round(num(c.marketing, 0)), 0, 3) as Clinic['marketing'];
   c.rating = num(c.rating, 3.5);
-  c.reviews ??= [];
+  c.reviews = arr<Clinic['reviews'][number]>(c.reviews);
   c.served = num(c.served, 0);
-  c.patients ??= [];
-  c.day = { ...emptyDayStats(), ...(c.day ?? {}) };
+  c.patients = arr<DayPatient>(c.patients).filter((p) => p && typeof p === 'object');
+  c.day = { ...emptyDayStats(), ...obj<Clinic['day']>(c.day) };
   c.checkinBusyUntil = num(c.checkinBusyUntil, 0);
-  for (const o of c.ops) {
-    o.chair ??= 'basic';
-    o.upgrades ??= [];
+  c.ops.forEach((o, i) => {
+    o.slot = num(o.slot, i);
+    o.chair = o.chair in CHAIRS ? o.chair : 'basic';
+    o.upgrades = arr<Operatory['upgrades'][number]>(o.upgrades);
     o.staffId ??= null;
     o.assistantId ??= null;
     o.patientId ??= null;
     o.playerMode ??= 'hands';
-  }
-  for (const s of c.staff) {
-    s.traits ??= [];
-    s.morale = num(s.morale, 60);
-    s.level = num(s.level, 1);
-    s.xp = num(s.xp, 0);
-    s.offUntilDay = num(s.offUntilDay, 0);
-    s.patientsToday = num(s.patientsToday, 0);
-    s.task ??= 'idle';
-    s.targetOpId ??= null;
-    s.busyUntil ??= null;
-    s.ask = num(s.ask, s.salary);
-  }
+  });
+  for (const s of c.staff) fixStaff(s);
   for (const p0 of c.patients) {
     const p = p0 as SimPatient;
-    p.addons ??= [];
+    p.addons = arr<AddonId>(p.addons);
     p.waitedMin = num(p.waitedMin, 0);
     p.wbase = num(p.wbase, p.waitedMin);
     p.billed = num(p.billed, 0);
     p.arriveAt = num(p.arriveAt, p.apptMin);
+    p.caseType = isCase(p.caseType) ? p.caseType : 'routine';
+    p.twists = arr<TwistId>(p.twists).filter((t) => t in TWISTS);
     if (p.state === 'inChair' && !p.stage) p.stage = p.awaitingPlayer ? 'await' : 'clean';
   }
 }
 
-/** Fill in fields missing from older saves. */
+/** Fill in fields missing from older (or damaged, or imported) saves. */
 export function migrate(state: GameState): GameState {
-  const fresh = newGame({ name: state?.player?.name ?? 'Hygienist', avatar: 0, seed: num(state?.seed, 1), nowMs: num(state?.createdAt, 0) });
-  const s = state as GameState;
+  const s = (state && typeof state === 'object' ? state : {}) as GameState;
+  const fresh = newGame({ name: obj<GameState['player']>(s.player).name ?? 'Hygienist', avatar: 0, seed: num(s.seed, 1), nowMs: num(s.createdAt, 0) });
   for (const k of Object.keys(fresh) as (keyof GameState)[]) {
     if ((s as any)[k] === undefined || (s as any)[k] === null && (fresh as any)[k] !== null) (s as any)[k] = (fresh as any)[k];
   }
-  s.player = { ...fresh.player, ...s.player, tools: { ...fresh.player.tools, ...(s.player?.tools ?? {}) } };
-  s.stats = { ...fresh.stats, ...s.stats };
-  s.flags ??= {};
+  const pl = obj<GameState['player']>(s.player);
+  s.player = { ...fresh.player, ...pl, tools: { ...fresh.player.tools, ...obj<GameState['player']['tools']>(pl.tools) } };
+  const P = s.player;
+  P.name = typeof P.name === 'string' && P.name ? P.name.slice(0, 24) : 'Hygienist';
+  P.avatar = clamp(Math.round(num(P.avatar, 0)), 0, 3);
+  P.level = Math.max(1, Math.round(num(P.level, 1)));
+  P.xp = Math.max(0, num(P.xp, 0));
+  P.skillPoints = Math.max(0, Math.round(num(P.skillPoints, 0)));
+  P.skills = arr<string>(P.skills).filter((id) => SKILLS.some((k) => k.id === id)) as GameState['player']['skills'];
+  P.extras = arr<GameState['player']['extras'][number]>(P.extras).filter((x) => typeof x === 'string');
+  P.numbingGel = Math.max(0, Math.round(num(P.numbingGel, 0)));
+  for (const k of Object.keys(fresh.player.tools) as (keyof GameState['player']['tools'])[]) P.tools[k] = Math.max(1, Math.round(num(P.tools[k], 1)));
+  const m = obj<Record<string, unknown>>(P.mastery);
+  P.mastery = {};
+  for (const ct of CASE_ORDER) { const v = num(m[ct], 0); if (v > 0) P.mastery[ct] = Math.floor(v); }
+  s.stats = { ...fresh.stats, ...obj<GameState['stats']>(s.stats) };
+  for (const k of Object.keys(fresh.stats) as (keyof GameState['stats'])[]) s.stats[k] = num(s.stats[k], 0);
+  s.flags = obj<GameState['flags']>(s.flags) as GameState['flags'];
   s.cash = num(s.cash, 0);
   s.loan = Math.max(0, num(s.loan, 0));
   s.minute = num(s.minute, OPEN_MIN);
   s.day = Math.max(1, Math.round(num(s.day, 1)));
   s.rng = num(s.rng, fresh.rng) >>> 0;
   s.nextId = Math.max(1, num(s.nextId, 1));
-  if (!Array.isArray(s.locations)) s.locations = [];
+  s.goals = arr<GameState['goals'][number]>(s.goals).filter((g) => g && typeof g === 'object');
+  s.candidates = arr<GameState['candidates'][number]>(s.candidates).filter((c) => c && typeof c === 'object');
+  for (const c of s.candidates) { fixStaff(c); c.expiresDay = num(c.expiresDay, s.day); }
+  s.reports = arr<GameState['reports'][number]>(s.reports).filter((r) => r && typeof r === 'object');
+  s.ledger = arr<GameState['ledger'][number]>(s.ledger).filter((e) => e && typeof e === 'object' && Number.isFinite(e.amount));
+  s.achievements = arr<string>(s.achievements).filter((a) => typeof a === 'string');
+  s.locations = arr<Clinic>(s.locations).filter((c) => c && typeof c === 'object');
+  if (s.phase !== 'school' && s.phase !== 'employee' && s.phase !== 'owner') s.phase = 'school';
+  if (s.employer && typeof s.employer !== 'object') s.employer = null;
   if (s.employer) fixClinic(s.employer);
   for (const c of s.locations) fixClinic(c);
-  if (s.phase === 'owner') s.active = clamp(num(s.active, 0), 0, Math.max(0, s.locations.length - 1));
-  else if (s.phase === 'employee') s.active = -1;
+  // an owner save without a location, or an employee save without an employer, would end every day at once
+  if (s.phase === 'owner' && !s.locations.length) s.phase = 'employee';
+  if (s.phase === 'employee' && !s.employer) {
+    s.employer = makeEmployer(s);
+    s.dayOver = false;
+    s.minute = OPEN_MIN;
+    withRng(s, (rng) => bookDay(s, rng));
+  }
+  if (s.phase === 'owner') s.active = clamp(Math.round(num(s.active, 0)), 0, Math.max(0, s.locations.length - 1));
+  else s.active = -1;
   s.version = SAVE_VERSION;
   s.player.title = title(s);
   return s;
 }
+
 
 // ------------------------------------------------------------------ employer
 
@@ -175,25 +226,28 @@ function makeEmployer(state: GameState): Clinic {
 
 // ------------------------------------------------------------------ school
 
+// ------------------------------------------------------------------ school
+
+/** School practicals: a routine case on marked teeth only; practical 1 is very light and guided. */
 export function schoolSetup(state: GameState, step: 1 | 2): CleanSetup {
-  const setup = buildSetup(state, {
-    patientId: `school${step}`, name: 'Dennis the Dummy', archetype: 'mannequin', service: 'cleaning',
-    dirtLevel: step === 1 ? 0 : 0.5, tutorial: step === 1, dirtScale: step === 1 ? 0.75 : 1, consumeGel: false,
+  const setup = buildCaseSetup(state, {
+    patientId: `school${step}`, name: 'Dennis the Dummy', archetype: 'mannequin', service: 'cleaning', caseType: 'routine',
+    twists: [], dirtLevel: 0.5, level: 1, tutorial: step === 1, consumeGel: false, firstOfCase: false, school: step,
   });
   setup.seed = hashSeed(state.seed, 'school', step);
   return setup;
 }
 
 function emptyPayout(): HandsOnPayout {
-  return { pay: 0, tip: 0, bonus: 0, xp: 0, stars: 0, quality: 0, levelUps: 0, addons: [], lines: [] };
+  return { pay: 0, tip: 0, bonus: 0, xp: 0, stars: 0, quality: 0, levelUps: 0, addons: [], lines: [], treasure: 0, mastery: null };
 }
 
 function recordClean(state: GameState, r: CleanResult, ev: SimEvent[], archetype: string | null): void {
   const st = state.stats;
   const done = r.quit === 'done';
   if (done) st.cleanings += 1;
-  st.chunks += Math.max(0, Math.round(r.chunks || 0));
-  st.bestCombo = Math.max(st.bestCombo, Math.round(r.bestCombo || 0));
+  st.chunks += Math.max(0, Math.round(num(r.chunks, 0)));
+  st.bestCombo = Math.max(st.bestCombo, Math.round(num(r.bestCombo, 0)));
   if (done && r.perfect) st.perfect += 1;
   if (done && r.seconds > 0 && (st.fastestClean === 0 || r.seconds < st.fastestClean)) st.fastestClean = Math.round(r.seconds);
   if (done && r.stars === 5) st.fiveStars += 1;
@@ -232,7 +286,7 @@ export function completeSchool(state: GameState, step: 1 | 2, result: CleanResul
   return out;
 }
 
-const SIGNING_BONUS = 250;
+const SIGNING_BONUS = 200;
 
 function graduate(state: GameState): void {
   state.phase = 'employee';
@@ -256,17 +310,38 @@ export function playerQueue(state: GameState): DayPatient[] {
   return c.patients.filter((p) => p.state === 'inChair' && p.awaitingPlayer);
 }
 
+/** In your chair and waiting for you (not already cleaned, not walking out). */
+function ready(p: SimPatient): boolean {
+  return p.state === 'inChair' && p.stage === 'await';
+}
+
+/** Owner phase: a case the operatory or office cannot do becomes a routine cleaning. */
+function checkCaseSupport(c: Clinic, p: SimPatient): void {
+  if (!c.ownedByPlayer) return;
+  const req = CASES[p.caseType ?? 'routine']?.requires ?? null;
+  if (req === 'whiteningLamp' && !opById(c, p.opId)?.upgrades.includes('whiteningLamp')) downgradeCase(c, p);
+  else if (req === 'deepCert' && !c.equipment.includes('deepCert')) downgradeCase(c, p);
+}
+
+function setupFor(state: GameState, c: Clinic, p: SimPatient, consumeGel: boolean): CleanSetup {
+  const ct: CaseType = p.caseType ?? 'routine';
+  return buildCaseSetup(state, {
+    patientId: p.id, name: p.name, archetype: p.archetype, service: p.service, caseType: ct, twists: p.twists ?? [],
+    dirtLevel: p.dirtLevel, level: caseLevel(state, c), tutorial: false, consumeGel,
+    firstOfCase: !state.flags[`case_seen_${ct}`],
+  });
+}
+
+/** Build the clean for a patient waiting in your chair. Throws when the patient is not ready. */
 export function beginHandsOn(state: GameState, patientId: string): CleanSetup {
   const f = findPatient(state, patientId);
   if (!f) throw new Error('Patient not found');
-  const { p } = f;
-  const consume = !(p as SimPatient & { gel?: boolean }).gel;
-  const setup = buildSetup(state, {
-    patientId: p.id, name: p.name, archetype: p.archetype, service: p.service, dirtLevel: p.dirtLevel,
-    tutorial: false, dirtScale: difficultyScale(state), consumeGel: consume,
-  });
-  if (setup.tools.numbingGel) (p as SimPatient & { gel?: boolean }).gel = true;
-  else if ((p as SimPatient & { gel?: boolean }).gel) setup.tools.numbingGel = true;
+  const { clinic: c, p } = f;
+  if (!ready(p)) throw new Error('This patient is not ready yet');
+  checkCaseSupport(c, p);
+  const setup = setupFor(state, c, p, !p.gel);
+  if (setup.tools.numbingGel) p.gel = true;
+  else if (p.gel) setup.tools.numbingGel = true;
   return setup;
 }
 
@@ -275,12 +350,14 @@ function speedBonus(setupPar: number, seconds: number): number {
   return clamp((setupPar - seconds) / setupPar, 0, 1);
 }
 
-function parFor(state: GameState, p: SimPatient): number {
-  const s = buildSetup(state, {
-    patientId: p.id, name: p.name, archetype: p.archetype, service: p.service, dirtLevel: p.dirtLevel,
-    tutorial: false, dirtScale: difficultyScale(state), consumeGel: false,
-  });
-  return s.parSeconds;
+/** Employee wage for a patient: rate(title) * (0.4 + 0.8 q) * case pay (DESIGN 3.2, 5.5). */
+function wage(state: GameState, ct: CaseType, q: number): number {
+  return employeeRate(state.player.level) * (0.4 + 0.8 * q) * (CASES[ct]?.payMult ?? 1);
+}
+
+/** Treasure bonus for a pirate's doubloon: scales with level. */
+export function treasureBonus(level: number): number {
+  return 30 + 10 * Math.max(1, level);
 }
 
 /**
@@ -289,35 +366,41 @@ function parFor(state: GameState, p: SimPatient): number {
  */
 function settle(state: GameState, c: Clinic, p: SimPatient, o: {
   quality: number; comfort: number; stars: number; tip: number; quick: boolean; ffMinutes: number; ev: SimEvent[];
+  payMult: number;
 }): HandsOnPayout {
   const out = emptyPayout();
   const employee = state.phase === 'employee';
   const q = o.quality;
-  const xpFull = 10 + 30 * q + (o.stars === 5 && !o.quick ? 5 : 0);
-  const xp = Math.round(o.quick ? xpFull / 2 : xpFull);
+  // quick clean: no XP (DESIGN 5.9); hands-on: 10 + 30 q (+5 for five stars)
+  const xp = o.quick ? 0 : Math.round(10 + 30 * q + (o.stars === 5 ? 5 : 0));
   out.quality = q;
   out.stars = o.stars;
   if (employee) {
-    const pay = Math.round(employeeRate(state.player.level) * (0.4 + 0.8 * q));
+    const pay = Math.round(wage(state, p.caseType ?? 'routine', q) * o.payMult);
     out.pay = pay;
     addCash(state, pay, 'Wages');
     if (o.tip > 0) { out.tip = o.tip; addCash(state, o.tip, 'Tips'); }
     p.seen = true;
-    progressGoal(state, 'served', 1, o.ev);
-    if (!o.quick && o.stars === 5) {
-      state.stats.fiveStarStreak += 1;
-      if (state.stats.fiveStarStreak % 5 === 0) {
-        out.bonus += 150;
-        addCash(state, 150, 'Bonus');
-        out.lines.push(`${EMPLOYER_BOSS.replace('Ruth ', '')} is impressed. Bonus paid.`);
+    if (!o.quick) {
+      progressGoal(state, 'served', 1, o.ev);
+      if (o.stars === 5) {
+        state.stats.fiveStarStreak += 1;
+        if (state.stats.fiveStarStreak % 5 === 0) {
+          out.bonus += 150;
+          addCash(state, 150, 'Bonus');
+          out.lines.push(`${EMPLOYER_BOSS.replace('Ruth ', '')} is impressed. Bonus paid.`);
+        }
+      } else {
+        state.stats.fiveStarStreak = 0;
       }
-    } else if (!o.quick) {
-      state.stats.fiveStarStreak = 0;
     }
     const sb = shiftBonusCheck(state, c, o.ev);
     if (sb) { out.bonus += sb; out.lines.push('Full shift seen. Shift bonus paid.'); }
   } else {
-    const fee = handsFee(c, p);
+    const base = handsFee(c, p);
+    const extra = Math.round(base * (o.payMult - 1));   // silver mastery: a master's rate
+    p.fee += extra;
+    const fee = base + extra;
     out.pay = fee;
     out.addons = p.addons.filter((a) => !SERVICES[a].requiresDentist);
     p.billed = fee;
@@ -341,11 +424,13 @@ function settle(state: GameState, c: Clinic, p: SimPatient, o: {
   p.stage = 'clean';
   p.since = q64(state.minute);
   p.until = p.since + Math.max(5, o.ffMinutes * 0.8 + addonMinutes(p));
-  // review from the hands-on quality and comfort
+  // review from the hands-on quality and comfort; the owner's own clean counts double
+  const bossClean = !employee && !o.quick && c.ownedByPlayer;
   withRng(state, (rng) => {
-    const always = ARCHETYPES[p.archetype].reviewWeight >= 3;
+    const always = ARCHETYPES[p.archetype].reviewWeight >= 3 || bossClean;
     if (always || rng.chance(0.6)) {
-      addReview(state, c, p, reviewStars(q, o.comfort, p.waitedMin, p.patience, c.prices[p.service] ?? 1), o.ev);
+      const stars = reviewStars(q, o.comfort, p.waitedMin, p.patience, priceOf(c, p, p.service));
+      addReview(state, c, p, stars, o.ev, bossClean && stars >= 4 ? 'The owner cleaned my teeth personally. What a treat.' : undefined, bossClean ? 2 : 1);
     }
   });
   p.reviewed = true;
@@ -355,7 +440,7 @@ function settle(state: GameState, c: Clinic, p: SimPatient, o: {
 export function completeHandsOn(state: GameState, patientId: string, result: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } {
   const ev: SimEvent[] = [];
   const f = findPatient(state, patientId);
-  if (!f || f.p.state !== 'inChair') return { payout: emptyPayout(), events: ev };
+  if (!f || !ready(f.p)) return { payout: emptyPayout(), events: ev };
   const { clinic: c, p } = f;
   if (result.quit === 'abort') {
     // back to waiting in the chair; no pay, no fast-forward
@@ -363,6 +448,8 @@ export function completeHandsOn(state: GameState, patientId: string, result: Cle
     p.stage = 'await';
     return { payout: emptyPayout(), events: ev };
   }
+  const ct: CaseType = p.caseType ?? 'routine';
+  state.flags[`case_seen_${ct}`] = true;
   recordClean(state, result, ev, p.archetype);
   if (result.quit === 'walkout') {
     const out = emptyPayout();
@@ -381,32 +468,77 @@ export function completeHandsOn(state: GameState, patientId: string, result: Cle
   }
   const q = clamp(num(result.quality, 0), 0, 1);
   const comfort = clamp(num(result.comfort, 60) / 100, 0, 1);
+  const stars = clamp(Math.round(num(result.stars, starsFor(q))), 1, 5);
   const a = ARCHETYPES[p.archetype];
-  const base = state.phase === 'employee' ? 120 : Math.round(SERVICES[p.service].fee * (c.prices[p.service] ?? 1));
-  const tipMult = hasSkill(state, 'tipMagnet') ? 1.25 : 1;
-  const tip = Math.round(base * a.tipRate * Math.max(0, (q - 0.6) / 0.4) * (1 + 0.5 * speedBonus(parFor(state, p), result.seconds)) * tipMult);
-  const payout = settle(state, c, p, { quality: q, comfort, stars: result.stars, tip, quick: false, ffMinutes: HANDS_ON_MINUTES[p.service], ev });
+  const count0 = masteryCount(state, ct);
+  const tier0 = masteryTier(count0);
+  const setup = setupFor(state, c, p, false);
+  const bonusMet = !!result.bonusMet && setup.bonus != null;
+  const employee = state.phase === 'employee';
+  const base = employee ? Math.round(120 * (CASES[ct]?.payMult ?? 1)) : Math.round(SERVICES[p.service].fee * priceOf(c, p, p.service));
+  const tipMult = (hasSkill(state, 'tipMagnet') ? 1.25 : 1) * (tier0 >= 3 ? 1.2 : 1) * (bonusMet ? 1.25 : 1);
+  const tip = Math.round(base * a.tipRate * Math.max(0, (q - 0.6) / 0.4) * (1 + 0.5 * speedBonus(setup.parSeconds, num(result.seconds, 0))) * tipMult);
+  const payout = settle(state, c, p, {
+    quality: q, comfort, stars, tip, quick: false, ffMinutes: HANDS_ON_MINUTES[p.service], ev, payMult: tier0 >= 2 ? 1.1 : 1,
+  });
+  // pirate treasure
+  if (result.treasure && ct === 'pirate') {
+    const t = treasureBonus(state.player.level);
+    payout.treasure = t;
+    addCash(state, t, 'Treasure');
+    if (!employee) c.day.tips += t;
+    payout.lines.push('A gold doubloon. Finders keepers.');
+  }
+  // mastery (DESIGN 5.9): every hands-on clean of 3+ stars counts toward the case
+  const count = count0 + (stars >= 3 ? 1 : 0);
+  if (count !== count0) state.player.mastery[ct] = count;
+  const tier = masteryTier(count);
+  payout.mastery = { caseType: ct, count, tier, tierUp: tier > tier0 };
+  if (tier > tier0) payout.lines.push(`${MASTERY_NAMES[tier]} mastery: ${CASES[ct].name}.`);
+  if (bonusMet) payout.lines.push('Bonus met. Tips up 25%.');
+  if (!employee && c.ownedByPlayer) (c as SimClinic).bossCleans = ((c as SimClinic).bossCleans ?? 0) + 1;
   if (result.perfect) payout.lines.push('Sparkling smile.');
   if (tip > 0 && q >= 0.9) payout.lines.push(`${p.name.split(' ')[0]} left a big tip.`);
   checkAchievements(state, ev);
-  const more = tickWorld(state, HANDS_ON_MINUTES[p.service]);
+  const more = tickWorld(state, HANDS_ON_MINUTES[p.service], holdFor(state, c));
   return { payout, events: [...ev, ...more] };
 }
 
+/** A clinic where only your hands-on chair serves keeps its waiting room's patience during your fast-forward. */
+function holdFor(state: GameState, c: Clinic): string[] {
+  return c.ownedByPlayer && onlyPlayerHands(state, c) ? [c.id] : [];
+}
+
+/** Can Quick clean take this patient: Bronze mastery of the patient's case (DESIGN 5.9). */
+export function quickCleanStatus(state: GameState, patientId: string): { ok: boolean; count: number; need: number } {
+  const need = MASTERY_TIERS[0];
+  const f = findPatient(state, patientId);
+  if (!f) return { ok: false, count: 0, need };
+  const count = masteryCount(state, f.p.caseType ?? 'routine');
+  return { ok: count >= need && ready(f.p), count, need };
+}
+
+/**
+ * Hand the patient to a colleague (employee) or clean on autopilot (owner). Needs Bronze on the case.
+ * Pays 50% of the wage (the owner bills the fee), no tip, no XP, no mastery, streak or goals.
+ */
 export function quickClean(state: GameState, patientId: string): { payout: HandsOnPayout; events: SimEvent[] } {
   const ev: SimEvent[] = [];
   const f = findPatient(state, patientId);
-  if (!f || f.p.state !== 'inChair') return { payout: emptyPayout(), events: ev };
+  if (!f || !ready(f.p) || !quickCleanStatus(state, patientId).ok) return { payout: emptyPayout(), events: ev };
   const { clinic: c, p } = f;
+  checkCaseSupport(c, p);
   const q = autoQuality(state);
   const op = opById(c, p.opId);
   const chair = op ? CHAIRS[op.chair] : CHAIRS.basic;
   const comfort = clamp(0.4 + 0.45 * 0.6 + chair.comfort + (op?.upgrades.includes('tv') ? 0.08 : 0), 0, 1);
   const stars = starsFor(q);
   state.stats.quickCleans += 1;
-  const payout = settle(state, c, p, { quality: q, comfort, stars, tip: 0, quick: true, ffMinutes: QUICK_CLEAN_MINUTES, ev });
+  const payout = settle(state, c, p, {
+    quality: q, comfort, stars, tip: 0, quick: true, ffMinutes: QUICK_CLEAN_MINUTES, ev, payMult: state.phase === 'employee' ? 0.5 : 1,
+  });
   checkAchievements(state, ev);
-  const more = tickWorld(state, QUICK_CLEAN_MINUTES);
+  const more = tickWorld(state, QUICK_CLEAN_MINUTES, holdFor(state, c));
   return { payout, events: [...ev, ...more] };
 }
 

@@ -313,3 +313,41 @@ textarea.input { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace
 .anim-rise { animation: rise-in var(--t-slow) var(--ease-out) both; }
 .anim-bump { animation: bump 380ms var(--spring); }
 .anim-shake { animation: shake-x 380ms var(--ease-out); }
+
+/* ------------------------------------------------------------ case tones, case tiles, mastery medals */
+.tone-mint { --tone: var(--mint); --tone-l: var(--mint-l); --tone-d: var(--mint-dd); }
+.tone-gum { --tone: var(--gum); --tone-l: var(--gum-l); --tone-d: var(--gum-d); }
+.tone-sky { --tone: var(--sky); --tone-l: var(--sky-l); --tone-d: #1F7FB5; }
+.tone-grape { --tone: var(--grape); --tone-l: var(--grape-l); --tone-d: #5B47C9; }
+.tone-sun { --tone: var(--sun); --tone-l: var(--sun-l); --tone-d: var(--sun-dd); }
+.tone-coral { --tone: var(--coral); --tone-l: var(--coral-l); --tone-d: var(--coral-d); }
+
+.case-tile {
+  width: var(--cz, 44px); height: var(--cz, 44px); flex: none;
+  display: inline-grid; place-items: center;
+  border-radius: calc(var(--cz, 44px) * .32);
+  background: var(--tone-l, var(--mint-l)); color: var(--tone-d, var(--mint-dd));
+  box-shadow: inset 0 -3px 0 rgba(22, 50, 58, .07), 0 0 0 2px rgba(255, 255, 255, .8);
+}
+.case-tile .icon { width: 62%; height: 62%; }
+.chip.case-chip .icon { width: 16px; height: 16px; }
+
+.tier-medal {
+  width: var(--mz, 40px); height: var(--mz, 40px); flex: none;
+  display: inline-grid; place-items: center; border-radius: 50%;
+  color: #fff;
+}
+.tier-medal .icon { width: 56%; height: 56%; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .25)); }
+.tier-medal.tier-0 { background: var(--surface-2); color: var(--ink-4); box-shadow: inset 0 0 0 2px var(--line-2); }
+.tier-medal.tier-0 .icon { filter: none; }
+.tier-medal.tier-1 { background: radial-gradient(circle at 35% 30%, #F6CBA3 0%, #D08849 55%, #9C5B2B 100%); box-shadow: 0 3px 0 #7A4521, inset 0 0 0 2px rgba(255, 255, 255, .35); }
+.tier-medal.tier-2 { background: radial-gradient(circle at 35% 30%, #F4F8F9 0%, #A9BCC4 50%, #6F868F 100%); box-shadow: 0 3px 0 #566A72, inset 0 0 0 2px rgba(255, 255, 255, .5); }
+.tier-medal.tier-3 { background: radial-gradient(circle at 35% 30%, #FFEDB5 0%, var(--sun) 50%, var(--sun-d) 100%); box-shadow: 0 3px 0 var(--sun-dd), inset 0 0 0 2px rgba(255, 255, 255, .45); }
+.bar.tier-1 > i { background: linear-gradient(90deg, #EBB283, #C9793C); }
+.bar.tier-2 > i { background: linear-gradient(90deg, #D6E0E4, #8398A1); }
+.bar.tier-3 > i, .bar.tier-4 > i { background: linear-gradient(90deg, var(--sun), var(--sun-d)); }
+
+/* twist chips explain themselves on tap: a taller invisible hit area keeps them easy to hit */
+.chip.twist-chip { position: relative; height: 26px; padding: 0 10px; font-size: 12.5px; background: var(--grape-l); color: #5B47C9; border-color: transparent; cursor: pointer; }
+.chip.twist-chip::after { content: ''; position: absolute; inset: -9px -3px; }
+.chip.twist-chip .icon { width: 14px; height: 14px; }

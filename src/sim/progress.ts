@@ -49,7 +49,7 @@ export function title(state: GameState): string {
 
 /** Employee hourly-ish rate per cleaning by title (DESIGN 3.2). */
 export function employeeRate(level: number): number {
-  return level >= 7 ? 120 : level >= 4 ? 95 : 75;
+  return level >= 7 ? 115 : level >= 4 ? 90 : 70;
 }
 
 export function autoQuality(state: GameState): number {
@@ -81,7 +81,7 @@ export function starsFor(quality: number): number {
 export function avgNet(state: GameState, n: number): number {
   const reps = (state.reports as SimReport[]).filter((r) => r.phase === 'owner').slice(-n);
   if (!reps.length) return 0;
-  return reps.reduce((s, r) => s + (r.opNet ?? r.net), 0) / reps.length;
+  return reps.reduce((s, r) => s + (r.operatingNet ?? r.opNet ?? r.net), 0) / reps.length;
 }
 
 export function equipmentValue(c: GameState['locations'][number]): number {

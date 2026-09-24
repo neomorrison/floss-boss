@@ -3,9 +3,10 @@
 import { h } from './dom';
 
 const S = (d: string) => `<path d="${d}"/>`;
+const TOOTH = 'M7.2 3.2C4.6 3.2 3 5.2 3 8.1c0 3 1.5 5 2.3 8.4.5 2.3 1.2 4.3 2.7 4.3 1.9 0 1.9-3 2.4-5 .3-1.1.8-1.7 1.6-1.7s1.3.6 1.6 1.7c.5 2 .5 5 2.4 5 1.5 0 2.2-2 2.7-4.3C19.5 13.1 21 11.1 21 8.1c0-2.9-1.6-4.9-4.2-4.9-2 0-3 1.1-4.8 1.1S9.2 3.2 7.2 3.2z';
 
 const PATHS: Record<string, string> = {
-  tooth: S('M7.2 3.2C4.6 3.2 3 5.2 3 8.1c0 3 1.5 5 2.3 8.4.5 2.3 1.2 4.3 2.7 4.3 1.9 0 1.9-3 2.4-5 .3-1.1.8-1.7 1.6-1.7s1.3.6 1.6 1.7c.5 2 .5 5 2.4 5 1.5 0 2.2-2 2.7-4.3C19.5 13.1 21 11.1 21 8.1c0-2.9-1.6-4.9-4.2-4.9-2 0-3 1.1-4.8 1.1S9.2 3.2 7.2 3.2z'),
+  tooth: S(TOOTH),
   clinic: S('M3.5 10.5 12 4l8.5 6.5') + S('M5.5 9v11h13V9') + S('M12 12.5v5M9.5 15h5'),
   tools: S('M4 20l8.2-8.2') + S('M12.2 11.8c.9-2.4 2.6-5.2 4.9-6.6 1.4-.8 3 .6 2.3 2-1.3 2.4-4.1 4.1-6.5 5') + S('M13.5 10.5l-1.5-1.5'),
   skills: S('M12 3.5l2.1 5.4 5.4 2.1-5.4 2.1L12 18.5l-2.1-5.4L4.5 11l5.4-2.1z') + S('M19 16.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z'),
@@ -82,6 +83,18 @@ const PATHS: Record<string, string> = {
   pause: `<rect x="6.2" y="5" width="4.2" height="14" rx="1.3" fill="currentColor" stroke="none"/><rect x="13.6" y="5" width="4.2" height="14" rx="1.3" fill="currentColor" stroke="none"/>`,
   playFill: `<path fill="currentColor" stroke="none" d="M8 4.8c0-.8.9-1.3 1.6-.9l10 6.2c.7.4.7 1.4 0 1.8l-10 6.2c-.7.4-1.6-.1-1.6-.9z"/>`,
   dot: `<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>`,
+
+  // ---- case icons (DESIGN 5.5). Scaled groups keep the 2.1 stroke weight of the set.
+  caseRoutine: `<g transform="translate(.5 5) scale(.74)" stroke-width="2.84">${S(TOOTH)}</g>` + S('M18.5 1.8l1 2.6 2.6 1-2.6 1-1 2.6-1-2.6-2.6-1 2.6-1z'),
+  caseCandy: `<circle cx="9" cy="16" r="3.9"/>` + S('M5.3 14.6 1.9 12.4v7.2l3.4-2.2M12.7 14.6l3.4-2.2v7.2l-3.4-2.2') + S('M7.6 18.6c.4-1.9 1.4-3.6 3-4.8')
+    + `<circle cx="18.2" cy="7.4" r="2.7"/>` + S('M15.6 6l-1.5-.8M15.6 8.8l-1.5.8M20.8 6l1.5-.8M20.8 8.8l1.5.8M17.3 4.9l-.7-1.9M19.1 4.9l.7-1.9'),
+  caseWhitening: `<g transform="translate(4.6 7.6) scale(.62)" stroke-width="3.39">${S(TOOTH)}</g>` + S('M12 1.8v2.4M5 4.3l1.6 1.6M19 4.3l-1.6 1.6M2.4 10.2h2.2M21.6 10.2h-2.2'),
+  caseBraces: `<rect x="3.2" y="4.5" width="7.6" height="15" rx="3.4"/><rect x="13.2" y="4.5" width="7.6" height="15" rx="3.4"/>` + S('M1.8 12h20.4')
+    + `<rect x="5.3" y="10" width="3.4" height="4" rx=".8" fill="currentColor"/><rect x="15.3" y="10" width="3.4" height="4" rx=".8" fill="currentColor"/>`,
+  casePirate: S('M5 14.2C5 9 8.1 5 12 5s7 4 7 9.2') + S('M2.4 12.8c2.6 2.8 5.9 4.2 9.6 4.2s7-1.4 9.6-4.2') + `<circle cx="12" cy="10.6" r="2.1" fill="currentColor" stroke="none"/>` + S('M9.6 20.5h4.8M12 17v3.5'),
+  caseDeep: S('M6.2 13.5V8.6c0-3 1.8-5 3.9-5 .8 0 1.3.4 1.9.4s1.1-.4 1.9-.4c2.1 0 3.9 2 3.9 5v4.9') + S('M2.5 15.5c1.6-1.5 3.2-1.5 4.8 0s3.2 1.5 4.8 0 3.2-1.5 4.8 0 3.2 1.5 4.8 0') + S('M2.5 20c1.6-1.5 3.2-1.5 4.8 0s3.2 1.5 4.8 0 3.2-1.5 4.8 0 3.2 1.5 4.8 0'),
+  shade: `<rect x="3.5" y="4" width="5" height="16" rx="2.2"/><rect x="9.5" y="4" width="5" height="16" rx="2.2"/><rect x="15.5" y="4" width="5" height="16" rx="2.2" fill="currentColor"/>`,
+  twist: S('M4 8.5c2.5-3 5.5-3 8 0s5.5 3 8 0') + S('M4 15.5c2.5-3 5.5-3 8 0s5.5 3 8 0'),
 };
 
 export type IconName = keyof typeof PATHS;

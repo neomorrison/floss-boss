@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Clinic, DayPatient, SimEvent } from '../src/core/types';
 import { TOOLS } from '../src/data/tools';
 import {
-  avgNet, barChart, bestTier, dirtLabel, fmtSeconds, moodFromStars, nextPlayerAppointment, noDash, plural,
-  summarizeEvents, toolStats, toolTierState, weekdayOf,
+  avgNet, barChart, bestTier, courseState, dirtLabel, fmtSeconds, masteryInfo, moodFromStars, nextPlayerAppointment, noDash,
+  operatingNet, plural, quickCleanGate, shadeColor, summarizeEvents, toolStats, toolTierState, waitingCount, weekdayOf,
 } from '../src/ui/logic';
 import { canalLine, patientLine } from '../src/ui/lines';
 
@@ -116,5 +116,69 @@ describe('ui logic', () => {
       }
     }
     expect(patientLine('regular', 3, true, 'x').length).toBeGreaterThan(0);
+  });
+});
+
+describe('ui logic v2 (cases)', () => {
+  it('computes mastery tiers and progress', () => {
+    const m0 = masteryInfo(0);
+    expect(m0.tier).toBe(0);
+    expect(m0.name).toBe('Unranked');
+    expect(m0.nextAt).toBe(3);
+    expect(m0.nextName).toBe('Bronze');
+    const m2 = masteryInfo(2);
+    expect(m2.frac).toBeCloseTo(2 / 3, 5);
+    const b = masteryInfo(3);
+    expect(b.tier).toBe(1);
+    expect(b.prevAt).toBe(3);
+    expect(b.nextAt).toBe(10);
+    expect(b.frac).toBeCloseTo(0.3, 5);
+    const g = masteryInfo(40);
+    expect(g.tier).toBe(3);
+    expect(g.nextAt).toBeNull();
+    expect(g.frac).toBe(1);
+    expect(masteryInfo(Number.NaN).count).toBe(0);
+  });
+
+  it('gates Quick clean on bronze mastery', () => {
+    const locked = quickCleanGate({ candy: 1 }, 'candy');
+    expect(locked.ok).toBe(false);
+    expect(locked.label).toBe('Bronze needed: 1/3');
+    expect(locked.reason).toMatch(/Sugar Bug Attack/);
+    expect(locked.reason).not.toMatch(/\u2014/);
+    expect(quickCleanGate({}, 'routine').label).toBe('Bronze needed: 0/3');
+    expect(quickCleanGate(undefined, 'routine').ok).toBe(false);
+    expect(quickCleanGate({ routine: 3 }, 'routine').ok).toBe(true);
+    expect(quickCleanGate({ routine: 12 }, 'routine').label).toBe('');
+  });
+
+  it('uses operating net for averages when the report has it', () => {
+    const r = [{ net: -25000, operatingNet: 1900 }, { net: 800 }, { net: 12000, opNet: 700 }] as never[];
+    expect(operatingNet(r[0])).toBe(1900);
+    expect(operatingNet(r[1])).toBe(800);
+    expect(operatingNet(r[2])).toBe(700);
+    expect(avgNet(r, 3)).toBeCloseTo((1900 + 800 + 700) / 3, 5);
+  });
+
+  it('finds the next patient for an owner chair among everyone not seated yet', () => {
+    const p = (id: string, apptMin: number, state: DayPatient['state'], staffId: string | null = null) => ({ id, apptMin, state, isPlayerPatient: false, staffId }) as unknown as DayPatient;
+    const clinic = { patients: [p('a', 500, 'gone'), p('b', 540, 'inChair', 'h1'), p('c', 600, 'scheduled'), p('d', 570, 'waiting'), p('e', 560, 'toChair', 'h2')] } as unknown as Clinic;
+    expect(nextPlayerAppointment(clinic)).toBeNull();
+    expect(nextPlayerAppointment(clinic, true)?.id).toBe('d');
+    expect(waitingCount(clinic)).toBe(1);
+  });
+
+  it('knows when a training course is booked or running', () => {
+    expect(courseState({ offUntilDay: 0 }, 5)).toBe('none');
+    expect(courseState({ offUntilDay: 6, offFrom: 6 }, 5)).toBe('booked');
+    expect(courseState({ offUntilDay: 6, offFrom: 6 }, 6)).toBe('away');
+    expect(courseState({ offUntilDay: 6, offFrom: 6 }, 7)).toBe('none');
+    expect(courseState({ offUntilDay: 6 }, 6)).toBe('away');
+  });
+
+  it('shades run from bright to dark', () => {
+    const lum = (c: string) => c.match(/\d+/g)!.map(Number).reduce((a, b) => a + b, 0);
+    expect(lum(shadeColor(1))).toBeGreaterThan(lum(shadeColor(8)));
+    expect(lum(shadeColor(8))).toBeGreaterThan(lum(shadeColor(16)));
   });
 });

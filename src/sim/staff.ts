@@ -6,7 +6,7 @@ import { PLAYER_ID, TRAINING_COST } from '../core/constants';
 import { money } from '../core/format';
 import { OFFICES } from '../data/offices';
 import { ROLES, STAFF_FIRST, STAFF_LAST, STAFF_PORTRAITS, TRAITS } from '../data/staff';
-import { S, SimStaff, addCash, clinicByIndex, hasSkill, isPresent, nextId, note, pushEvent, withRng } from './internal';
+import { S, SimOp, SimStaff, addCash, clinicByIndex, hasSkill, isPresent, nextId, note, pushEvent, withRng } from './internal';
 import { checkAchievements } from './goals';
 
 export function statAvg(role: StaffRole, s: { skill: number; speed: number; bedside: number }): number {
@@ -64,9 +64,12 @@ export function makeStaff(state: GameState, rng: Rng, role: StaffRole, quality: 
   };
 }
 
-/** Six candidates weighted toward the roles the active office lacks. */
+/** Candidates stay on the board until they expire (2 days); the board is topped up to six,
+ * weighted toward the roles the active office lacks. */
+export const CANDIDATE_SLOTS = 6;
 export function makeCandidates(state: GameState, rng: Rng): void {
   if (state.phase !== 'owner' || !state.locations.length) { state.candidates = []; return; }
+  const keep = state.candidates.filter((x) => x.expiresDay >= state.day).slice(0, CANDIDATE_SLOTS);
   const c = state.locations[Math.max(0, Math.min(state.locations.length - 1, state.active))];
   const tier = OFFICES[c.tier];
   const hyg = c.staff.filter((s) => s.role === 'hygienist').length;
@@ -79,9 +82,9 @@ export function makeCandidates(state: GameState, rng: Rng): void {
     manager: state.locations.length >= 2 && !c.staff.some((s) => s.role === 'manager') ? 1.5 : 0.3,
   };
   const roles = Object.keys(w) as StaffRole[];
-  const out: Candidate[] = [];
-  const seen = new Set<StaffRole>();
-  for (let i = 0; i < 6; i++) {
+  const out: Candidate[] = [...keep];
+  const seen = new Set<StaffRole>(keep.map((x) => x.role));
+  for (let i = keep.length; i < CANDIDATE_SLOTS; i++) {
     // guarantee variety: the first three picks avoid repeats when possible
     let role = rng.weighted(roles, (r) => w[r] * (i < 3 && seen.has(r) ? 0.25 : 1));
     seen.add(role);
@@ -107,8 +110,8 @@ export function hire(state: GameState, candidateId: string, clinicIndex: number)
   state.stats.hires += 1;
   let msg = `${s.name} joined the team`;
   if (s.role === 'hygienist') {
-    const op = c.ops.find((o) => o.staffId == null);
-    if (op) { op.staffId = s.id; msg = `${s.name} now staffs operatory ${c.ops.indexOf(op) + 1}`; }
+    const op = c.ops.find((o) => o.staffId == null) as SimOp | undefined;
+    if (op) { op.staffId = s.id; op.freeAt = state.minute; msg = `${s.name} now staffs operatory ${c.ops.indexOf(op) + 1}`; }
   } else if (s.role === 'assistant') {
     const op = c.ops.find((o) => o.staffId && !o.assistantId) ?? c.ops.find((o) => !o.assistantId);
     if (op) op.assistantId = s.id;
@@ -130,8 +133,18 @@ export function fire(state: GameState, clinicIndex: number, staffId: string): Ac
   const s = c.staff.find((x) => x.id === staffId);
   if (!s) return { ok: false, reason: 'Staff member not found' };
   addCash(state, -s.salary, 'Severance');
+  const held = c.ops.find((o) => o.staffId === staffId) as SimOp | undefined;
   unassign(c, staffId);
   c.staff = c.staff.filter((x) => x.id !== staffId);
+  // a hygienist without an operatory fills the gap
+  if (held) {
+    const idle = c.staff.find((x) => x.role === 'hygienist' && !c.ops.some((o) => o.staffId === x.id));
+    if (idle) {
+      held.staffId = idle.id;
+      held.freeAt = state.minute;
+      return { ok: true, message: `${s.name} was let go. ${idle.name} staffs operatory ${c.ops.indexOf(held) + 1}` };
+    }
+  }
   return { ok: true, message: `${s.name} was let go` };
 }
 
@@ -144,10 +157,10 @@ export function train(state: GameState, clinicIndex: number, staffId: string): A
   if (s.skill >= 99) return { ok: false, reason: 'Nothing left to learn' };
   if (state.cash < TRAINING_COST) return { ok: false, reason: 'Not enough cash' };
   addCash(state, -TRAINING_COST, 'Training');
-  s.skill = Math.min(99, s.skill + 8);
+  // the skill gain (and a higher ask) arrive when the course day ends
+  s.courseGain = (s.courseGain ?? 0) + COURSE_SKILL;
   s.offFrom = state.day + 1;
   s.offUntilDay = state.day + 1;
-  s.ask = Math.max(s.ask, askFor(s.role, s));
   return { ok: true, message: `${s.name} is on a course tomorrow` };
 }
 
@@ -169,6 +182,7 @@ export function assignHygienist(state: GameState, clinicIndex: number, opId: str
   if (!c) return { ok: false, reason: 'Location not found' };
   const op = c.ops.find((o) => o.id === opId);
   if (!op) return { ok: false, reason: 'Operatory not found' };
+  (op as SimOp).freeAt = state.minute;   // an operatory that starts serving now never seats anyone in the past
   if (staffId === PLAYER_ID) {
     for (const o of c.ops) if (o.staffId === PLAYER_ID && o !== op) o.staffId = null;
     op.staffId = PLAYER_ID;
@@ -207,6 +221,8 @@ export function setPlayerMode(state: GameState, clinicIndex: number, opId: strin
   const op = c.ops.find((o) => o.id === opId);
   if (!op) return { ok: false, reason: 'Operatory not found' };
   if (op.staffId !== PLAYER_ID) return { ok: false, reason: 'You do not staff this operatory' };
+  if (mode === 'auto' && !c.ownedByPlayer) return { ok: false, reason: 'Autopilot needs your own practice' };
+  if (op.playerMode !== mode) (op as SimOp).freeAt = state.minute;
   op.playerMode = mode;
   if (mode === 'hands') {
     // a patient already seated for autopilot keeps going; nothing else to do
@@ -221,8 +237,16 @@ export const SALARY_FLOOR = 0.75;
 /** Daily chance that staff with morale under 25 quit (Loyal never). */
 export const LOW_MORALE_QUIT = 0.2;
 
-/** Patients per day a role handles before overwork costs morale (hygienists: 7, DESIGN 8.5). */
+/** Patients per day a role handles before overwork costs morale (DESIGN 8.5). Hygienists and assistants
+ * are measured in chair minutes instead, so faster cleans (assistants, Ultrasonic Kits) are not punished. */
 const OVERWORK: Record<StaffRole, number> = { hygienist: 7, assistant: 9, dentist: 18, receptionist: 40, manager: 999 };
+/** Chair minutes a day before a hygienist or assistant feels overworked, and the minutes per -3 morale. */
+export const OVERWORK_MINUTES = 470;
+const OVERWORK_STEP = 45;
+/** Skill a training course adds when it ends. */
+export const COURSE_SKILL = 8;
+/** Morale lost per day while cash is below zero (not offset by managers, Leader or the break room). */
+const BROKE_MORALE = 8;
 
 /** Daily staff update at close: morale, quits, levels, raise requests. */
 export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): void {
@@ -231,13 +255,35 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
     const manager = c.staff.some((s) => s.role === 'manager' && isPresent(state, s)) ? 2 : 0;
     const breakRoom = c.equipment.includes('breakRoom') ? 3 : 0;
     const quitters: Staff[] = [];
-    for (const s of c.staff) {
-      let dm = 2 - 3 * Math.max(0, s.patientsToday - OVERWORK[s.role]) + breakRoom + leader + manager;
+    for (const s0 of c.staff) {
+      const s = s0 as SimStaff;
+      const byMinutes = s.role === 'hygienist' || s.role === 'assistant';
+      const over = byMinutes
+        ? Math.max(0, (s.workMin ?? 0) - OVERWORK_MINUTES) / OVERWORK_STEP
+        : Math.max(0, s.patientsToday - OVERWORK[s.role]);
+      const overwork = Math.round(3 * over);
+      const underpaid = s.salary < s.ask ? Math.round(30 * (1 - s.salary / Math.max(1, s.ask))) : 0;
       // underpaid staff lose morale in proportion (-3 at 90% of their ask, -15 at half)
-      if (s.salary < s.ask) dm -= Math.round(30 * (1 - s.salary / Math.max(1, s.ask)));
-      if (s.traits.includes('nightOwl')) dm += 1;
-      if (state.cash < 0) dm -= 2;
+      let dm = 2 - overwork - underpaid + (s.traits.includes('nightOwl') ? 1 : 0);
+      if (state.cash < 0) dm -= BROKE_MORALE;   // payday bounced: no perk makes up for that
+      else dm += breakRoom + leader + manager;
+      const m0 = s.morale;
       s.morale = clamp(Math.round(s.morale + dm), 0, 100);
+      if (m0 - s.morale > 5) {
+        const why = state.cash < 0 ? 'unpaid' : overwork >= underpaid && overwork > 0 ? 'overworked' : underpaid > 0 ? 'underpaid' : 'unhappy';
+        note(state, `${s.name} is ${why} (morale ${s.morale})`);
+      }
+      // a course that ended today: the skill gain lands and the ask follows
+      if (s.courseGain && s.offUntilDay <= state.day) {
+        s.skill = Math.min(99, s.skill + s.courseGain);
+        s.courseGain = 0;
+        const ask = askFor(s.role, s);
+        note(state, `${s.name} finished the course: skill ${s.skill}`);
+        if (ask > s.ask) {
+          s.ask = ask;
+          if (s.salary < s.ask) pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
+        }
+      }
       // levels: every 25 * level patients
       const lv0 = s.level;
       while (s.xp >= 25 * s.level) {
@@ -260,6 +306,7 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
       }
       if (s.morale < 25 && !s.traits.includes('loyal') && rng.chance(LOW_MORALE_QUIT)) quitters.push(s);
       s.patientsToday = 0;
+      s.workMin = 0;
     }
     for (const q of quitters) {
       unassign(c, q.id);

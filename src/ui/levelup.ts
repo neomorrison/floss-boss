@@ -1,6 +1,9 @@
 // Level up modal: burst badge, new title, skill point reminder, newly unlocked skills.
 import { store } from '../core/store';
+import type { TwistId } from '../core/types';
+import { CASE_ORDER, CASES, TWISTS } from '../data/cases';
 import { SKILLS } from '../data/skills';
+import { caseChip } from './casebits';
 import { go } from './app';
 import { h } from './dom';
 import { confetti, sfx } from './fx';
@@ -26,6 +29,9 @@ function open(level: number): void {
   if (!store.loaded) return;
   const s = store.state;
   const unlocked = SKILLS.filter((k) => k.minLevel === level);
+  // patients who can now walk in with a new case or twist (employee phase picks cases by level)
+  const newCases = CASE_ORDER.filter((c) => CASES[c].minLevel === level);
+  const newTwists = (Object.keys(TWISTS) as TwistId[]).filter((t) => TWISTS[t].minLevel === level);
   const skillsBtn = btn('Skills', { variant: 'primary', icon: 'skills', onClick: () => { m.close(); go('skills'); } });
   const later = btn('Later', { variant: 'ghost', onClick: () => m.close() });
   const badge = h('div.lvl-burst',
@@ -39,6 +45,8 @@ function open(level: number): void {
       h('div.lvl-title', playerTitle(s)),
       h('div.lvl-points', icon('skills'), h('span', s.player.skillPoints === 1 ? '1 skill point to spend' : `${s.player.skillPoints} skill points to spend`)),
       unlocked.length ? h('div.col.gap-6', h('div.eyebrow', 'New skills'), h('div.row.row-wrap', { style: 'justify-content:center' }, ...unlocked.map((k) => chip(k.name, 'mint', 'sparkle')))) : null,
+      newCases.length && s.phase === 'employee' ? h('div.col.gap-6', h('div.eyebrow', 'New cases'), h('div.row.row-wrap', { style: 'justify-content:center' }, ...newCases.map((c) => caseChip(c)))) : null,
+      newTwists.length && s.phase === 'employee' ? h('div.col.gap-6', h('div.eyebrow', 'New twists'), h('div.row.row-wrap', { style: 'justify-content:center' }, ...newTwists.map((t) => chip(TWISTS[t].name, 'grape', 'twist')))) : null,
     ),
     actions: [later, skillsBtn],
     size: 'sm',

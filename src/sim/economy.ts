@@ -14,8 +14,9 @@ import { SKILLS, skillById } from '../data/skills';
 import { EXTRAS, NUMBING_GEL_PRICE, TOOLS } from '../data/tools';
 import { CHAIRS, CHAIR_ORDER, EQUIPMENT, OP_UPGRADES } from '../data/upgrades';
 import {
-  REPORTS_MAX, S, SimReport, addCash, emptyDayStats, hasSkill, nextId, withRng,
+  REPORTS_MAX, S, SimOp, SimReport, addCash, emptyDayStats, hasSkill, nextId, plural, withRng,
 } from './internal';
+import { computeRating } from './clinic';
 import { tierIndex, title } from './progress';
 import { bookClinic, bookDay } from './booking';
 import { checkAchievements, claimGoal, makeGoals } from './goals';
@@ -117,7 +118,7 @@ export function repayLoan(state: GameState, amount: number): ActionResult {
   if (state.cash < a) return fail(NO_CASH);
   addCash(state, -a, 'Loan repayment');
   state.loan -= a;
-  if (state.loan <= 0) { state.loan = 0; state.flags.debtFree = true; checkAchievements(state, null); }
+  if (state.loan <= 0) { state.loan = 0; if (state.cash >= 0) state.flags.debtFree = true; checkAchievements(state, null); }
   return { ok: true, message: state.loan ? `Repaid ${money(a)}` : 'Loan paid off' };
 }
 
@@ -174,6 +175,8 @@ export function openPractice(state: GameState, opts: { name: string; loan: numbe
   const err = financed(state, st.price, Math.min(opts.loan, st.maxLoan), st.maxLoan, 'Practice purchase');
   if (err) return err;
   const c = newClinic(state, 't1', opts.name, true);
+  // finished employee goals pay out before the owner goals replace them
+  for (const g of state.goals) if (g.done && !g.claimed) claimGoal(state, g.id, null);
   state.phase = 'owner';
   state.employer = null;
   state.locations = [c];
@@ -200,7 +203,14 @@ export function buyOperatory(state: GameState, clinicIndex: number): ActionResul
   if (c.ops.length >= OFFICES[c.tier].opSlots) return fail('No room for another operatory');
   if (state.cash < EXTRA_OP_PRICE) return fail(NO_CASH);
   addCash(state, -EXTRA_OP_PRICE, 'Operatories');
-  c.ops.push({ id: nextId(state, 'op'), slot: c.ops.length, chair: 'basic', upgrades: [], staffId: null, assistantId: null, patientId: null, playerMode: 'hands' });
+  const op: SimOp = { id: nextId(state, 'op'), slot: c.ops.length, chair: 'basic', upgrades: [], staffId: null, assistantId: null, patientId: null, playerMode: 'hands', freeAt: state.minute };
+  c.ops.push(op);
+  // a hygienist without an operatory moves in right away
+  const idle = c.staff.find((s) => s.role === 'hygienist' && !c.ops.some((o) => o.staffId === s.id));
+  if (idle) {
+    op.staffId = idle.id;
+    return { ok: true, message: `Operatory ${c.ops.length} added. ${idle.name} staffs it` };
+  }
   return { ok: true, message: `Operatory ${c.ops.length} added` };
 }
 
@@ -239,6 +249,7 @@ export function buyEquipment(state: GameState, clinicIndex: number, id: EquipId)
   if (state.cash < e.price) return fail(NO_CASH);
   addCash(state, -e.price, 'Equipment');
   c.equipment.push(id);
+  if (id === 'fishTank') c.rating = computeRating(c);
   return { ok: true, message: `${e.name} installed` };
 }
 
@@ -262,7 +273,7 @@ export function moveOffice(state: GameState, clinicIndex: number, tier: OfficeTi
   if (err) return err;
   c.tier = tier;
   state.player.title = title(state);
-  withRng(state, (rng) => makeCandidates(state, rng));
+  withRng(state, (rng) => makeCandidates(state, rng));   // tops the board up; candidates already on it stay
   checkAchievements(state, null);
   return { ok: true, message: `Moved into the ${OFFICES[tier].name}` };
 }
@@ -325,10 +336,16 @@ export function marketingCost(c: Clinic): number {
 
 // ------------------------------------------------------------------ day close
 
-const CAPITAL_LABELS = new Set([
+/** Ledger labels that are not clinic operations: purchases, financing, one-off rewards and offline credit.
+ * Operating net (valuation, offline credit, goal rewards) is built from everything else, so none of
+ * these can feed back into themselves. */
+export const NON_OPERATING_LABELS = new Set([
   'Tools', 'Practice purchase', 'Office move', 'New location', 'Operatories', 'Chairs', 'Operatory upgrades', 'Equipment',
   'Bank loan', 'Loan repayment', 'Loan payment', 'Hiring fees', 'Training', 'Severance', 'Signing bonus', 'Earlier activity',
+  'While you were away', 'Goal rewards',
 ]);
+/** Daily interest on negative cash (DESIGN 8.8). */
+export const OVERDRAFT_RATE = 0.005;
 
 export function closeDay(state: GameState): DayReport {
   const s = S(state);
@@ -343,21 +360,25 @@ export function closeDay(state: GameState): DayReport {
       addCash(state, -OFFICES[c.tier].rent, 'Rent');
       addCash(state, -Math.round(c.day.supplies * (hasSkill(state, 'leanOps') ? 0.8 : 1)), 'Supplies');
       addCash(state, -marketingCost(c), 'Marketing');
-      if (c.day.turnedAway > 0) notes.push(`${c.name}: ${c.day.turnedAway} patients turned away`);
+      if (c.day.turnedAway > 0) notes.push(`${c.name}: ${plural(c.day.turnedAway, 'patient')} turned away`);
     }
     void negotiator;
     if (state.loan > 0) {
       const interest = Math.max(1, Math.round(state.loan * LOAN_DAILY_RATE));
       const pay = Math.min(state.loan, Math.max(1, Math.round(state.loan * LOAN_DAILY_PAYMENT)));
       addCash(state, -interest, 'Loan interest');
-      addCash(state, -pay, 'Loan payment');
-      state.loan -= pay;
+      // the bank does not take its payment out of an overdraft (interest still runs)
+      if (state.cash >= pay) {
+        addCash(state, -pay, 'Loan payment');
+        state.loan -= pay;
+      }
       if (state.loan <= 0) {
         state.loan = 0;
-        state.flags.debtFree = true;
+        if (state.cash >= 0) state.flags.debtFree = true;
         notes.push('Loan paid off');
       }
     }
+    if (state.cash < 0) addCash(state, -Math.max(1, Math.round(-state.cash * OVERDRAFT_RATE)), 'Overdraft interest');
     withRng(state, (rng) => staffDaily(state, ev, rng));
   }
   // auto-claim finished goals so no reward is lost
@@ -372,7 +393,7 @@ export function closeDay(state: GameState): DayReport {
     if (e.amount >= 0) income.push({ label: e.label, amount: e.amount });
     else expenses.push({ label: e.label, amount: -e.amount });
     net += e.amount;
-    if (!CAPITAL_LABELS.has(e.label)) opNet += e.amount;
+    if (!NON_OPERATING_LABELS.has(e.label)) opNet += e.amount;
   }
   const clinics = state.phase === 'employee' ? (state.employer ? [state.employer] : []) : state.locations;
   const perLocation = clinics.map((c) => ({
@@ -380,7 +401,7 @@ export function closeDay(state: GameState): DayReport {
     ratingDelta: Math.round((c.rating - ((c as { startRating?: number }).startRating ?? c.rating)) * 100) / 100,
   }));
   for (const m of s.dayNotes ?? []) if (!notes.includes(m)) notes.push(m);
-  if (state.cash < 0) notes.push('Cash is below zero. Cut costs or take a loan.');
+  if (state.cash < 0) notes.push('Cash is below zero. Overdraft interest is charged daily and staff morale falls.');
   const report: SimReport = {
     day: state.day,
     weekday: ((state.day - 1) % 5 + 5) % 5,
@@ -394,12 +415,15 @@ export function closeDay(state: GameState): DayReport {
     levelUps: s.dayLevelUps ?? 0,
     goalsDone: [...(s.dayGoals ?? [])],
     notes: Array.from(new Set(notes)),
-    opNet,
+    operatingNet: opNet,
   };
   state.reports.push(report);
   if (state.reports.length > REPORTS_MAX) state.reports.splice(0, state.reports.length - REPORTS_MAX);
   state.stats.daysPlayed += 1;
   checkAchievements(state, ev);
+  // events raised while closing (achievements, level-ups, quits): the UI emits them after the report.
+  // Kept off the saved report so saves stay small.
+  const events = ev.slice();
   // next working day (weekends are skipped: day counts working days)
   state.day += 1;
   state.minute = OPEN_MIN;
@@ -414,7 +438,7 @@ export function closeDay(state: GameState): DayReport {
     bookDay(state, rng);
   });
   state.player.title = title(state);
-  return report;
+  return { ...report, events };
 }
 
 export { claimGoal };

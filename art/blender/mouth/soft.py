@@ -8,6 +8,7 @@
 #   debris_*     0.15 to 0.4 across, origin at the center, materials named after the item.
 import math
 import numpy as np
+from mathutils import Vector
 import lib
 import implicit as im
 
@@ -104,9 +105,25 @@ def lip_fullness(t):
     return 0.42 + 0.7 * abs(s) ** 1.4
 
 
-def build_frame():
+# The lower lip is its own node (LipLower, a child of mouth_frame) so the clean scene can close it with the jaw.
+# Two ways to drive it, both from jaw 0..1:
+#   1. seamless (preferred): set morphTargetInfluences[0] (morph target "JawClose") = jaw on every mesh under
+#      LipLower. The lower lip rises up to 0.9 in the middle while the mouth corners stay put, so nothing tears.
+#   2. rigid: its pivot sits on the jaw hinge, so rotation.x = -0.11 * jaw lifts the lower lip about 0.9 with
+#      almost no forward motion (position.y + 0.9 * jaw works too). The mouth corners show a small step then.
+# Either way a hidden skin skirt behind the chin fills the gap under the rising lip. At rest the split is
+# invisible: both pieces carry the normals of the unsplit surface.
+JAW_HINGE = (0.0, -3.4, -4.6)
+SKIRT = [(0.0, 0.05), (0.28, 0.08), (0.65, 0.12), (1.05, 0.16), (1.5, 0.2)]   # (skin offset s, inset toward -Z)
+CORNER_TUCK = 0.0      # set back the lip ends at the corners (rigid mode only); 0 keeps the rest look exact
+JAW_LIFT = 0.9
+
+
+def frame_surface():
+    """The frame's ring grid: returns (rows, verts, cols, faces, meta). rows[i][j] is ring i (angle), column j
+    (throat, lips, skin); verts[0] is the throat pole and vid(i, j) indexes the rest. faces: (vids, material
+    name, i, j) with the winding the frame has always used (outward)."""
     NT = 128
-    # columns: (kind, param) -> position builder
     # (scale of the cavity section, z, superellipse exponent): round at the throat, boxy by the cheeks
     throat = [(0.12, -3.76, 2.0), (0.3, -3.71, 2.0), (0.5, -3.62, 2.0), (0.68, -3.46, 2.0), (0.83, -3.18, 2.1),
               (0.95, -2.7, 2.6), (1.0, -1.8, 3.6), (1.0, -0.4, P_CAV), (0.99, 1.2, P_CAV), (0.93, 2.3, P_CAV)]
@@ -148,27 +165,15 @@ def build_frame():
         rows.append(ring)
     C = len(rows[0])
     verts = [(0.0, 0.25, -3.78)] + [p for r in rows for p in r]
-    vid = lambda i, j: 1 + (i % NT) * C + j
-    m_throat, m_lips, m_skin = lib.M('Throat'), lib.M('Lips'), lib.M('Skin')
     n_throat = len(throat)
     n_lip = n_throat + len(lip) - 1
-    part = lib.Part('mouth_frame')
-    faces = {m_throat: [], m_lips: [], m_skin: []}
+    vid = lambda i, j: 1 + (i % NT) * C + j
+    faces = []
     for i in range(NT):
-        faces[m_throat].append([0, vid(i, 0), vid(i + 1, 0)])
+        faces.append(([0, vid(i, 0), vid(i + 1, 0)], 'Throat', i, -1))
         for j in range(C - 1):
-            m = m_throat if j < n_throat else (m_lips if j < n_lip else m_skin)
-            faces[m].append([vid(i, j), vid(i, j + 1), vid(i + 1, j + 1), vid(i + 1, j)])
-    # all faces share one vertex list so the shading stays continuous across material borders
-    import bmesh
-    bm = part.bm
-    bv = [bm.verts.new(v) for v in verts]
-    for m, fl in faces.items():
-        idx = part._mi(m)
-        for f in fl:
-            face = bm.faces.new([bv[k] for k in f])
-            face.material_index = idx
-            face.smooth = True
+            m = 'Throat' if j < n_throat else ('Lips' if j < n_lip else 'Skin')
+            faces.append(([vid(i, j), vid(i, j + 1), vid(i + 1, j + 1), vid(i + 1, j)], m, i, j))
     # vertex colors: the throat darkens toward the back, everything else is left to its material
     ncol = []
     for i in range(NT):
@@ -180,10 +185,124 @@ def build_frame():
             else:
                 ncol.append((1.0, 1.0, 1.0))
     cols = [(0.42, 0.4, 0.41)] + ncol
-    # a round button nose sitting on the face
+    meta = {'NT': NT, 'C': C, 'n_throat': n_throat, 'n_lip': n_lip, 'vid': vid, 'skin': skin}
+    return rows, verts, cols, faces, meta
+
+
+def _blender_to_three(n):
+    return (n[0], n[2], -n[1])
+
+
+def _set_normals(ob, normals3):
+    """Custom per-vertex normals (three.js space) on a finished object whose mesh is in Blender space."""
+    T = lib.TO_BLENDER.to_3x3()
+    nb = [tuple((T @ Vector(n)).normalized()) for n in normals3]
+    ob.data.normals_split_custom_set_from_vertices(nb)
+
+
+def _corner_rings(i, NT):
+    """Rings between this one and the nearest mouth corner (ring 0 and ring NT/2 are the corners)."""
+    i %= NT
+    half = NT // 2
+    return min(i - half, NT - i) if i >= half else min(i, half - i)
+
+
+def build_frame():
+    import bpy
+    rows, verts, cols, faces, meta = frame_surface()
+    NT, C, n_throat, n_lip, vid = meta['NT'], meta['C'], meta['n_throat'], meta['n_lip'], meta['vid']
+    mats = {'Throat': lib.M('Throat'), 'Lips': lib.M('Lips'), 'Skin': lib.M('Skin')}
+
+    # 1. the whole surface once, for the smooth normals the unsplit frame has (the split must not show at rest)
+    full = lib.Part('frame_full')
+    full.add_mesh(verts, [f for (f, _, _, _) in faces], mats['Skin'])
+    fo = full.finish(recalc=False, tri='FIXED')
+    fo.data.update()
+    normals = [_blender_to_three(tuple(v.normal)) for v in fo.data.vertices]
+    me = fo.data
+    bpy.data.objects.remove(fo)
+    bpy.data.meshes.remove(me)
+
+    # 2. split: the lower half of the lip band (rings NT/2 .. NT, lip columns) goes to LipLower
+    half = NT // 2
+    is_lower = lambda i, j: half <= i < NT and n_throat <= j < n_lip
+    static_faces = [(f, m) for (f, m, i, j) in faces if not is_lower(i, j)]
+    lower_faces = [(f, m) for (f, m, i, j) in faces if is_lower(i, j)]
+
+    # --- static frame (with the nose)
+    used = sorted({k for (f, _) in static_faces for k in f})
+    remap = {k: n for n, k in enumerate(used)}
+    part = lib.Part('mouth_frame')
+    bv = [part.bm.verts.new(verts[k]) for k in used]
+    for (f, m) in static_faces:
+        face = part.bm.faces.new([bv[remap[k]] for k in f])
+        face.material_index = part._mi(mats[m])
+        face.smooth = True
     nz = face_z(0.0, 7.05, 2.4)
-    part.sphere(1.0, (0.0, 7.0, nz + 0.05), m_skin, seg=24, rings=16, scale=(1.3, 1.05, 0.85))
-    return part.finish(recalc=False, color_fn=lib.color_lookup(verts, cols), tri='FIXED')
+    part.sphere(1.0, (0.0, 7.0, nz + 0.05), mats['Skin'], seg=24, rings=16, scale=(1.3, 1.05, 0.85))
+    ob = part.finish(recalc=False, color_fn=lib.color_lookup([verts[k] for k in used], [cols[k] for k in used]),
+                     tri='FIXED')
+    ob.data.update()
+    nose_n = [_blender_to_three(tuple(v.normal)) for v in ob.data.vertices][len(used):]
+    _set_normals(ob, [normals[k] for k in used] + nose_n)
+
+    # --- LipLower: the lower lip band, its corner tuck and the hidden skin skirt, around the hinge pivot
+    used_l = sorted({k for (f, _) in lower_faces for k in f})
+    hx, hy, hz = JAW_HINGE
+    lv, ln, lc, lift = [], [], [], []
+    index = {}
+
+    def weight(i, j):
+        # 1 across the lower lip, easing to 0 at the mouth corners; the inner lip edge lags a little
+        a = S(0.0, 0.75, abs(math.sin(2 * math.pi * (i % NT) / NT)))
+        return float(a * (0.7 if j <= n_throat else 1.0))
+    for k in used_l:
+        i, j = (k - 1) // C, (k - 1) % C
+        x, y, z = verts[k]
+        lift.append(weight(i, j))
+        if j > n_throat:
+            z -= CORNER_TUCK * max(0.0, 1.0 - _corner_rings(i, NT) / 5.0)
+        index[k] = len(lv)
+        lv.append((x - hx, y - hy, z - hz))
+        ln.append(normals[k])
+        lc.append(cols[k])
+    lf = [([index[k] for k in f], 'Lips') for (f, m) in lower_faces]
+    ring_ids = list(range(half, NT + 1))   # ring NT is ring 0: the right mouth corner
+    border_row = [index[vid(i, n_lip)] for i in ring_ids]
+    prev = border_row
+    for (s_, inset) in SKIRT:
+        row = []
+        for i in ring_ids:
+            src = vid(i, n_lip) if s_ == 0.0 else vid(i, n_lip + 1 + meta['skin'].index(s_))
+            x, y, z = verts[src]
+            z -= inset + CORNER_TUCK * max(0.0, 1.0 - _corner_rings(i, NT) / 5.0)
+            row.append(len(lv))
+            lv.append((x - hx, y - hy, z - hz))
+            ln.append(normals[src])
+            lc.append((1.0, 1.0, 1.0))
+            lift.append(weight(i, n_lip))
+        for n in range(len(ring_ids) - 1):
+            lf.append(([prev[n], row[n], row[n + 1], prev[n + 1]], 'Skin'))
+        prev = row
+    lp = lib.Part('LipLower')
+    bl = [lp.bm.verts.new(v) for v in lv]
+    for (f, m) in lf:
+        face = lp.bm.faces.new([bl[k] for k in f])
+        face.material_index = lp._mi(mats[m])
+        face.smooth = True
+    lo = lp.finish(recalc=False, color_fn=lib.color_lookup(lv, lc), tri='FIXED')
+    _set_normals(lo, ln)
+    # morph target JawClose: the lip and its skirt rise with a falloff to zero at the mouth corners
+    lo.shape_key_add(name='Basis', from_mix=False)
+    key = lo.shape_key_add(name='JawClose', from_mix=False)
+    for n, v in enumerate(key.data):
+        v.co = v.co + Vector((0.0, 0.0, JAW_LIFT * lift[n]))      # three.js +Y is Blender +Z
+    key.value = 0.0          # exported as the mesh's default weight: the mouth loads open
+    lo.location = lib.TO_BLENDER @ Vector(JAW_HINGE)
+    lo.parent = ob
+    lo.matrix_parent_inverse.identity()
+    bpy.context.view_layer.update()
+    return ob
 
 
 # ------------------------------------------------------------------ tartar

@@ -3,11 +3,12 @@
 // "+" badges on empty slots, and one-shot pops (coins, stars, angry puffs).
 // Elements are pooled per id and only restyled when their screen position or value changes.
 import * as THREE from 'three';
+import type { CaseType } from '../core/types';
 
 const CSS = `
 .fbc-layer{position:absolute;inset:0;pointer-events:none;overflow:hidden;font-family:Nunito,system-ui,sans-serif;contain:strict;-webkit-user-select:none;user-select:none}
 .fbc-item{position:absolute;left:0;top:0;will-change:transform}
-.fbc-item.k-bar,.fbc-item.k-mood{z-index:1}.fbc-item.k-ring{z-index:2}.fbc-item.k-plus{z-index:2}.fbc-item.k-tag{z-index:3}.fbc-item.k-alert{z-index:4}.fbc-item.k-pop{z-index:5}
+.fbc-item.k-bar,.fbc-item.k-mood,.fbc-item.k-badge{z-index:1}.fbc-item.k-ring{z-index:2}.fbc-item.k-plus{z-index:2}.fbc-item.k-tag{z-index:3}.fbc-item.k-alert{z-index:4}.fbc-item.k-pop{z-index:5}
 .fbc-anchor{position:absolute;left:0;top:0;transform:translate(-50%,-100%)}
 .fbc-ring{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.92);box-shadow:0 3px 10px rgba(22,50,58,.22);display:flex;align-items:center;justify-content:center}
 .fbc-ring svg{position:absolute;inset:0;transform:rotate(-90deg)}
@@ -24,6 +25,7 @@ const CSS = `
 .fbc-bar.low{animation:fbc-shake .5s ease-in-out infinite}
 @keyframes fbc-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-1.5px)}75%{transform:translateX(1.5px)}}
 .fbc-mood{width:30px;height:30px;filter:drop-shadow(0 2px 3px rgba(22,50,58,.25))}
+.fbc-badge{width:16px;height:16px;filter:drop-shadow(0 2px 3px rgba(22,50,58,.3))}
 .fbc-tag{background:#fff;color:#16323A;font:800 13px/1 Nunito,system-ui,sans-serif;padding:5px 10px;border-radius:12px;white-space:nowrap;box-shadow:0 3px 10px rgba(22,50,58,.2)}
 .fbc-tag.you{background:#FF7AA8;color:#fff}
 .fbc-plus{pointer-events:auto;cursor:pointer;width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.9);border:3px dashed #0E8F8A;color:#0E8F8A;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(22,50,58,.18);transition:transform .15s}
@@ -69,18 +71,39 @@ function face(m: Mood): string {
   return `<svg class="fbc-mood" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5" fill="${FACE_COL[m]}" stroke="#fff" stroke-width="2"/>${brows}<circle cx="9" cy="11" r="1.4" fill="#16323A"/><circle cx="15" cy="11" r="1.4" fill="#16323A"/><path d="${mouth}" fill="none" stroke="#16323A" stroke-width="1.7" stroke-linecap="round"/></svg>`;
 }
 
+/** Per-case dot color for the chair-side badge (DESIGN 5.5, spawn contract table). Pirate is the one
+ * two-tone case (black fill, gold ring) so it reads distinctly even at a glance across the diorama. */
+export const CASE_BADGE: Record<CaseType, { fill: string; ring: string }> = {
+  routine: { fill: '#0E8F8A', ring: '#FFFFFF' },
+  candy: { fill: '#FF7AA8', ring: '#FFFFFF' },
+  whitening: { fill: '#FFD166', ring: '#FFFFFF' },
+  braces: { fill: '#5FA8F5', ring: '#FFFFFF' },
+  pirate: { fill: '#16323A', ring: '#FFD166' },
+  deep: { fill: '#F0555B', ring: '#FFFFFF' },
+};
+function badgeSvg(caseType: CaseType): string {
+  const c = CASE_BADGE[caseType];
+  return `<svg class="fbc-badge" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="${c.fill}" stroke="${c.ring}" stroke-width="3"/></svg>`;
+}
+
 // ------------------------------------------------------------------ layer
 
-interface Item { wrap: HTMLDivElement; inner: HTMLElement; used: boolean; shown: boolean; px: number; py: number; val: number; str: string }
-type Kind = 'ring' | 'alert' | 'bar' | 'mood' | 'tag' | 'plus';
+interface Item { wrap: HTMLDivElement; inner: HTMLElement; used: boolean; shown: boolean; px: number; py: number; val: number; str: string; hiddenAt: number }
+type Kind = 'ring' | 'alert' | 'bar' | 'mood' | 'tag' | 'plus' | 'badge';
 
 interface Pop { wrap: HTMLDivElement; x: number; y: number; z: number; until: number; px: number; py: number }
 
 const RING_C = 2 * Math.PI * 20;
+// A pooled item that goes unused (its patient left, its operatory emptied) is kept hidden for this long
+// before its DOM node is actually freed, in case the same id comes right back (a re-seat, a quick blip
+// in the sim). Past that it is deleted from the pool: patients served over a long idle session must not
+// grow the DOM forever (out/fix/clinic.md #1: bar/mood pools are keyed by patient id, a fresh id every
+// visit, so without this they only ever grew).
+const POOL_GRACE_SEC = 2;
 
 export class OverlayLayer {
   readonly root: HTMLDivElement;
-  private pools: Record<Kind, Map<string, Item>> = { ring: new Map(), alert: new Map(), bar: new Map(), mood: new Map(), tag: new Map(), plus: new Map() };
+  private pools: Record<Kind, Map<string, Item>> = { ring: new Map(), alert: new Map(), bar: new Map(), mood: new Map(), tag: new Map(), plus: new Map(), badge: new Map() };
   private pops: Pop[] = [];
   private v = new THREE.Vector3();
   private w = 1; private h = 1;
@@ -102,8 +125,10 @@ export class OverlayLayer {
   end(): void {
     for (const k in this.pools) {
       const pool = this.pools[k as Kind];
-      for (const it of pool.values()) {
-        if (!it.used && it.shown) { it.wrap.style.display = 'none'; it.shown = false; }
+      for (const [id, it] of pool) {
+        if (it.used) { it.hiddenAt = -1; continue; }
+        if (it.shown) { it.wrap.style.display = 'none'; it.shown = false; it.hiddenAt = this.now; }
+        else if (it.hiddenAt >= 0 && this.now - it.hiddenAt > POOL_GRACE_SEC) { it.wrap.remove(); pool.delete(id); }
       }
     }
     // pops follow their world point until they finish
@@ -143,7 +168,7 @@ export class OverlayLayer {
       anchor.appendChild(inner);
       wrap.appendChild(anchor);
       this.root.appendChild(wrap);
-      it = { wrap, inner, used: false, shown: true, px: NaN, py: NaN, val: NaN, str: '' };
+      it = { wrap, inner, used: false, shown: true, px: NaN, py: NaN, val: NaN, str: '', hiddenAt: -1 };
       pool.set(id, it);
     }
     it.used = true;
@@ -203,6 +228,14 @@ export class OverlayLayer {
   mood(id: string, x: number, y: number, z: number, m: Mood): void {
     const it = this.item('mood', id, () => document.createElement('div'));
     if (it.str !== m) { it.str = m; it.inner.innerHTML = face(m); }
+    this.place(it.wrap, it, x, y, z);
+  }
+
+  /** A small dot over a seated patient showing their case type (DESIGN 5.5: routine teal, candy pink,
+   * whitening yellow, braces blue, pirate black-and-gold, deep red). */
+  badge(id: string, x: number, y: number, z: number, caseType: CaseType): void {
+    const it = this.item('badge', id, () => document.createElement('div'));
+    if (it.str !== caseType) { it.str = caseType; it.inner.innerHTML = badgeSvg(caseType); }
     this.place(it.wrap, it, x, y, z);
   }
 

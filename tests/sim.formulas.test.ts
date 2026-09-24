@@ -3,8 +3,9 @@ import * as sim from '../src/sim/index';
 import { starsFor, employeeRate } from '../src/sim/progress';
 import { reviewStars, computeRating } from '../src/sim/clinic';
 import { awareness, demandLambda, PRICE_ELASTICITY } from '../src/sim/booking';
-import { parSeconds } from '../src/sim/patients';
+import { emptySpecial, parSeconds } from '../src/sim/cases';
 import { askFor } from '../src/sim/staff';
+import { CASES } from '../src/data/cases';
 import { graduated, grant, result } from './sim.helpers';
 
 describe('progression formulas', () => {
@@ -41,10 +42,13 @@ describe('progression formulas', () => {
     expect(computeRating(c)).toBeCloseTo((3.5 * 3 + 5 + 3) / 7, 2);
   });
 
-  it('par time (DESIGN 5.5)', () => {
-    const d = { plaque: 0.5, stain: 0.3, tartarCount: 10, tartarSize: 1, debrisCount: 2 };
-    expect(parSeconds(d, 1)).toBe(Math.round(25 + 32 + 15 + 7.5 + 8));
-    expect(parSeconds(d, 1.2)).toBe(Math.round((25 + 32 + 15 + 7.5 + 8) * 1.2));
+  it('par time (DESIGN 5.8)', () => {
+    const d = { plaque: 0.5, stain: 0.3, tartarCount: 6, tartarSize: 1, debrisCount: 2 };
+    const sp = emptySpecial();
+    expect(parSeconds(d, 5, sp, 'routine', 1)).toBe(Math.round(20 + 2.6 * 6 + 5 * 5 + 4 * 2));
+    expect(parSeconds(d, 5, sp, 'routine', 1.2)).toBe(Math.round((20 + 2.6 * 6 + 5 * 5 + 4 * 2) * 1.2));
+    const pirate = { ...sp, barnacles: 4, seaweed: 2, treasure: true };
+    expect(parSeconds(d, 5, pirate, 'pirate', 1)).toBe(Math.round(20 + 2.6 * (6 + 8) + 25 + 4 * (2 + 2 + 1) + 20));
   });
 
   it('salary asks follow the role formulas', () => {
@@ -91,15 +95,16 @@ describe('employee pay (DESIGN 3.2)', () => {
     const q = 0.9;
     const secs = 60;
     const { payout } = sim.completeHandsOn(s, p.id, result(q, { seconds: secs }));
-    expect(payout.pay).toBe(Math.round(employeeRate(s.player.level) * (0.4 + 0.8 * q)));
+    const pm = CASES[p.caseType].payMult;
+    expect(payout.pay).toBe(Math.round(employeeRate(s.player.level) * (0.4 + 0.8 * q) * pm));
     const speed = Math.max(0, Math.min(1, (setup.parSeconds - secs) / setup.parSeconds));
     const tipRates: Record<string, number> = { regular: 0.1 };
     const tipRate = tipRates[p.archetype] ?? null;
-    if (tipRate != null) expect(payout.tip).toBe(Math.round(120 * tipRate * ((q - 0.6) / 0.4) * (1 + 0.5 * speed)));
+    if (tipRate != null) expect(payout.tip).toBe(Math.round(Math.round(120 * pm) * tipRate * ((q - 0.6) / 0.4) * (1 + 0.5 * speed)));
     expect(payout.xp).toBe(Math.round(10 + 30 * q));
   });
 
-  it('no tip below quality 0.6 and quick cleans pay no tip and half XP', () => {
+  it('no tip below quality 0.6; quick cleans pay half the wage, no tip and no XP', () => {
     const s = graduated(22);
     let guard = 0;
     while (!sim.playerQueue(s).length && guard++ < 1000) sim.tick(s, 1);
@@ -111,10 +116,12 @@ describe('employee pay (DESIGN 3.2)', () => {
     while (!sim.playerQueue(s).length && !s.dayOver && guard++ < 1000) sim.tick(s, 1);
     const p2 = sim.playerQueue(s)[0];
     const aq = sim.autoQuality(s);
+    s.player.mastery[p2.caseType] = 3;   // Bronze
     const r2 = sim.quickClean(s, p2.id);
     expect(r2.payout.tip).toBe(0);
     expect(r2.payout.quality).toBeCloseTo(aq, 5);
-    expect(r2.payout.xp).toBe(Math.round((10 + 30 * aq) / 2));
+    expect(r2.payout.xp).toBe(0);
+    expect(r2.payout.pay).toBe(Math.round(employeeRate(s.player.level) * (0.4 + 0.8 * aq) * CASES[p2.caseType].payMult * 0.5));
   });
 
   it('auto quality formula (DESIGN 4.2)', () => {

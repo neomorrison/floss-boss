@@ -13,10 +13,11 @@ import { SERVICES } from '../data/services';
 import { CHAIRS } from '../data/upgrades';
 import { OFFICES } from '../data/offices';
 import {
-  GRID, REVIEWS_MAX, SimOp, q3, q64, SimPatient, SimStaff, addCash, clinicsOf, isPresent, isTerminal, opById, pushEvent, staffById,
+  GRID, REVIEWS_MAX, SimOp, q3, q64, SimPatient, SimStaff, addCash, clinicsOf, isPresent, isTerminal, opById, priceOf, pushEvent, staffById,
 } from './internal';
 import { autoQuality, employeeRate, gainXp } from './progress';
-import { chairMinutes, decideAddons, hasDentist, suppliesFor } from './patients';
+import { chairMinutes, decideAddons, downgradeCase, hasDentist, suppliesFor } from './patients';
+import { onlyPlayerHands } from './booking';
 import { checkAchievements, progressGoal } from './goals';
 
 /** Minutes after CLOSE_MIN after which anyone still inside is sent home (safety valve). */
@@ -24,6 +25,10 @@ const HARD_CLOSE = CLOSE_MIN + 240;
 const DENTIST_WAIT_MAX = 20;
 /** The dentist drops in for the exam during the last minutes of the cleaning. */
 const DENTIST_LEAD = 12;
+/** A patient seated for you always gets at least this many minutes in your chair before giving up. */
+export const MIN_CHAIR_WINDOW = 20;
+/** Your chair on autopilot works a little below a quick clean (DESIGN 5.9: the team does the work). */
+const AUTOPILOT_PENALTY = 0.05;
 
 interface Ctx {
   state: GameState;
@@ -33,11 +38,16 @@ interface Ctx {
   ev: SimEvent[];
   owner: boolean;       // this clinic belongs to the player
   employee: boolean;    // employee phase
+  hold?: boolean;       // waiting-room patience is paused (a fast-forward while only you can clean here)
 }
 
 // ------------------------------------------------------------------ public entry
 
-export function tickWorld(state: GameState, minutes: number): SimEvent[] {
+/**
+ * Advance the world by `minutes`. `hold` lists clinics whose waiting room does not lose patience in
+ * this window: the fast-forward after your own clean, where nobody but you could have seated them.
+ */
+export function tickWorld(state: GameState, minutes: number, hold: readonly string[] = []): SimEvent[] {
   const ev: SimEvent[] = [];
   if (state.phase === 'school' || state.dayOver || !(minutes > 0) || !Number.isFinite(minutes)) return ev;
   const clinics = clinicsOf(state);
@@ -47,7 +57,7 @@ export function tickWorld(state: GameState, minutes: number): SimEvent[] {
   while (k * GRID <= end + 1e-9) {
     const g = k * GRID;
     state.minute = g;
-    for (const c of clinics) stepClinic({ state, c, g, rng, ev, owner: c.ownedByPlayer, employee: state.phase === 'employee' });
+    for (const c of clinics) stepClinic({ state, c, g, rng, ev, owner: c.ownedByPlayer, employee: state.phase === 'employee', hold: hold.includes(c.id) });
     if (dayDone(state, g)) {
       state.dayOver = true;
       ev.push({ type: 'dayOver' });
@@ -78,13 +88,14 @@ export function stepClinic(ctx: Ctx): void {
     const at = p.arriveAt ?? p.apptMin;
     if (at > g) continue;
     if (at > CLOSE_MIN) { p.state = 'noshow'; p.since = at; continue; }
-    if (p.walkIn && waitingCount(c) >= seatsOf(c)) {
-      // no seat free: the walk-in does not come in
+    if (p.walkIn && !walkInWelcome(ctx)) {
+      // no seat free, or nobody free to take them: the walk-in does not come in
       p.state = 'noshow';
       p.since = at;
       c.day.turnedAway += 1;
       continue;
     }
+    if (p.walkIn) p.pm = { [p.service]: c.prices[p.service] ?? 1 };   // walk-ins pay the price at arrival
     p.state = 'entering';
     p.since = at;
     p.until = at + WALK_MIN;
@@ -112,6 +123,17 @@ export function stepClinic(ctx: Ctx): void {
     }
   }
   if (g >= HARD_CLOSE) sendEveryoneHome(ctx);
+}
+
+/** Walk-ins come in only when a seat is free and someone can clean them; with only your own hands-on
+ * chair serving, only into an empty waiting room (you cannot clean faster than the fast-forward). */
+function walkInWelcome(ctx: Ctx): boolean {
+  const { c, state } = ctx;
+  const waiting = waitingCount(c);
+  if (waiting >= seatsOf(c)) return false;
+  if (!c.ops.some((o) => opServes(ctx, o as SimOp))) return false;
+  if (onlyPlayerHands(state, c) && waiting > 0) return false;
+  return true;
 }
 
 function seatsOf(c: Clinic): number {
@@ -163,6 +185,12 @@ function advance(ctx: Ctx, p: SimPatient): boolean {
       }
       return false;
     case 'waiting': {
+      if (ctx.hold) {
+        // patience paused: carry the minutes already waited and restart the clock from now
+        p.wbase = p.waitedMin;
+        p.since = g;
+        return false;
+      }
       // early arrivals do not mind waiting until their appointment time
       const wb = p.wbase ?? 0;
       const ws = Math.max(p.since, p.apptMin);
@@ -229,12 +257,13 @@ function advanceChair(ctx: Ctx, p: SimPatient): boolean {
         return true;
       }
       const wb = p.wbase ?? 0;
-      const tw = p.since + (p.patience - wb) * 1.5;
+      const tv = op.upgrades.includes('tv') ? 1.25 : 1;
+      const tw = p.since + Math.max(MIN_CHAIR_WINDOW, (p.patience - wb) * 1.5 * tv);
       if (tw <= g) {
         walkout(ctx, p, Math.max(p.since, tw), 'wait');
         return true;
       }
-      p.waitedMin = Math.round((wb + (g - p.since) / 1.5) * 100) / 100;
+      p.waitedMin = Math.round(Math.min(p.patience, wb + (g - p.since) / (1.5 * tv)) * 100) / 100;
       p.mood = moodFor(p.waitedMin / p.patience);
       return false;
     }
@@ -248,7 +277,7 @@ function advanceChair(ctx: Ctx, p: SimPatient): boolean {
       if (!hasDentist(ctx.state, c) || g - p.since > DENTIST_WAIT_MAX) {
         // no dentist free after all: skip the exam (and do not bill it)
         p.addons = p.addons.filter((a) => a !== 'exam');
-        p.fee = Math.round(p.fee - SERVICES.exam.fee * (c.prices.exam ?? 1));
+        p.fee = Math.round(p.fee - SERVICES.exam.fee * priceOf(c, p, 'exam'));
         p.examDone = true;
         leaveChair(ctx, p, g);
         return true;
@@ -314,7 +343,7 @@ function startClean(ctx: Ctx, p: SimPatient, op: SimOp, t: number): void {
   let comfort: number;
   let d: number;
   if (op.staffId === PLAYER_ID) {
-    q = clamp(autoQuality(state) + rng.normal(0, 0.03), 0.2, 0.99);
+    q = clamp(autoQuality(state) - AUTOPILOT_PENALTY + rng.normal(0, 0.03), 0.2, 0.99);
     comfort = clamp(0.4 + 0.45 * 0.6 + chair.comfort + tv, 0, 1);
     d = mins * 1.0 * a.difficulty * assistF * kits;
     p.staffId = PLAYER_ID;
@@ -335,8 +364,10 @@ function startClean(ctx: Ctx, p: SimPatient, op: SimOp, t: number): void {
     d = mins * speedF * a.difficulty * assistF * kits;
     s.task = 'cleaning';
     s.busyUntil = t + q64(Math.max(5, d));
+    (s as SimStaff).workMin = ((s as SimStaff).workMin ?? 0) + Math.max(5, d);
     p.staffId = s.id;
   }
+  if (asst && isPresent(state, asst)) (asst as SimStaff).workMin = ((asst as SimStaff).workMin ?? 0) + Math.max(5, d);
   p.stage = 'clean';
   p.awaitingPlayer = false;
   p.preQ = q3(q);
@@ -387,13 +418,12 @@ function autopilotDone(ctx: Ctx, p: SimPatient): void {
   const q = p.quality ?? 0.6;
   p.hands = true;
   p.seen = true;
-  gainXp(state, (10 + 30 * q) / 2, ctx.ev);
+  // autopilot earns no XP (DESIGN 5.9); an employee chair on autopilot is paid like a quick clean
   state.stats.quickCleans += 1;
   if (ctx.employee && p.isPlayerPatient) {
-    const pay = Math.round(employeeRate(state.player.level) * (0.4 + 0.8 * q));
+    const pay = Math.round(employeeRate(state.player.level) * (0.4 + 0.8 * q) * 0.5);
     addCash(state, pay, 'Wages');
     pushEvent(ctx.ev, { type: 'paid', clinicId: ctx.c.id, patientId: p.id, amount: pay });
-    progressGoal(state, 'served', 1, ctx.ev);
     shiftBonusCheck(state, ctx.c, ctx.ev);
   }
 }
@@ -481,7 +511,7 @@ function reviewFor(ctx: Ctx, p: SimPatient): void {
   const a = ARCHETYPES[p.archetype];
   const always = a.reviewWeight >= 3;
   if (!always && !rng.chance(0.6)) return;
-  const stars = reviewStars(p.quality ?? 0.6, p.comfort ?? 0.6, p.waitedMin, p.patience, c.prices[p.service] ?? 1);
+  const stars = reviewStars(p.quality ?? 0.6, p.comfort ?? 0.6, p.waitedMin, p.patience, priceOf(c, p, p.service));
   addReview(state, c, p, stars, ctx.ev);
 }
 
@@ -491,9 +521,9 @@ export function reviewStars(quality: number, comfort: number, waited: number, pa
   return e >= 0.85 ? 5 : e >= 0.74 ? 4 : e >= 0.6 ? 3 : e >= 0.45 ? 2 : 1;
 }
 
-export function addReview(state: GameState, c: Clinic, p: SimPatient, stars: number, ev: SimEvent[] | null, text?: string, rng?: Rng): void {
+export function addReview(state: GameState, c: Clinic, p: SimPatient, stars: number, ev: SimEvent[] | null, text?: string, weightMult = 1): void {
   const a = ARCHETYPES[p.archetype];
-  const weight = Math.max(1, a.reviewWeight);
+  const weight = Math.max(1, a.reviewWeight) * Math.max(1, weightMult);
   const pool = REVIEW_TEXT[stars] ?? REVIEW_TEXT[3];
   // pick text deterministically from the patient id so reviews need no rng draw here
   let h = 0;
@@ -508,15 +538,17 @@ export function addReview(state: GameState, c: Clinic, p: SimPatient, stars: num
     c.day.fiveStars += 1;
     if (c.ownedByPlayer) progressGoal(state, 'fiveStars', 1, ev);
   }
-  pushEvent(ev, { type: 'review', clinicId: c.id, stars, text: body, name: p.name });
+  pushEvent(ev, { type: 'review', clinicId: c.id, stars, text: body, name: p.name, patientId: p.id });
 }
 
+/** Weighted reviews blended with a 3.5 prior of weight 3; a Fish Tank adds a flat +0.1 (max 5). */
 export function computeRating(c: Clinic): number {
-  const prior = 3.5 + (c.equipment.includes('fishTank') ? 0.1 : 0);
+  const prior = 3.5;
   let sw = 0;
   let s = 0;
   for (const r of c.reviews) { s += r.stars * r.weight; sw += r.weight; }
-  return Math.round(((prior * 3 + s) / (3 + sw)) * 100) / 100;
+  const fish = c.equipment.includes('fishTank') ? 0.1 : 0;
+  return Math.round(Math.min(5, (prior * 3 + s) / (3 + sw) + fish) * 100) / 100;
 }
 
 // ------------------------------------------------------------------ front desk
@@ -563,7 +595,11 @@ function runDesk(ctx: Ctx): boolean {
 
 function seatPatients(ctx: Ctx): boolean {
   const { c, g } = ctx;
-  const free = (c.ops as SimOp[]).filter((o) => o.patientId == null && opServes(ctx, o));
+  // hired hygienists (and your autopilot) take patients first; your hands-on chair only gets one
+  // when nobody else is free, so nobody waits in your chair while a colleague stands idle
+  const handsChair = (o: SimOp) => o.staffId === PLAYER_ID && o.playerMode === 'hands';
+  const free = (c.ops as SimOp[]).filter((o) => o.patientId == null && opServes(ctx, o))
+    .sort((a, b) => Number(handsChair(a)) - Number(handsChair(b)));
   if (!free.length) return false;
   const waiting = c.patients.filter((p) => p.state === 'waiting') as SimPatient[];
   if (!waiting.length) return false;
@@ -584,11 +620,11 @@ function seatPatients(ctx: Ctx): boolean {
     }
     if (idx < 0) continue;
     const op = free.splice(idx, 1)[0];
-    if (p.addons.includes('whitening') && !op.upgrades.includes('whiteningLamp')) {
-      p.addons = p.addons.filter((a) => a !== 'whitening');
-      p.fee = Math.round(p.fee - SERVICES.whitening.fee * (c.prices.whitening ?? 1));
+    if (ctx.owner && (p.caseType === 'whitening' || p.addons.includes('whitening')) && !op.upgrades.includes('whiteningLamp')) {
+      downgradeCase(c, p);   // no lamp in this operatory: a routine cleaning instead
     }
-    const start = Math.min(g, Math.max(op.freeAt ?? 0, p.since));
+    // never seat in the past: an operatory that just started serving has a stale freeAt
+    const start = Math.max(g - GRID, Math.min(g, Math.max(op.freeAt ?? 0, p.since)));
     p.wbase = (p.wbase ?? 0) + Math.max(0, start - Math.max(p.since, p.apptMin));
     p.waitedMin = p.wbase;
     op.patientId = p.id;
@@ -630,7 +666,7 @@ function dispatchDentists(ctx: Ctx): boolean {
     let mins = WALK_MIN + q64(SERVICES.exam.minutes * pace);
     if (rng.chance(0.25)) {
       p.addons = [...p.addons, 'filling'];
-      p.fee = Math.round(p.fee + SERVICES.filling.fee * (c.prices.filling ?? 1));
+      p.fee = Math.round(p.fee + SERVICES.filling.fee * priceOf(c, p, 'filling'));
       mins += q64(SERVICES.filling.minutes * pace);
     }
     best.task = 'exam';
@@ -652,7 +688,7 @@ function dispatchDentists(ctx: Ctx): boolean {
 /** Drop bookkeeping a patient no longer needs once they have left (keeps saves small). */
 function compactGone(p: SimPatient): void {
   delete p.preQ; delete p.preC; delete p.wbase; delete p.stage; delete p.examUntil; delete p.examDone;
-  delete p.billed; delete p.arriveAt; delete p.hands; delete p.reviewed;
+  delete p.billed; delete p.arriveAt; delete p.hands; delete p.reviewed; delete p.pm; delete p.gel;
 }
 
 function sendEveryoneHome(ctx: Ctx): void {

@@ -1,6 +1,5 @@
 // Player settings (not part of the save). Wraps core/save settings with apply + change events.
 import { bus } from '../core/bus';
-import { applyQuality } from '../core/renderer';
 import { loadSettings, saveSettings, type Settings } from '../core/save';
 
 let current: Settings = loadSettings();
@@ -20,7 +19,8 @@ export function applySettings(): void {
   const root = document.documentElement;
   root.classList.toggle('reduced-motion', current.reducedMotion);
   root.classList.toggle('quality-low', current.quality === 'low');
-  try { applyQuality(); } catch { /* renderer not created yet */ }
+  // the renderer lives in the 3D chunk: apply the quality there once it is loaded
+  import('../core/renderer').then((m) => { try { m.applyQuality(); } catch { /* renderer not created yet */ } }).catch(() => undefined);
 }
 
 let mq: MediaQueryList | null = null;

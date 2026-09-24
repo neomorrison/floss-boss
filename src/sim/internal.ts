@@ -2,7 +2,7 @@
 // The sim keeps a few private bookkeeping fields on the shared objects (patients, staff,
 // operatories, the state). They are optional, JSON-safe and filled in by migrate().
 import type {
-  Clinic, DayPatient, DayReport, GameState, Goal, Operatory, SimEvent, SkillId, Staff,
+  Clinic, DayPatient, DayReport, GameState, Goal, Operatory, PriceKey, SimEvent, SkillId, Staff,
 } from '../core/types';
 import type { Rng } from '../core/rng';
 import { makeRng } from '../core/rng';
@@ -29,12 +29,21 @@ export interface SimPatient extends DayPatient {
   examUntil?: number | null; // when the dentist finishes this patient's exam (once assigned)
   hands?: boolean;           // cleaned by the player (hands-on or quick)
   seen?: boolean;            // employee: counted toward the shift
+  gel?: boolean;             // a numbing gel was already used on this patient
+  pm?: Partial<Record<PriceKey, number>>;  // price multipliers locked at booking (service) and check-in (add-ons)
 }
 
-export interface SimStaff extends Staff { offFrom?: number }
+export interface SimStaff extends Staff {
+  workMin?: number;          // chair minutes worked today (overwork is measured in minutes, not patients)
+  courseGain?: number;       // skill gained when the booked course ends
+}
 export interface SimOp extends Operatory { freeAt?: number }
-export interface SimClinic extends Clinic { startRating?: number }
+export interface SimClinic extends Clinic {
+  startRating?: number;
+  bossCleans?: number;       // hands-on cleans by the owner today: +4% demand each next day (max +20%)
+}
 export interface SimGoal extends Goal { limit?: number }
+/** Reports saved before operatingNet existed carry opNet instead. */
 export interface SimReport extends DayReport { opNet?: number }
 export interface SimState extends GameState {
   dayXp?: number;
@@ -45,6 +54,21 @@ export interface SimState extends GameState {
 
 export const S = (state: GameState) => state as SimState;
 export const P = (p: DayPatient) => p as SimPatient;
+
+/** Price multiplier a patient pays for `key`: locked when booked (service) or checked in (add-ons). */
+export function priceOf(c: Clinic, p: DayPatient, key: PriceKey): number {
+  const v = (p as SimPatient).pm?.[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : (c.prices[key] ?? 1);
+}
+
+/** Can this operatory serve patients today: your chair, or a present hygienist. */
+export function opStaffed(state: GameState, c: Clinic, op: Operatory): boolean {
+  if (op.staffId === PLAYER_ID) return true;
+  const s = staffById(c, op.staffId);
+  return !!s && s.role === 'hygienist' && isPresent(state, s);
+}
+
+export const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
 export function nextId(state: GameState, prefix: string): string {
   state.nextId = (state.nextId || 1) + 1;

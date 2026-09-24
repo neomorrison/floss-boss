@@ -5,21 +5,26 @@ import type { DayLine, DayReport, Review } from '../core/types';
 import { h } from './dom';
 import { countUp, music, sfx } from './fx';
 import { icon } from './icons';
-import { noDash, plural } from './logic';
+import { noDash, operatingNet, plural } from './logic';
 import { openModal } from './modal';
 import { patientPortrait } from './portrait';
 import { btn, chip, stars } from './widgets';
 
 export function showDayReport(report: DayReport): Promise<void> {
   const netEl = h('span.num', money(0));
-  const positive = report.net >= 0;
+  // owners see the day's profit; purchases, loans and rewards show as the cash change beside it
+  const owner = report.phase === 'owner';
+  const headline = owner ? operatingNet(report) : report.net;
+  const cashDiff = owner && Math.round(report.net) !== Math.round(headline);
+  const positive = headline >= 0;
   const hero = h('div.report-hero', { class: { 'is-loss': !positive } },
     h('div.report-cal', h('span', weekdayName(report.weekday)), h('b', String(report.day))),
     h('div.grow',
       h('div.eyebrow', 'Day report'),
       h('h2', `Day ${report.day} is a wrap`),
     ),
-    h('div.report-net', h('span.tiny.bold', report.phase === 'owner' ? 'Net' : 'Earned'), h('div.report-net-num', icon(positive ? 'trendUp' : 'trendDown'), netEl)),
+    h('div.report-net', h('span.tiny.bold', owner ? 'Profit' : 'Earned'), h('div.report-net-num', icon(positive ? 'trendUp' : 'trendDown'), netEl),
+      cashDiff ? h('span.report-cash.tiny.bold', `Cash ${signedMoney(Math.round(report.net))}`) : null),
   );
 
   const locs = report.perLocation.map((l) => {
@@ -86,7 +91,7 @@ export function showDayReport(report: DayReport): Promise<void> {
     closeButton: false,
   });
   next.addEventListener('click', () => { sfx('ui_click'); m.close(); });
-  countUp(netEl, 0, report.net, 900, (n) => signedMoney(Math.round(n)));
+  countUp(netEl, 0, headline, 900, (n) => signedMoney(Math.round(n)));
   music('music_clinic');
   return m.closed;
 }

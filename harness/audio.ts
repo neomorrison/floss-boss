@@ -6,7 +6,7 @@ import { audioUrl, MUSIC_KEYS, SFX_KEYS, type MusicKey, type SfxKey } from '../s
 import { bus } from '../src/core/bus';
 import { loadSettings, saveSettings } from '../src/core/save';
 
-const LOOP_KEYS: SfxKey[] = ['ultrasonic_loop', 'polish_loop', 'suction_loop', 'rinse_loop'];
+const LOOP_KEYS: SfxKey[] = ['ultrasonic_loop', 'polish_loop', 'suction_loop', 'rinse_loop', 'lamp_loop'];
 
 interface HarnessResult {
   ready: boolean;
@@ -107,7 +107,7 @@ app.appendChild(musicSection);
 
 // ---------------------------------------------------------------- SFX grid
 const sfxSection = document.createElement('section');
-sfxSection.innerHTML = '<h2>SFX (37 keys, 4 loopable)</h2>';
+sfxSection.innerHTML = `<h2>SFX (${SFX_KEYS.length} keys, ${LOOP_KEYS.length} loopable)</h2>`;
 const grid = document.createElement('div');
 grid.className = 'grid';
 sfxSection.appendChild(grid);

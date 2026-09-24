@@ -6,6 +6,12 @@
 //   /harness/models-mouth.html?view=mouth&cam=front|left|right|upper|lower|close|top
 //        &missing=3,17   leave teeth out      &hide=frame,tongue,dirt   hide parts
 //        &tool=tool_scaler   hold a tool at a tooth        &origin=1   show model origins (grid)
+//        &case=pirate|candy|braces   place that case's props (barnacles, seaweed, doubloon, gold tooth;
+//                                    sugar bugs; brackets and a wire)
+//        &jaw=0..1   close the jaw: the lower arch rises 1.62 and the frame's LipLower node follows
+//        &jawmode=morph|move|rot   LipLower by its JawClose morph target (default, seamless), by translation
+//                                  (y + 0.9 jaw) or by rotation about its hinge pivot (-0.11 jaw about X)
+//   /harness/models-mouth.html?only=key1,key2      grid of just those keys (e.g. the case props)
 //
 // window.__ready is true once everything has loaded (tools/snap.mjs waits on it).
 import * as THREE from 'three';
@@ -24,6 +30,9 @@ const MISSING = new Set((q.get('missing') || '').split(',').filter(Boolean).map(
 const SHOW_ORIGIN = q.get('origin') === '1';
 const TOOL = q.get('tool');
 const SHADOWS = q.get('shadows') !== '0';
+const CASE = q.get('case');
+const JAW = Math.max(0, Math.min(1, Number(q.get('jaw') || 0)));
+const JAWMODE = q.get('jawmode') || 'morph';
 
 const stage = document.getElementById('stage')!;
 const labels = document.getElementById('labels')!;
@@ -35,6 +44,9 @@ const links: [string, string][] = [
   ['Grid', '?view=grid'], ['Tools', '?view=tools'], ['Mouth', '?view=mouth&cam=front'], ['Left', '?view=mouth&cam=left'],
   ['Right', '?view=mouth&cam=right'], ['Upper', '?view=mouth&cam=upper'], ['Lower', '?view=mouth&cam=lower'],
   ['Close', '?view=mouth&cam=close&tool=tool_scaler'],
+  ['Cases', '?only=tartar_barnacle,debris_seaweed,doubloon,sugar_bug,bracket,tool_gelbrush,tool_uvlamp'],
+  ['Pirate', '?view=mouth&cam=front&case=pirate&missing=4,17,23'], ['Candy', '?view=mouth&cam=front&case=candy'],
+  ['Braces', '?view=mouth&cam=front&case=braces'], ['Jaw', '?view=mouth&cam=front&jaw=1'],
 ];
 for (const [name, href] of links) {
   const a = document.createElement('a');
@@ -57,7 +69,9 @@ stage.appendChild(renderer.domElement);
 renderer.domElement.style.touchAction = 'none';
 
 const loader = new GLTFLoader();
-const url = (key: string) => `/models/${key}.glb`;
+// &frameurl=/out/some/mouth_frame.glb swaps in another frame build (before/after checks)
+const FRAME_URL = q.get('frameurl');
+const url = (key: string) => (key === 'mouth_frame' && FRAME_URL ? FRAME_URL : `/models/${key}.glb`);
 const cache = new Map<string, Promise<THREE.Group | null>>();
 function load(key: string): Promise<THREE.Group | null> {
   let p = cache.get(key);
@@ -207,6 +221,81 @@ function toothSurface(tooth: THREE.Object3D, p: ToothPlacement, v: number, ang =
   return { pos: hit.point.clone(), nrm };
 }
 
+const CASE_KEYS = ['tartar_barnacle', 'debris_seaweed', 'doubloon', 'sugar_bug', 'bracket'];
+type AddFn = (k: string, fn?: (o: THREE.Object3D) => void) => THREE.Object3D | null;
+
+/** Case props placed the way the clean scene does it: deposits and bugs with +Y along the surface normal,
+ *  brackets with X along the arch and a wire through their slots, debris turned so +Z faces out of the gap. */
+async function caseProps(kind: string, scene: THREE.Scene, placements: ToothPlacement[], toothObj: Map<number, THREE.Object3D>, add: AddFn): Promise<void> {
+  const onTooth = (idx: number, v: number, key: string, spin: number, xOff = 0) => {
+    const t = toothObj.get(idx);
+    const p = placements[idx];
+    if (!t) return null;
+    const s = toothSurface(t, p, v, 0, xOff);
+    if (!s) return null;
+    return add(key, (o) => {
+      o.position.copy(s.pos);
+      o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.nrm);
+      o.rotateY(spin);
+      o.userData.arch = p.arch;
+    });
+  };
+  const inGap = (a: number, key: string, v: number) => {
+    const pa = placements[a], pb = placements[a + 1];
+    const hgt = Math.min(pa.height, pb.height) * v * pa.dir;
+    const n = new THREE.Vector3((pa.nx + pb.nx) / 2, 0, (pa.nz + pb.nz) / 2).normalize();
+    return add(key, (o) => {
+      o.position.set((pa.x + pb.x) / 2, pa.y + hgt, (pa.z + pb.z) / 2).addScaledVector(n, Math.min(pa.depth, pb.depth) * 0.42);
+      o.lookAt(o.position.clone().add(n));
+      o.userData.arch = pa.arch;
+    });
+  };
+  if (kind === 'pirate') {
+    for (const [i, v, sp] of [[2, 0.2, 0.4], [9, 0.18, 2.1], [16, 0.2, 1.2], [21, 0.22, 4.0], [25, 0.2, 5.1]]) onTooth(i, v, 'tartar_barnacle', sp);
+    for (const [a, v] of [[7, 0.45], [19, 0.5]]) {
+      const o = inGap(a, 'debris_seaweed', v);
+      if (o) { o.scale.setScalar(0.8); o.rotateZ(0.25); }
+    }
+    inGap(25, 'doubloon', 0.45);
+    // gold tooth: the clean scene tints the enamel; here a quick stand-in
+    const g = toothObj.get(5);
+    g?.traverse((c) => {
+      const m = c as THREE.Mesh;
+      if (m.isMesh) m.material = new THREE.MeshStandardMaterial({ color: '#F2C14E', metalness: 0.35, roughness: 0.25 });
+    });
+  } else if (kind === 'candy') {
+    for (const [i, v, sp] of [[3, 0.45, 0.6], [8, 0.4, 2.4], [18, 0.45, 4.2], [22, 0.5, 1.1], [11, 0.45, 5.5]]) onTooth(i, v, 'sugar_bug', sp);
+  } else if (kind === 'braces') {
+    const pts: THREE.Vector3[][] = [[], []];
+    for (const p of placements) {
+      if (p.pos < 2 || p.pos > 11) continue;
+      const t = toothObj.get(p.index);
+      if (!t) continue;
+      const s = toothSurface(t, p, 0.5, 0);
+      if (!s) continue;
+      const o = add('bracket', (b) => {
+        // basis: Y along the surface normal, X along the arch (the tooth's local X), Z = X x Y
+        const y = s.nrm.clone();
+        const x = new THREE.Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw));
+        x.addScaledVector(y, -x.dot(y)).normalize();
+        const z = new THREE.Vector3().crossVectors(x, y);
+        b.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+        b.position.copy(s.pos);
+        b.userData.arch = p.arch;
+      });
+      if (o) pts[p.arch === 'upper' ? 0 : 1].push(o.localToWorld(new THREE.Vector3(0, 0.066, 0)));
+    }
+    for (const arch of pts) {
+      if (arch.length < 2) continue;
+      arch.sort((a, b) => a.x - b.x);
+      const wire = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(arch), 80, 0.02, 8),
+        new THREE.MeshStandardMaterial({ color: '#C9D2DA', metalness: 0.4, roughness: 0.25 }));
+      wire.userData.arch = arch === pts[1] ? 'lower' : 'upper';
+      scene.add(wire);
+    }
+  }
+}
+
 async function mouth(): Promise<void> {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xcfeee7);
@@ -231,7 +320,8 @@ async function mouth(): Promise<void> {
   controls.update();
 
   const keys = ['mouth_frame', 'gum_upper', 'gum_lower', 'tongue', 'tooth_incisor', 'tooth_canine', 'tooth_premolar', 'tooth_molar',
-    'tartar_a', 'tartar_b', 'tartar_c', 'debris_popcorn', 'debris_spinach', 'debris_seed', 'debris_candy'];
+    'tartar_a', 'tartar_b', 'tartar_c', 'debris_popcorn', 'debris_spinach', 'debris_seed', 'debris_candy',
+    ...(CASE ? CASE_KEYS : [])];
   const M: Record<string, THREE.Group | null> = {};
   await Promise.all(keys.map(async (k) => { M[k] = await load(k); }));
   const add = (k: string, fn?: (o: THREE.Object3D) => void) => {
@@ -243,12 +333,29 @@ async function mouth(): Promise<void> {
     scene.add(o);
     return o;
   };
-  if (!HIDE.has('frame')) add('mouth_frame');
+  // the lower arch lives in its own group so ?jaw= can close it like the clean scene does
+  const lower = new THREE.Group();
+  scene.add(lower);
+  const addLower = (k: string, fn?: (o: THREE.Object3D) => void) => {
+    const o = add(k, fn);
+    if (o) lower.attach(o);
+    return o;
+  };
+  if (!HIDE.has('frame')) {
+    const f = add('mouth_frame');
+    const lip = f?.getObjectByName('LipLower');
+    if (lip) {
+      if (JAWMODE === 'rot') lip.rotation.x = -JAW * 0.11;
+      else if (JAWMODE === 'move') lip.position.y += JAW * 0.9;
+      else lip.traverse((c) => { const m = c as THREE.Mesh; if (m.isMesh && m.morphTargetInfluences) m.morphTargetInfluences[0] = JAW; });
+    }
+    info.dataset.lip = lip ? `LipLower at ${lip.position.toArray().map((v) => v.toFixed(2)).join(', ')}` : 'no LipLower node';
+  }
   if (!HIDE.has('gums')) {
     add('gum_upper', (o) => { o.position.y = UPPER_GUM_Y; });
-    add('gum_lower', (o) => { o.position.y = LOWER_GUM_Y; });
+    addLower('gum_lower', (o) => { o.position.y = LOWER_GUM_Y; });
   }
-  if (!HIDE.has('tongue')) add('tongue');
+  if (!HIDE.has('tongue')) addLower('tongue');
   const placements = layoutTeeth();
   const toothObj = new Map<number, THREE.Object3D>();
   if (!HIDE.has('teeth')) {
@@ -256,6 +363,7 @@ async function mouth(): Promise<void> {
       if (MISSING.has(p.index)) continue;
       const o = add('tooth_' + p.kind, (t) => placeTooth(t, p));
       if (o) toothObj.set(p.index, o);
+      if (o && p.arch === 'lower') lower.attach(o);
     }
   }
   scene.updateMatrixWorld(true);
@@ -273,6 +381,7 @@ async function mouth(): Promise<void> {
         o.position.copy(s.pos);
         o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), s.nrm);
         o.rotateY(idx * 1.3);
+        o.userData.arch = p.arch;
       });
     }
     const debris: [number, string][] = [[19, 'debris_spinach'], [7, 'debris_popcorn'], [24, 'debris_seed'], [10, 'debris_candy']];
@@ -284,9 +393,18 @@ async function mouth(): Promise<void> {
       add(k, (o) => {
         o.position.set((a.x + b.x) / 2, a.y + hgt, (a.z + b.z) / 2).addScaledVector(n, Math.min(a.depth, b.depth) * 0.42);
         o.rotation.y = Math.atan2(n.x, n.z);
+        o.userData.arch = a.arch;
       });
     }
   }
+  if (CASE) await caseProps(CASE, scene, placements, toothObj, add);
+  scene.updateMatrixWorld(true);
+  for (const o of [...scene.children]) {
+    // dirt and props placed on lower teeth ride with the lower arch
+    if (o === lower || o.userData.arch !== 'lower') continue;
+    lower.attach(o);
+  }
+  lower.position.y = JAW * 1.62;
   if (TOOL) {
     const src = await load(TOOL);
     const p = placements[21];

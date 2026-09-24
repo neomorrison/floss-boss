@@ -1,11 +1,9 @@
 // Title: Continue / New game / Settings over the title art (CSS gradient fallback).
-import { probeImage } from '../../core/assets';
+import { probeImage } from '../img';
 import { money } from '../../core/format';
 import { deleteSave } from '../../core/save';
 import { store } from '../../core/store';
 import { TITLE_BG_URL } from '../../data/assets';
-import * as clean from '../../clean';
-import * as clinic from '../../clinic';
 import { audio } from '../../audio';
 import { go, type Screen } from '../app';
 import { h } from '../dom';
@@ -23,8 +21,9 @@ function preload(): void {
   if (preloaded) return;
   preloaded = true;
   const safe = (fn: () => Promise<unknown>) => { try { fn().catch(() => undefined); } catch { /* not built */ } };
-  safe(() => clinic.preloadClinic());
-  safe(() => clean.preloadClean());
+  // the clinic diorama and the clean scene load as separate chunks: fetch them while the title shows
+  safe(() => import('../../clinic').then((m) => m.preloadClinic()));
+  safe(() => import('../../clean').then((m) => m.preloadClean()));
   safe(() => audio.preload());
 }
 
