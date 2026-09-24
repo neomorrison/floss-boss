@@ -1,0 +1,92 @@
+/* Floss Boss design tokens. Light-first bright cartoon (DESIGN 9). */
+:root {
+  /* palette */
+  --mint: #3DD6B5;
+  --mint-d: #1FB594;
+  --mint-dd: #12977B;
+  --mint-l: #D3F6EC;
+  --mint-ll: #EEFBF7;
+  --teal: #0E8F8A;
+  --teal-d: #0A6E6A;
+  --teal-l: #CDEDEA;
+  --gum: #FF7AA8;
+  --gum-d: #E3588A;
+  --gum-l: #FFE0EB;
+  --sun: #FFD166;
+  --sun-d: #E9AF38;
+  --sun-dd: #B98217;
+  --sun-l: #FFF1C9;
+  --coral: #FF6B6B;
+  --coral-d: #DD4B50;
+  --coral-l: #FFE2E1;
+  --sky: #5BBEF5;
+  --sky-l: #DDF2FD;
+  --grape: #8E7CF3;
+  --grape-l: #ECE8FF;
+  --enamel: #FFFDF7;
+  --ink: #16323A;
+  --ink-2: #466169;
+  --ink-3: #7F9AA0;
+  --ink-4: #B7CBCE;
+  --line: #E1EDEA;
+  --line-2: #CCE0DB;
+  --bg: #E6F7F2;
+  --surface: #FFFFFF;
+  --surface-2: #F5FBF9;
+  --tartar: #D8B04A;
+  --plaque: #F2DE8A;
+  --stain: #8A5A2B;
+
+  /* shape */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 30px;
+  --r-pill: 999px;
+
+  /* depth */
+  --sh-1: 0 1px 0 rgba(22, 50, 58, .05), 0 4px 12px -4px rgba(14, 70, 70, .20);
+  --sh-2: 0 2px 0 rgba(22, 50, 58, .04), 0 14px 34px -12px rgba(14, 70, 70, .32);
+  --sh-3: 0 30px 70px -20px rgba(8, 44, 50, .50), 0 2px 0 rgba(22, 50, 58, .05);
+  --ring: 0 0 0 3px rgba(61, 214, 181, .45);
+
+  /* type */
+  --font-display: 'Baloo 2', 'Nunito', ui-rounded, system-ui, sans-serif;
+  --font-ui: 'Nunito', ui-rounded, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --fs-xs: 12px;
+  --fs-sm: 13.5px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 24px;
+  --fs-2xl: 32px;
+  --fs-3xl: 44px;
+
+  /* motion */
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+  --spring-soft: cubic-bezier(.34, 1.3, .64, 1);
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --t-fast: 140ms;
+  --t-med: 260ms;
+  --t-slow: 420ms;
+
+  /* layout */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --gutter: 16px;
+  --hud-h: 72px;
+  --nav-h: 76px;
+  --tap: 44px;
+
+  /* layers */
+  --z-stage: 0;
+  --z-hud: 10;
+  --z-float: 14;
+  --z-panel: 20;
+  --z-handson: 40;
+  --z-modal: 60;
+  --z-fly: 70;
+  --z-toast: 80;
+}

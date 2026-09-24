@@ -15,14 +15,14 @@ export interface Service {
 }
 
 export const SERVICES: Record<PriceKey, Service> = {
-  cleaning: { id: 'cleaning', name: 'Cleaning', fee: 120, minutes: 45, supplies: 8, addon: false, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: false, baseAccept: 1 },
-  deep: { id: 'deep', name: 'Deep cleaning', fee: 260, minutes: 75, supplies: 15, addon: false, requiresEquip: 'deepCert', requiresOpUpgrade: null, requiresDentist: false, baseAccept: 1 },
+  cleaning: { id: 'cleaning', name: 'Cleaning', fee: 120, minutes: 45, supplies: 14, addon: false, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: false, baseAccept: 1 },
+  deep: { id: 'deep', name: 'Deep cleaning', fee: 260, minutes: 75, supplies: 24, addon: false, requiresEquip: 'deepCert', requiresOpUpgrade: null, requiresDentist: false, baseAccept: 1 },
   fluoride: { id: 'fluoride', name: 'Fluoride varnish', fee: 35, minutes: 5, supplies: 4, addon: true, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: false, baseAccept: 0.45 },
   sealant: { id: 'sealant', name: 'Sealants', fee: 60, minutes: 10, supplies: 5, addon: true, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: false, baseAccept: 0.6 },
   xray: { id: 'xray', name: 'X-rays', fee: 90, minutes: 10, supplies: 6, addon: true, requiresEquip: 'xray', requiresOpUpgrade: null, requiresDentist: false, baseAccept: 0.35 },
   whitening: { id: 'whitening', name: 'Whitening', fee: 350, minutes: 40, supplies: 40, addon: true, requiresEquip: null, requiresOpUpgrade: 'whiteningLamp', requiresDentist: false, baseAccept: 0 },
   exam: { id: 'exam', name: 'Dentist exam', fee: 75, minutes: 10, supplies: 2, addon: true, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: true, baseAccept: 0.7 },
-  filling: { id: 'filling', name: 'Filling', fee: 220, minutes: 30, supplies: 30, addon: true, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: true, baseAccept: 0.25 },
+  filling: { id: 'filling', name: 'Filling', fee: 220, minutes: 20, supplies: 30, addon: true, requiresEquip: null, requiresOpUpgrade: null, requiresDentist: true, baseAccept: 0.25 },
 };
 
 export const SERVICE_IDS: ServiceId[] = ['cleaning', 'deep'];

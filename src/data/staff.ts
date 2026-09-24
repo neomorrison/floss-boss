@@ -13,11 +13,11 @@ export interface RoleDef {
 }
 
 export const ROLES: Record<StaffRole, RoleDef> = {
-  hygienist: { id: 'hygienist', name: 'Hygienist', plural: 'Hygienists', blurb: 'Cleans patients in an operatory.', askBase: 140, askPerStat: 2.4, scrubs: '#2BB3A3', model: 'char_staff' },
-  receptionist: { id: 'receptionist', name: 'Receptionist', plural: 'Receptionists', blurb: 'Checks patients in faster, books more, fewer no-shows.', askBase: 100, askPerStat: 1.2, scrubs: '#4C7BD9', model: 'char_staff' },
-  assistant: { id: 'assistant', name: 'Dental Assistant', plural: 'Assistants', blurb: 'Pairs with an operatory. Cleanings 20% faster.', askBase: 95, askPerStat: 1.1, scrubs: '#9B6CD6', model: 'char_staff' },
-  dentist: { id: 'dentist', name: 'Dentist', plural: 'Dentists', blurb: 'Unlocks exams and fillings. Big revenue.', askBase: 550, askPerStat: 5, scrubs: '#F4F6F8', model: 'char_dentist' },
-  manager: { id: 'manager', name: 'Office Manager', plural: 'Managers', blurb: 'Morale up, costs down, runs the office while you are away.', askBase: 260, askPerStat: 2.6, scrubs: '#E9A23B', model: 'char_staff' },
+  hygienist: { id: 'hygienist', name: 'Hygienist', plural: 'Hygienists', blurb: 'Cleans patients in an operatory.', askBase: 200, askPerStat: 4, scrubs: '#2BB3A3', model: 'char_staff' },
+  receptionist: { id: 'receptionist', name: 'Receptionist', plural: 'Receptionists', blurb: 'Checks patients in faster, books more, fewer no-shows.', askBase: 120, askPerStat: 1.5, scrubs: '#4C7BD9', model: 'char_staff' },
+  assistant: { id: 'assistant', name: 'Dental Assistant', plural: 'Assistants', blurb: 'Pairs with an operatory. Cleanings 20% faster.', askBase: 110, askPerStat: 1.4, scrubs: '#9B6CD6', model: 'char_staff' },
+  dentist: { id: 'dentist', name: 'Dentist', plural: 'Dentists', blurb: 'Unlocks exams and fillings. Big revenue.', askBase: 800, askPerStat: 6, scrubs: '#F4F6F8', model: 'char_dentist' },
+  manager: { id: 'manager', name: 'Office Manager', plural: 'Managers', blurb: 'Morale up, costs down, runs the office while you are away.', askBase: 350, askPerStat: 3, scrubs: '#E9A23B', model: 'char_staff' },
 };
 
 export const ROLE_IDS: StaffRole[] = ['hygienist', 'receptionist', 'assistant', 'dentist', 'manager'];

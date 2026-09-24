@@ -1,100 +1,112 @@
-// PUBLIC SIM API. Owner: sim builder. The signatures below are the contract the UI codes against;
-// the sim builder replaces every stub body (and may split the work into other files under src/sim/).
+// PUBLIC SIM API. Owner: sim builder. The signatures below are the contract the UI codes against.
 // Rules: pure TypeScript, no DOM, no window, no three.js, no Math.random() (use core/rng with state.rng).
 // Every mutating function mutates `state` in place; the UI calls store.commit() afterwards.
+//
+// Notes for callers:
+// - Money is whole dollars. state.cash always equals the sum of state.ledger (old entries fold into
+//   one "Earlier activity" line). DayReport.income/expenses amounts are positive magnitudes.
+// - Staff.portrait is 'staff_<n>' (see data/assets staffPortraitUrl), or 'boss' for Dr. Ruth Canal.
+//   DayPatient.portrait and CleanSetup.patient.portrait are the archetype id (portraitUrl(archetype, mood)).
+// - The employer clinic's first operatory (ops[0]) is the player's chair.
+// - setPlayerMode and addonsFor accept clinicIndex -1 for the employer in the employee phase.
 import type {
   ActionResult, AddonId, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
   GameState, HandsOnPayout, OfficeTierId, OfflineReport, OpUpgradeId, PriceKey, SimEvent, SkillId, ToolSlot,
 } from '../core/types';
-
-const todo = (name: string): never => { throw new Error(`sim.${name} not built yet`); };
+import * as career from './career';
+import * as economy from './economy';
+import * as staff from './staff';
+import * as sel from './selectors';
+import * as prog from './progress';
+import { tickWorld } from './clinic';
+import { claimGoal as claim } from './goals';
 
 // ------------------------------------------------------------------ lifecycle
 /** A fresh game in the school phase at day 1, 8:00. */
-export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number }): GameState { return todo('newGame'); }
+export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number }): GameState { return career.newGame(opts); }
 /** Fill in fields missing from older saves. */
-export function migrate(state: GameState): GameState { return state; }
+export function migrate(state: GameState): GameState { return career.migrate(state); }
 
 // ------------------------------------------------------------------ clock
 /** Advance the game clock by `minutes` (all clinics). Returns events for toasts, audio and the clinic view. No-op in school. */
-export function tick(state: GameState, minutes: number): SimEvent[] { return todo('tick'); }
+export function tick(state: GameState, minutes: number): SimEvent[] { return tickWorld(state, minutes); }
 /** True when the clinics are closed and every patient has left (state.dayOver). */
 export function isDayOver(state: GameState): boolean { return state.dayOver; }
 /** Close the day: charge costs, build the report, advance to the next working day (8:00) and book it. */
-export function closeDay(state: GameState): DayReport { return todo('closeDay'); }
+export function closeDay(state: GameState): DayReport { return economy.closeDay(state); }
 
 // ------------------------------------------------------------------ school
 /** Setup for school practical 1 or 2 (tutorial: true on step 1). */
-export function schoolSetup(state: GameState, step: 1 | 2): CleanSetup { return todo('schoolSetup'); }
+export function schoolSetup(state: GameState, step: 1 | 2): CleanSetup { return career.schoolSetup(state, step); }
 /** Apply a school result (XP only). After step 2 the player graduates into the employee phase. */
-export function completeSchool(state: GameState, step: 1 | 2, result: CleanResult): HandsOnPayout { return todo('completeSchool'); }
+export function completeSchool(state: GameState, step: 1 | 2, result: CleanResult): HandsOnPayout { return career.completeSchool(state, step, result); }
 
 // ------------------------------------------------------------------ hands-on
 /** Patients sitting in the player's chair(s) waiting for the player, in the active clinic. */
-export function playerQueue(state: GameState): DayPatient[] { return todo('playerQueue'); }
+export function playerQueue(state: GameState): DayPatient[] { return career.playerQueue(state); }
 /** Build the clean for a waiting patient. Freezes nothing by itself: the UI stops ticking while cleaning. */
-export function beginHandsOn(state: GameState, patientId: string): CleanSetup { return todo('beginHandsOn'); }
+export function beginHandsOn(state: GameState, patientId: string): CleanSetup { return career.beginHandsOn(state, patientId); }
 /**
  * Apply a finished clean (pay, tip, XP, review, goals), then fast-forward the clinic by
  * HANDS_ON_MINUTES[service]. Returns the payout and the events of that window ("while you were cleaning").
  * quit 'abort': no pay, the patient goes back to waiting (the fast-forward is skipped).
  */
-export function completeHandsOn(state: GameState, patientId: string, result: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } { return todo('completeHandsOn'); }
+export function completeHandsOn(state: GameState, patientId: string, result: CleanResult): { payout: HandsOnPayout; events: SimEvent[] } { return career.completeHandsOn(state, patientId, result); }
 /** Auto clean at autoQuality (no tip, half XP), fast-forwards QUICK_CLEAN_MINUTES. */
-export function quickClean(state: GameState, patientId: string): { payout: HandsOnPayout; events: SimEvent[] } { return todo('quickClean'); }
+export function quickClean(state: GameState, patientId: string): { payout: HandsOnPayout; events: SimEvent[] } { return career.quickClean(state, patientId); }
 
 // ------------------------------------------------------------------ player shop and skills
-export function buyTool(state: GameState, slot: ToolSlot, tier: number): ActionResult { return todo('buyTool'); }
-export function buyExtra(state: GameState, id: ExtraId): ActionResult { return todo('buyExtra'); }
-export function buyGel(state: GameState, count: number): ActionResult { return todo('buyGel'); }
-export function learnSkill(state: GameState, id: SkillId): ActionResult { return todo('learnSkill'); }
-export function skillStatus(state: GameState, id: SkillId): 'learned' | 'available' | 'locked' { return todo('skillStatus'); }
+export function buyTool(state: GameState, slot: ToolSlot, tier: number): ActionResult { return economy.buyTool(state, slot, tier); }
+export function buyExtra(state: GameState, id: ExtraId): ActionResult { return economy.buyExtra(state, id); }
+export function buyGel(state: GameState, count: number): ActionResult { return economy.buyGel(state, count); }
+export function learnSkill(state: GameState, id: SkillId): ActionResult { return economy.learnSkill(state, id); }
+export function skillStatus(state: GameState, id: SkillId): 'learned' | 'available' | 'locked' { return economy.skillStatus(state, id); }
 
 // ------------------------------------------------------------------ practice
-export function practiceStatus(state: GameState): { ok: boolean; price: number; maxLoan: number; cashNeeded: number; reasons: string[] } { return todo('practiceStatus'); }
+export function practiceStatus(state: GameState): { ok: boolean; price: number; maxLoan: number; cashNeeded: number; reasons: string[] } { return economy.practiceStatus(state); }
 /** Open the first practice (T1). `loan` is borrowed from the bank (<= maxLoan). Phase becomes 'owner'. */
-export function openPractice(state: GameState, opts: { name: string; loan: number }): ActionResult { return todo('openPractice'); }
+export function openPractice(state: GameState, opts: { name: string; loan: number }): ActionResult { return economy.openPractice(state, opts); }
 
 // ------------------------------------------------------------------ staff (clinicIndex = index into state.locations)
-export function hire(state: GameState, candidateId: string, clinicIndex: number): ActionResult { return todo('hire'); }
-export function fire(state: GameState, clinicIndex: number, staffId: string): ActionResult { return todo('fire'); }
-export function train(state: GameState, clinicIndex: number, staffId: string): ActionResult { return todo('train'); }
-export function setSalary(state: GameState, clinicIndex: number, staffId: string, salary: number): ActionResult { return todo('setSalary'); }
+export function hire(state: GameState, candidateId: string, clinicIndex: number): ActionResult { return staff.hire(state, candidateId, clinicIndex); }
+export function fire(state: GameState, clinicIndex: number, staffId: string): ActionResult { return staff.fire(state, clinicIndex, staffId); }
+export function train(state: GameState, clinicIndex: number, staffId: string): ActionResult { return staff.train(state, clinicIndex, staffId); }
+export function setSalary(state: GameState, clinicIndex: number, staffId: string, salary: number): ActionResult { return staff.setSalary(state, clinicIndex, staffId, salary); }
 /** staffId: a hygienist id, 'player' (your chair) or null (empty). One op per hygienist; the player may hold one op per clinic. */
-export function assignHygienist(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return todo('assignHygienist'); }
-export function assignAssistant(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return todo('assignAssistant'); }
-export function setPlayerMode(state: GameState, clinicIndex: number, opId: string, mode: 'hands' | 'auto'): ActionResult { return todo('setPlayerMode'); }
+export function assignHygienist(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return staff.assignHygienist(state, clinicIndex, opId, staffId); }
+export function assignAssistant(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return staff.assignAssistant(state, clinicIndex, opId, staffId); }
+export function setPlayerMode(state: GameState, clinicIndex: number, opId: string, mode: 'hands' | 'auto'): ActionResult { return staff.setPlayerMode(state, clinicIndex, opId, mode); }
 
 // ------------------------------------------------------------------ office
-export function buyOperatory(state: GameState, clinicIndex: number): ActionResult { return todo('buyOperatory'); }
-export function upgradeChair(state: GameState, clinicIndex: number, opId: string, tier: ChairTier): ActionResult { return todo('upgradeChair'); }
-export function buyOpUpgrade(state: GameState, clinicIndex: number, opId: string, id: OpUpgradeId): ActionResult { return todo('buyOpUpgrade'); }
-export function buyEquipment(state: GameState, clinicIndex: number, id: EquipId): ActionResult { return todo('buyEquipment'); }
-export function moveQuote(state: GameState, clinicIndex: number, tier: OfficeTierId): { price: number; tradeIn: number; net: number; maxLoan: number; ok: boolean; reason?: string } { return todo('moveQuote'); }
-export function moveOffice(state: GameState, clinicIndex: number, tier: OfficeTierId, loan: number): ActionResult { return todo('moveOffice'); }
-export function locationQuote(state: GameState, tier: OfficeTierId): { price: number; maxLoan: number; ok: boolean; reason?: string } { return todo('locationQuote'); }
-export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number): ActionResult { return todo('openLocation'); }
-export function setPrice(state: GameState, clinicIndex: number, key: PriceKey, mult: number): void { todo('setPrice'); }
-export function setMarketing(state: GameState, clinicIndex: number, level: 0 | 1 | 2 | 3): void { todo('setMarketing'); }
+export function buyOperatory(state: GameState, clinicIndex: number): ActionResult { return economy.buyOperatory(state, clinicIndex); }
+export function upgradeChair(state: GameState, clinicIndex: number, opId: string, tier: ChairTier): ActionResult { return economy.upgradeChair(state, clinicIndex, opId, tier); }
+export function buyOpUpgrade(state: GameState, clinicIndex: number, opId: string, id: OpUpgradeId): ActionResult { return economy.buyOpUpgrade(state, clinicIndex, opId, id); }
+export function buyEquipment(state: GameState, clinicIndex: number, id: EquipId): ActionResult { return economy.buyEquipment(state, clinicIndex, id); }
+export function moveQuote(state: GameState, clinicIndex: number, tier: OfficeTierId): { price: number; tradeIn: number; net: number; maxLoan: number; ok: boolean; reason?: string } { return economy.moveQuote(state, clinicIndex, tier); }
+export function moveOffice(state: GameState, clinicIndex: number, tier: OfficeTierId, loan: number): ActionResult { return economy.moveOffice(state, clinicIndex, tier, loan); }
+export function locationQuote(state: GameState, tier: OfficeTierId): { price: number; maxLoan: number; ok: boolean; reason?: string } { return economy.locationQuote(state, tier); }
+export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number): ActionResult { return economy.openLocation(state, tier, name, loan); }
+export function setPrice(state: GameState, clinicIndex: number, key: PriceKey, mult: number): void { economy.setPrice(state, clinicIndex, key, mult); }
+export function setMarketing(state: GameState, clinicIndex: number, level: 0 | 1 | 2 | 3): void { economy.setMarketing(state, clinicIndex, level); }
 /** Which clinic the UI shows: -1 = the employer (employee phase), else an index into state.locations. */
-export function setActive(state: GameState, index: number): void { todo('setActive'); }
+export function setActive(state: GameState, index: number): void { economy.setActive(state, index); }
 
 // ------------------------------------------------------------------ money and goals
-export function takeLoan(state: GameState, amount: number): ActionResult { return todo('takeLoan'); }
-export function repayLoan(state: GameState, amount: number): ActionResult { return todo('repayLoan'); }
-export function maxLoan(state: GameState): number { return todo('maxLoan'); }
-export function claimGoal(state: GameState, goalId: string): ActionResult { return todo('claimGoal'); }
+export function takeLoan(state: GameState, amount: number): ActionResult { return economy.takeLoan(state, amount); }
+export function repayLoan(state: GameState, amount: number): ActionResult { return economy.repayLoan(state, amount); }
+export function maxLoan(state: GameState): number { return economy.maxLoan(state); }
+export function claimGoal(state: GameState, goalId: string): ActionResult { return claim(state, goalId); }
 
 // ------------------------------------------------------------------ selectors (read-only)
-export function activeClinic(state: GameState): Clinic | null { return todo('activeClinic'); }
-export function title(state: GameState): string { return todo('title'); }
-export function xpToNext(level: number): number { return Math.round(60 * Math.pow(level, 1.4)); }
-export function autoQuality(state: GameState): number { return todo('autoQuality'); }
-export function forecast(state: GameState, clinicIndex: number): { demand: number; capacity: number; revenue: number; costs: number } { return todo('forecast'); }
-export function valuation(state: GameState): number { return todo('valuation'); }
+export function activeClinic(state: GameState): Clinic | null { return sel.activeClinic(state); }
+export function title(state: GameState): string { return prog.title(state); }
+export function xpToNext(level: number): number { return prog.xpToNext(level); }
+export function autoQuality(state: GameState): number { return prog.autoQuality(state); }
+export function forecast(state: GameState, clinicIndex: number): { demand: number; capacity: number; revenue: number; costs: number } { return sel.forecast(state, clinicIndex); }
+export function valuation(state: GameState): number { return prog.valuation(state); }
 /** Offline earnings on load (DESIGN 8.9); applies the credit and returns the report, or null. */
-export function applyOffline(state: GameState, nowMs: number): OfflineReport | null { return todo('applyOffline'); }
+export function applyOffline(state: GameState, nowMs: number): OfflineReport | null { return sel.applyOffline(state, nowMs); }
 /** Short product-voice hint for what to do next (hub tip line). */
-export function nextHint(state: GameState): string { return todo('nextHint'); }
+export function nextHint(state: GameState): string { return sel.nextHint(state); }
 /** Accepted add-ons of a patient that the sim would bill (for UI previews). */
-export function addonsFor(state: GameState, clinicIndex: number, patientId: string): AddonId[] { return todo('addonsFor'); }
+export function addonsFor(state: GameState, clinicIndex: number, patientId: string): AddonId[] { return sel.addonsFor(state, clinicIndex, patientId); }

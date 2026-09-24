@@ -2,6 +2,7 @@
 // Missing files must never throw: fall back to a synthesized blip or silence.
 // iOS: the context must be unlocked on the first touchend/click and retried until it runs.
 import type { MusicKey, SfxKey } from '../data/assets';
+import * as engine from './engine';
 
 export interface LoopHandle { setVolume(v: number): void; setRate(r: number): void; stop(): void }
 
@@ -14,11 +15,13 @@ export interface AudioApi {
   preload(keys?: readonly string[]): Promise<void>;
 }
 
-const noopLoop: LoopHandle = { setVolume() {}, setRate() {}, stop() {} };
 export const audio: AudioApi = {
-  init() {},
-  play() {},
-  loop() { return noopLoop; },
-  music() {},
-  preload() { return Promise.resolve(); },
+  init: engine.init,
+  play: engine.play,
+  loop: engine.loop,
+  music: engine.music,
+  preload: engine.preload,
 };
+
+/** Debug/harness only, not part of the AudioApi contract: the live AudioContext state. */
+export const debugContextState = engine.contextState;

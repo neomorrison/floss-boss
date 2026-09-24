@@ -2,17 +2,34 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#3DD6B5" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Floss Boss" />
+  <meta name="format-detection" content="telephone=no" />
   <meta name="description" content="Floss Boss: scrape tartar, polish smiles, open your own dental practice, hire a team and build a dental empire." />
   <title>Floss Boss</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* boot splash until the bundle takes over #app */
+    html, body { margin: 0; height: 100%; background: #3DD6B5; }
+    .boot { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(120% 90% at 50% 10%, #8FEDD9 0%, #3DD6B5 42%, #0E8F8A 100%); }
+    .boot svg { width: 84px; height: 84px; animation: boot-bob 1.1s ease-in-out infinite alternate; filter: drop-shadow(0 6px 0 rgba(22,50,58,.25)); }
+    @keyframes boot-bob { from { transform: translateY(0) rotate(-5deg); } to { transform: translateY(-10px) rotate(5deg); } }
+  </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div class="boot" aria-label="Loading">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M18 9C10 9 6 15 6 23c0 9 4 14 6 22 1.5 7 3.5 12 7.5 12 5 0 5-8 6.5-13 1-3 3-4.5 6-4.5s5 1.5 6 4.5c1.5 5 1.5 13 6.5 13 4 0 6-5 7.5-12 2-8 6-13 6-22 0-8-4-14-12-14-6 0-8.5 3.5-14 3.5S24 9 18 9z" fill="#FFFDF7" stroke="#16323A" stroke-width="3.4" stroke-linejoin="round"/><circle cx="24.5" cy="26" r="2.7" fill="#16323A"/><circle cx="39.5" cy="26" r="2.7" fill="#16323A"/><path d="M26.5 32c3 3.6 8 3.6 11 0" fill="none" stroke="#16323A" stroke-width="3" stroke-linecap="round"/></svg>
+    </div>
+  </div>
   <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

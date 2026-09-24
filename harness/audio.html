@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Floss Boss: audio harness</title>
+  <style>
+    :root {
+      --mint: #3DD6B5; --teal: #0E8F8A; --bubblegum: #FF7AA8; --sunshine: #FFD166;
+      --enamel: #FFFDF7; --ink: #16323A; --line: #E3ECE9;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--enamel); color: var(--ink); font-family: Nunito, system-ui, sans-serif; }
+    body { padding: 20px; padding-bottom: 60px; }
+    h1 { font-family: 'Baloo 2', system-ui, sans-serif; font-size: 22px; margin: 0 0 4px; }
+    .sub { color: #567; font-size: 13px; margin: 0 0 16px; }
+    .bar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; }
+    .bar label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ccc; display: inline-block; }
+    .status-dot.running { background: var(--mint); }
+    .status-dot.suspended { background: var(--sunshine); }
+    section { margin-bottom: 22px; }
+    h2 { font-family: 'Baloo 2', system-ui, sans-serif; font-size: 16px; margin: 0 0 8px; color: var(--teal); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+    .row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+    .row .key { font-family: monospace; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: #eee; color: #789; min-width: 44px; text-align: center; }
+    .tag.file { background: rgba(61,214,181,0.18); color: var(--teal); }
+    .tag.synth { background: rgba(255,209,102,0.28); color: #8a6a10; }
+    .tag.pending { background: #eee; color: #999; }
+    button { border: none; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; background: var(--teal); color: #fff; font-weight: 700; }
+    button:active { transform: translateY(1px); }
+    button.loop-on { background: var(--bubblegum); }
+    button.ghost { background: #eee; color: var(--ink); }
+    .music-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .music-row button { background: var(--mint); color: var(--ink); }
+    .music-row button.active { background: var(--teal); color: #fff; }
+    input[type=range] { width: 110px; }
+    #log { font-family: monospace; font-size: 11px; white-space: pre-wrap; background: var(--ink); color: #dff; padding: 10px; border-radius: 10px; max-height: 160px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Floss Boss: audio harness</h1>
+  <p class="sub">Every SFX and music key, for the orchestrator to audition. Real file if public/audio/&lt;key&gt;.mp3 decodes, synth fallback otherwise.</p>
+  <div id="app">Loading audio engine…</div>
+  <script type="module" src="./audio.ts"></script>
+</body>
+</html>

@@ -31,6 +31,24 @@ Median bot = hands-on quality 0.85, 100 s real time per cleaning, buys the cheap
 | Second location | 4 to 5 h |
 | Floss Boss title (5 locations or $5M valuation) | 8 to 12 h, idle-friendly |
 
+Last `npm run balance` (median of 9 seeds). Bots clean hands-on at 100 s plus 15 s of hub time per clean, use 2x while they have hands-on work and 4x otherwise, and as owners clean 3 patients a day at T1, 2 at T2, 1 from T3 on (the rest by Quick clean).
+
+| Milestone | Median (q 0.85) | Casual (q 0.70) | Expert (q 0.95) | Greedy expander | Idle owner |
+|---|---|---|---|---|---|
+| Tutorial done | 4.8 min | 4.8 min | 4.8 min | 4.8 min | 4.8 min |
+| First tool affordable | cleaning 2 | 2 | 2 | 2 | 2 |
+| Level 4 | cleaning 12 | 14 | 10 | 12 | 12 |
+| Practice opened | cleaning 24, 49.5 min | 24, 50.3 min | 20, 42 min | 24, 49.5 min | 24, 49.5 min |
+| First hire | owner day 1 | 1 | 1 | 1 | 1 |
+| Office T2 | 2.40 h (owner day 16) | 2.71 h | 2.27 h | 1.77 h | 1.03 h (day 22) |
+| Office T3 | 3.87 h (day 35) | 4.12 h | 3.74 h | 2.50 h | 1.29 h (day 47) |
+| Second location | 4.86 h (day 59) | 5.20 h | 4.69 h | 3.09 h | 1.47 h (day 68) |
+| Floss Boss | 8.46 h (day 144) | 8.74 h | 7.98 h | 7.53 h | 3.03 h (day 201) |
+
+Degenerate checks (A/B runs from one forked state): a second operatory plus a hygienist at T1 pays back in 8 to 17 days; at T1 a cleaning price of 1.0 nets $858/day vs $847 at 1.2 and $819 at 1.5, at T2 $3,471 vs $3,242 vs $1,294 (a whole game at 1.5 takes 11.5 h instead of 8.5 h); paying every employee the 75% floor for 30 days loses $170 to $1,580 a day to quits; a loan round trip moves no money and the bank refuses anything over the limit; cash always equals the ledger.
+
+Known tension: the idle owner (chair on autopilot, 4x clock, no hands-on) needs more game days than the median (201 vs 144) but each of its days costs about 37 s of real time against 2.5 to 6 min for a player who cleans, so it reaches Floss Boss in about 3 h. Hands-on cleaning is the fun, not the fastest route to money. Levers if that matters: cap the clock at 2x on days with no hands-on clean, or pay a "boss on the floor" bonus (rating or demand) for hands-on cleans.
+
 A game day (8:00 to 17:00, 540 game minutes) lasts 108 s real time at 1x (1 game min = 0.2 s). Speeds: pause, 1x, 2x, 4x. Hands-on cleaning **freezes the clinic clock**; on completion the clinic fast-forwards `HANDS_ON_MINUTES[service]` (cleaning 45, deep 75) and the UI shows "While you were cleaning" with the events of that window.
 
 ## 3. Career phases (`state.phase`)
@@ -43,11 +61,12 @@ You work at **Bright Smiles Dental**, owned by **Dr. Ruth Canal**. The employer 
 
 - Shift size: 4 patients (level 1 to 3), 5 (level 4 to 6), 6 (level 7+). Appointment i at `510 + i * floor(450 / n)` minutes.
 - A patient in your chair waits for you. Start it hands-on (full pay + tips) or **Quick clean** (auto quality, no tip, half XP, 60 game minutes of clock).
-- Pay per patient: `rate(title) * (0.4 + 0.8 * quality) + tip`. rate: Staff Hygienist $70, Senior Hygienist $90 (level 4), Lead Hygienist $115 (level 7).
+- Pay per patient: `rate(title) * (0.4 + 0.8 * quality) + tip`. rate: Staff Hygienist $75, Senior Hygienist $95 (level 4), Lead Hygienist $120 (level 7).
+- Graduation: Dr. Canal pays a $250 signing bonus (enough for Floss Picks right away).
 - Tip: `fee * tipRate(archetype) * max(0, (quality - 0.6) / 0.4) * (1 + 0.5 * speedBonus) * tipMult(skills)`, `fee = 120`, `speedBonus = clamp((par - seconds) / par, 0, 1)`.
 - Shift bonus: $40 if every shift patient was seen.
 - 5 five-star cleanings in a row: "Dr. Canal is impressed" bonus of $150.
-- Open your own practice when `level >= 4` and `cash >= tierPrice(T1) - maxLoan`.
+- Open your own practice when `level >= 4` and `cash >= tierPrice(T1) - maxLoan` ($2,000 down on the $5,000 Strip Mall Suite).
 
 ### 3.3 `owner`
 You own one or more clinics (`state.locations`). Revenue is yours, costs are yours. You can staff your own chair (hands-on or autopilot) or stay off the floor.
@@ -89,7 +108,7 @@ Slots: `scaler`, `polisher`, `floss`, `suction`, `rinse`. Tier 1 is owned from t
 | suction | 2 | High-Volume Evacuator | $850 | drain 0.7/s, bits x2.5, radius x1.6 |
 | rinse | 1 | Air-Water Syringe | free | washes loose bits into water, water +0.12/s |
 
-Extras (one-off): Magnifying Loupes $800 (camera zoom x1.25, dirt outline on hover), LED Headlamp $400 (brighter light, plaque easier to see), Disclosing Solution $250 (toggle: plaque dyed bright magenta), Patient Headphones $500 (comfort drain -25%). Consumable: Numbing Gel $15 each (gum damage -50% for one patient, auto-used on nervous patients if owned, toggle).
+Extras (one-off): Magnifying Loupes $800 (camera zoom x1.25, dirt outline on hover), LED Headlamp $400 (brighter light, plaque easier to see), Disclosing Solution $250 (toggle: plaque dyed bright magenta), Patient Headphones $500 (comfort drain -25%). Consumable: Numbing Gel $15 each (gum damage -50% for one patient). While the toggle is on and you have gel, one is used on each hands-on patient (starting the same patient again does not use a second).
 
 ## 5. The hands-on clean (`src/clean`)
 
@@ -166,18 +185,18 @@ Archetype mix: weights per office tier (seniors and smokers more common at T3+, 
 
 | id | Market fee | Minutes | Supplies | Requires |
 |---|---|---|---|---|
-| cleaning | $120 | 45 | $8 | |
-| deep | $260 | 75 | $15 | Deep Cleaning Certification (office upgrade $2,000) |
+| cleaning | $120 | 45 | $14 | |
+| deep | $260 | 75 | $24 | Deep Cleaning Certification (office upgrade $2,000) |
 | fluoride (add-on) | $35 | +5 | $4 | |
 | sealant (add-on, kids) | $60 | +10 | $5 | |
 | xray (add-on) | $90 | +10 | $6 | X-Ray Suite |
 | whitening (add-on) | $350 | +40 | $40 | Whitening Lamp in that operatory |
 | exam (dentist) | $75 | 10 of dentist time | $2 | a Dentist on staff |
-| filling (dentist) | $220 | 30 of dentist time | $30 | a Dentist; 25% of exams find a cavity |
+| filling (dentist) | $220 | 20 of dentist time | $30 | a Dentist; 25% of exams find a cavity |
 
 Price multiplier per service `0.7..1.5` (UI slider, steps of 0.05). Demand uses the cleaning multiplier; add-on acceptance uses each add-on's multiplier.
 
-Add-on acceptance: `base * priceMult^-2 * (1 + upseller 0.15) * (intraoral camera ? 1.1 : 1)`. Bases: fluoride 0.45, sealant 0.6 (kids only), xray 0.35, whitening = archetype interest (default 0.08, influencer 0.5, coffee 0.25, smoker 0.2).
+Add-on acceptance: `base * priceMult^-2 * (1 + upseller 0.15) * (intraoral camera ? 1.1 : 1)`. Bases: fluoride 0.45, sealant 0.6 (kids only), xray 0.35, exam 0.7, whitening = archetype interest (default 0.08, influencer 0.5, coffee 0.25, smoker 0.2). The front desk stops selling exams while 3 exams per dentist are already pending.
 
 In the hands-on clean the scene is the cleaning only; add-ons are applied by the sim after the clean (they add minutes to the chair and revenue).
 
@@ -189,14 +208,14 @@ Pure, deterministic, tick-based in game minutes. `tick(state, minutes)` advances
 `scheduled -> entering (WALK_MIN) -> checkin -> waiting -> toChair (WALK_MIN) -> inChair -> toDesk (WALK_MIN) -> checkout (CHECKOUT_MIN) -> exiting (WALK_MIN) -> gone`
 Side exits: `noshow` (never appears), `walkout` (waiting too long, or comfort walkout: walks from seat or chair to the door, WALK_MIN, then gone).
 - `WALK_MIN = 1.5`, `CHECKOUT_MIN = 2`. Check-in: 3 min with a receptionist (`* (1.2 - 0.4 * skill/100)`), 7 min without (the front desk is you or nobody). Only one check-in at a time per receptionist (or one total without).
-- Waiting: patience in minutes from archetype `* (espresso 1.25) * (tv in waiting 1.1)`. If `waited > patience` the patient walks out (1-star review, rating hit).
+- Waiting: patience in minutes from archetype `* (espresso 1.25)`. The patience clock starts at the appointment time (early arrivals wait for free). If `waited > patience` the patient walks out (1-star review, rating hit).
 - Assignment: first waiting patient (appointment order) to the first free, staffed operatory that can serve the service. Player's chair in hands-on mode: the patient sits and waits for the player (`awaitingPlayer`), still using patience (x1.5 while seated).
 - In chair: NPC duration `d = minutes(service + addons) * (1.3 - 0.6*speed/100) * difficulty(archetype) * (assistant ? 0.8 : 1) * (ultrasonic kits ? 0.9 : 1)`.
-- Dentist: exam add-on requests the dentist; the patient holds the chair until the dentist arrives (dentist walks between ops); filling happens in the same chair.
+- Dentist: the dentist drops in during the last 12 minutes of a cleaning that has an exam (walk WALK_MIN, exam `10 * (1.2 - 0.4*speed/100)` minutes, a filling adds 20 more). If the exam is not finished when the cleaning ends, the patient holds the chair until it is; if no dentist comes within 20 minutes the exam is skipped and not billed. Fillings happen in the same chair.
 
 ### 8.2 NPC quality and comfort
 ```
-q = clamp(normal(0.42 + 0.5*skill/100 + chairBonus + equipBonus + (morale-50)/1000, 0.07), 0.2, 0.99)
+q = clamp(normal(0.42 + 0.5*skill/100 + chairBonus + equipBonus + (morale-50)/500, 0.07), 0.2, 0.99)
 comfort = clamp(0.4 + 0.45*bedside/100 + chairComfort + opTv, 0, 1)
 ```
 chairBonus: basic 0, comfort 0.02, deluxe 0.04. chairComfort: 0, 0.1, 0.2. opTv 0.08. equipBonus: sterilizer 0.03, intraoral camera 0.03.
@@ -205,21 +224,25 @@ chairBonus: basic 0, comfort 0.02, deluxe 0.04. chairComfort: 0, 0.1, 0.2. opTv 
 Each patient reviews with probability 0.6 (influencer always, weight 3).
 ```
 waitScore = 1 - clamp(waited / patience, 0, 1)
-e = 0.55*quality + 0.25*comfort + 0.20*waitScore - 0.25*max(0, priceMult - 1)
-stars = e >= 0.9 ? 5 : >= 0.78 ? 4 : >= 0.62 ? 3 : >= 0.45 ? 2 : 1       (walkout = 1)
-rating = (3.5*3 + sum(stars*weight)) / (3 + sum(weight))   over the last 40 reviews
+e = 0.55*quality + 0.25*comfort + 0.20*waitScore - 0.40*max(0, priceMult - 1)
+stars = e >= 0.85 ? 5 : >= 0.74 ? 4 : >= 0.60 ? 3 : >= 0.45 ? 2 : 1      (walkout = 1)
+rating = (prior*3 + sum(stars*weight)) / (3 + sum(weight))   over the last 40 reviews, prior 3.5 (3.6 with a Fish Tank)
+```
+An average NPC clean (skill 50, basic chair) lands at 3 stars, a good hygienist in a comfort chair at 4, a strong hands-on clean at 5.
+```
 ```
 
 ### 8.4 Demand and booking (start of each day)
 ```
-awareness      = 0.35 + 0.65*(1 - exp(-served/120))
+awareness      = 0.5 + 0.5*(1 - exp(-served/150))
 ratingFactor   = 0.6 + 0.16*rating
-priceFactor    = cleaningMult^-1.6
+priceFactor    = cleaningMult^-2.2
 marketing      = [1, 1.2, 1.45, 1.75][level], cost/day [0, 60, 180, 420] * tierScale
 weekday        = [1.1, 1.0, 1.0, 1.0, 1.15]   (Mon..Fri, weekends skipped)
 lambda         = baseDemand(tier) * awareness * ratingFactor * priceFactor * marketing * (1 + marketer 0.12) * (online booking 1.1) * weekday
 demand         = poisson(lambda)
-capacity       = sum over serving operatories of floor(480 / expectedDuration)
+capacity       = sum over serving operatories of floor(510 / expectedDuration)
+                 expectedDuration = (45 + expected add-on minutes) * speed factors * 1.12 (mean difficulty) + 9 min turnover
 booked         = min(demand, capacity + 1); turnedAway = demand - booked
 noShow         = 0.12 * (receptionist ? 0.6 : 1) * (online booking ? 0.5 : 1)
 walkIns        = poisson(0.12 * lambda), arrive at random open times, only if a seat is free
@@ -229,9 +252,9 @@ Appointments are spread across 8:00..16:00 by operatory lanes. `turnedAway` show
 ### 8.5 Staff (`src/data/staff.ts`)
 Roles: `hygienist`, `receptionist`, `assistant`, `dentist`, `manager`.
 - Candidates: 6 per day (mix of roles weighted to what the office lacks), stats 15..95 (normal around 50, better with office tier), traits 0 to 2.
-- Salary ask per day: hygienist `140 + 2.4*avg(skill,speed,bedside)`, receptionist `100 + 1.2*skill`, assistant `95 + 1.1*skill`, dentist `550 + 5*skill`, manager `260 + 2.6*skill`. Negotiator -10%. Hiring fee = 1 day of salary.
+- Salary ask per day: hygienist `200 + 4*avg(skill,speed,bedside)`, receptionist `120 + 1.5*skill`, assistant `110 + 1.4*skill`, dentist `800 + 6*skill`, manager `350 + 3*skill` (rounded to $5). Negotiator -10%. Hiring fee = 1 day of salary.
 - Traits: Perfectionist (+0.05 quality, -10% speed), Speedy (+15% speed, -0.03 quality), Charmer (+0.1 comfort), Clumsy (5% chance of a bad clean: quality -0.3), Night Owl (morale +, slow first hour), Loyal (never quits), Ambitious (levels 2x, asks raises 2x).
-- Morale 0..100, daily: `+2 - 3*max(0, patientsToday - 7) + (break room 3) + (leader 1) + (manager 2) - (salary < 0.9*ask ? 3 : 0)`. Morale < 25: 8% daily quit chance (Loyal never). Morale affects quality (above) and speed (`+-10%`).
+- Morale 0..100, daily: `+2 - 3*max(0, patientsToday - overwork) + (break room 3) + (leader 1) + (manager 2) - round(30*(1 - salary/ask)) when underpaid - (cash < 0 ? 2 : 0)`. Overwork threshold: hygienist 7, assistant 9, dentist 18, receptionist 40. Morale < 25: 20% daily quit chance (Loyal never). Morale affects quality (above) and speed (`+-10%`). Salaries can be set from 75% to 200% of the ask; at the floor staff lose about 6 morale a day and quit within two weeks, so underpaying loses money unless morale boosters (break room, manager, Leader) cover it.
 - Staff XP: +1 per patient; level up every `25*level` patients: skill +3, speed +2, bedside +2, ask +8% (raise request event if paid below ask).
 - Training course: $1,500, the staff member is off for the next day, skill +8.
 - Firing: pay 1 day severance.
@@ -239,15 +262,15 @@ Roles: `hygienist`, `receptionist`, `assistant`, `dentist`, `manager`.
 ### 8.6 Offices (`src/data/offices.ts`)
 | tier | Name | op slots | seats | rent/day | price | baseDemand | appeal |
 |---|---|---|---|---|---|---|---|
-| t1 | Strip Mall Suite | 2 | 4 | $180 | $7,500 | 7 | 1.0 |
-| t2 | Main Street Office | 4 | 8 | $450 | $45,000 | 16 | 1.25 |
-| t3 | Medical Plaza | 6 | 12 | $900 | $140,000 | 26 | 1.5 |
-| t4 | Smile Tower | 8 | 16 | $1,600 | $400,000 | 38 | 1.8 |
+| t1 | Strip Mall Suite | 2 | 4 | $180 | $5,000 | 15 | 1.0 |
+| t2 | Main Street Office | 4 | 8 | $700 | $28,000 | 28 | 1.25 |
+| t3 | Medical Plaza | 6 | 12 | $1,800 | $120,000 | 36 | 1.5 |
+| t4 | Smile Tower | 8 | 16 | $3,600 | $400,000 | 50 | 1.8 |
 
 - The first operatory is included in the price. More operatories: $4,000 each.
 - Moving up: pay the new tier price minus 50% of the current tier price (trade-in); operatories, chairs and equipment move with you (up to the new slot count).
-- New location: requires owning at least one T2+ location; pay the tier price in full. Max 5 locations. A location without a manager runs at -15% demand (nobody minding the store) when it is not the active one.
-- Bank loan: up to 60% of the next purchase; 0.25% interest per day on principal; auto payment 1% of principal per day; repay any time.
+- New location: requires owning at least one T2+ location; pay the tier price in full plus a franchise license of `$78,000 * 2.25^(locations owned - 1)` ($78k, $176k, $395k, $888k). Max 5 locations. A location without a manager runs at -15% demand (nobody minding the store) when it is not the active one.
+- Bank loan: up to 60% of the next purchase; 0.25% interest per day on principal; auto payment 1% of principal per day; repay any time. Outside a purchase the bank lends up to 60% of the next move (or of the next location) minus what you already owe.
 
 ### 8.7 Upgrades (`src/data/upgrades.ts`)
 Operatory: Comfort Chair $2,500, Deluxe Massage Chair $9,000, Ceiling TV $1,200, Whitening Lamp $6,000, Intraoral Camera $3,000.
@@ -266,10 +289,10 @@ On load, if `phase == 'owner'`, at least one hired hygienist and `now - lastSeen
 `credit = max(0, avgNet(last 3 days)) * min(hoursAway * 0.5, 6) * 0.6`. Shown in a "While you were away" card. No days advance.
 
 ### 8.10 Goals and achievements
-Three daily goals from templates (remove N tartar chunks, N five-star reviews, serve N patients, clean in under N s, sell N add-ons, finish a perfect clean), reward cash `~0.5 day of net` and XP. About 24 achievements (first chunk, 100 chunks, first hire, T2, 5 locations, perfect clean, 10-combo, and so on).
+Three daily goals from templates (remove N tartar chunks, N five-star reviews, serve N patients, clean in under N s, sell N add-ons, finish a perfect clean, hit an N-chunk combo). Each pays `max($100, 0.17 * avg net of the last 3 days)` as an owner (`$30 + $8 * level` as an employee) plus `15 + 5 * level` XP, so the three together are about half a day of net. Finished goals are claimed automatically at the day close if the player has not claimed them. About 24 achievements (first chunk, 100 chunks, first hire, T2, 5 locations, perfect clean, 10-combo, and so on).
 
 ### 8.11 Valuation
-`sum(tierPrice*0.6 + equipmentValue*0.5) + max(0, avgNet7)*250*2.5 + cash - loan`.
+`sum(tierPrice*0.6 + equipmentValue*0.5) + max(0, avgNet7)*150 + cash - loan`. avgNet7 is the operating net (purchases, loans and hiring fees excluded) of the last 7 owner days.
 
 ## 9. Look and feel
 - Light-first bright cartoon. Palette: mint `#3DD6B5`, teal `#0E8F8A`, bubblegum `#FF7AA8`, sunshine `#FFD166`, enamel white `#FFFDF7`, ink `#16323A`. Tartar is mustard `#D8B04A` with darker crust, plaque buttery `#F2DE8A`, stain coffee `#8A5A2B`.

@@ -1,9 +1,9 @@
-# Mow Money machine art: shared Blender helpers.
+# Floss Boss clinic art: shared Blender helpers (adapted from the Mow Money machine helpers).
 #
 # Geometry is built with bmesh directly (no operators), which keeps the scripts fast, deterministic
 # and safe to run headless. A Part accumulates primitives (each with a material) into one bmesh and
 # becomes one mesh object on finish(). Conventions (Blender space): Z up, the model's front faces -Y,
-# 1 unit = 1 meter, origin on the ground at the footprint center. The glTF exporter turns this into
+# 1 unit = 1 meter, origin on the floor at the footprint center. The glTF exporter turns this into
 # three.js space (+Y up, front toward +Z).
 import bpy
 import bmesh
@@ -16,6 +16,7 @@ ROOT = os.path.normpath(os.path.join(HERE, '..', '..', '..'))
 MODELS_DIR = os.path.join(ROOT, 'public', 'models')
 THUMBS_DIR = os.path.join(ROOT, 'public', 'img', 'thumbs')
 OUT_DIR = os.path.join(ROOT, 'out')
+PREVIEW_DIR = os.path.join(OUT_DIR, 'preview-clinic')
 
 rad = math.radians
 
@@ -24,7 +25,8 @@ rad = math.radians
 
 def reset():
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    for block in (bpy.data.meshes, bpy.data.materials, bpy.data.objects, bpy.data.cameras, bpy.data.lights):
+    for block in (bpy.data.meshes, bpy.data.materials, bpy.data.objects, bpy.data.cameras, bpy.data.lights,
+                  bpy.data.worlds):
         for item in list(block):
             block.remove(item)
 
@@ -39,15 +41,24 @@ def link(ob):
 
 
 def empty(name, loc=(0, 0, 0), parent=None, size=0.1):
+    """An empty at world position loc (parented without changing its world position)."""
     ob = bpy.data.objects.new(name, None)
     ob.empty_display_size = size
-    ob.location = Vector(loc)
     link(ob)
+    set_parent(ob, parent, loc)
+    return ob
+
+
+def set_parent(ob, parent, world_loc):
+    """Parent with identity rotation: the child's local location is its world offset from the parent."""
     bpy.context.view_layer.update()
     if parent is not None:
         ob.parent = parent
-        ob.location = Vector(loc) - parent.matrix_world.translation
-    return ob
+        ob.matrix_parent_inverse = Matrix.Identity(4)
+        ob.location = Vector(world_loc) - parent.matrix_world.translation
+    else:
+        ob.location = Vector(world_loc)
+    bpy.context.view_layer.update()
 
 
 # ------------------------------------------------------------------ materials
@@ -61,53 +72,62 @@ def hex_rgb(h):
     return tuple(srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4))
 
 
-# Standard palette. Metalness stays low on purpose: three.js renders metallic surfaces almost black
-# without an environment map, so these read well with or without one.
+# Clinic palette (docs/DESIGN.md section 9): mint, teal, bubblegum, sunshine, enamel white. Metalness
+# stays low on purpose: three.js renders metallic surfaces almost black without an environment map.
+# name: (hex, roughness, metalness)
 STD = {
-    'Tire':      ('#2B2A2F', 0.92, 0.0),
-    'Rim':       ('#D5D8DD', 0.45, 0.25),
-    'Hub':       ('#8C929A', 0.45, 0.25),
-    'Metal':     ('#565C64', 0.55, 0.3),
-    'Steel':     ('#A3AAB2', 0.4, 0.35),
-    'Chrome':    ('#E6E9EE', 0.22, 0.35),
-    'Seat':      ('#2A2A2F', 0.6, 0.0),
-    'Engine':    ('#3C4046', 0.55, 0.25),
-    'Deck':      ('#474C54', 0.55, 0.3),
-    'Plastic':   ('#2F3237', 0.6, 0.0),
-    'Grip':      ('#1E1E22', 0.85, 0.0),
-    'Grass Bag': ('#5F6E48', 0.95, 0.0),
-    'Glass':     ('#8EC4E2', 0.12, 0.1),
-    'Light':     ('#FFF3C2', 0.3, 0.0),
-    'TailLight': ('#E0332B', 0.3, 0.0),
-    'Marker':    ('#FF9A2E', 0.3, 0.0),
-    'Accent':    ('#F4C331', 0.45, 0.0),
-    'Wood':      ('#B98052', 0.8, 0.0),
-    'Bed':       ('#35383E', 0.8, 0.0),
-    'Box':       ('#F3F1EA', 0.6, 0.0),
-    'Trim':      ('#C9CDD2', 0.5, 0.1),
-    'Stone':     ('#9D958A', 0.9, 0.0),
-    'Blade':     ('#D9DDE2', 0.3, 0.35),
-    'Line':      ('#FF8A1F', 0.5, 0.0),
-    'Bristle':   ('#E1B862', 0.9, 0.0),
-    'Canvas':    ('#6F7C55', 0.95, 0.0),
-    'Skin':      ('#E6B08A', 0.7, 0.0),
-    'Hair':      ('#5A3A22', 0.85, 0.0),
-    'Eye':       ('#1D1E24', 0.4, 0.0),
-    'Shorts':    ('#C8B083', 0.85, 0.0),
-    'Boots':     ('#7A5230', 0.8, 0.0),
-    'Sole':      ('#2E2A27', 0.9, 0.0),
-    'Leather':   ('#4A3222', 0.7, 0.0),
-    'Gloves':    ('#C99A5B', 0.85, 0.0),
-    'Sock':      ('#EFEDE6', 0.9, 0.0),
-    'Shirt':     ('#4E7FCB', 0.85, 0.0),
-    'Pants':     ('#3E587F', 0.85, 0.0),
-    'Sneaker':   ('#F1F1EE', 0.7, 0.0),
-    'White':     ('#F4F4F1', 0.6, 0.0),
+    'Enamel':     ('#FFFDF7', 0.45, 0.0),   # main white body color
+    'Cream':      ('#F3ECDF', 0.6, 0.0),    # secondary off-white
+    'Mint':       ('#3DD6B5', 0.5, 0.0),
+    'MintLight':  ('#A9EEDD', 0.55, 0.0),
+    'Teal':       ('#0E8F8A', 0.5, 0.0),
+    'TealDark':   ('#0B6F6B', 0.55, 0.0),
+    'Bubblegum':  ('#FF7AA8', 0.5, 0.0),
+    'Blush':      ('#FFB8CE', 0.6, 0.0),
+    'Sunshine':   ('#FFD166', 0.5, 0.0),
+    'Coral':      ('#FF9B7A', 0.55, 0.0),
+    'Sky':        ('#7CC8F2', 0.5, 0.0),
+    'Lilac':      ('#B9A6F2', 0.55, 0.0),
+    'Slate':      ('#51656F', 0.6, 0.0),    # the darkest body color: soft slate, never black
+    'Rubber':     ('#4C5B63', 0.85, 0.0),   # casters, pads, cables
+    'Steel':      ('#C3CDD4', 0.35, 0.2),
+    'Chrome':     ('#E3E9ED', 0.25, 0.3),
+    'Gold':       ('#F2BE45', 0.32, 0.35),
+    'Wood':       ('#E2B47E', 0.7, 0.0),
+    'WoodDark':   ('#BE8A5C', 0.7, 0.0),
+    'Paper':      ('#FFFFFF', 0.8, 0.0),
+    'Screen':     ('#2A5361', 0.25, 0.0),   # an unlit screen: deep teal, not black
+    'Glass':      ('#CDEFF5', 0.08, 0.0),
+    'Water':      ('#7FD3EC', 0.1, 0.0),
+    'LeafA':      ('#5ACB88', 0.65, 0.0),
+    'LeafB':      ('#34A873', 0.65, 0.0),
+    'LeafC':      ('#93DDA3', 0.65, 0.0),
+    'Soil':       ('#8A6246', 0.95, 0.0),
+    'Light':      ('#FFF3C4', 0.3, 0.0),
+    'LightBlue':  ('#9FE3FF', 0.3, 0.0),
+    'Glow':       ('#8CF0DB', 0.35, 0.0),
+    'Ink':        ('#2B3C45', 0.45, 0.0),   # eyes and fine print: soft ink, never pure black
+    'Coffee':     ('#8A5A2B', 0.4, 0.0),
+    # people
+    'Skin':       ('#EDB793', 0.65, 0.0),
+    'Hair':       ('#8A6A52', 0.8, 0.0),
+    'Shirt':      ('#8EB5D6', 0.8, 0.0),
+    'Pants':      ('#667A96', 0.8, 0.0),
+    'Shoes':      ('#7A675C', 0.7, 0.0),
+    'Scrubs':     ('#5EC6B6', 0.75, 0.0),
+    'Coat':       ('#F7FAF9', 0.7, 0.0),
+    'Eye':        ('#2B3A44', 0.3, 0.0),
+    'EyeShine':   ('#FFFFFF', 0.3, 0.0),
+    'Mouth':      ('#B94A62', 0.5, 0.0),
+    'Cheek':      ('#FF9DB5', 0.7, 0.0),
+    'Glasses':    ('#5A6B78', 0.4, 0.0),
+    'Sole':       ('#F4F0EA', 0.7, 0.0),
 }
-EMISSIVE = {'Light': 1.2, 'TailLight': 0.6, 'Marker': 0.6}
+EMISSIVE = {'Light': 1.6, 'LightBlue': 1.6, 'Glow': 0.9}
+ALPHA = {'Glass': 0.28, 'Water': 0.5}
 
 
-def material(name, color=None, rough=None, metal=None, emit=None):
+def material(name, color=None, rough=None, metal=None, emit=None, alpha=None):
     """Get or create a Principled material. Standard names pull their look from STD."""
     m = bpy.data.materials.get(name)
     if m is not None:
@@ -121,6 +141,8 @@ def material(name, color=None, rough=None, metal=None, emit=None):
         metal = std[2] if std else 0.0
     if emit is None:
         emit = EMISSIVE.get(name, 0.0)
+    if alpha is None:
+        alpha = ALPHA.get(name, 1.0)
     lin = hex_rgb(color) if isinstance(color, str) else tuple(color)
     m = bpy.data.materials.new(name)
     try:
@@ -134,21 +156,23 @@ def material(name, color=None, rough=None, metal=None, emit=None):
     if emit:
         bsdf.inputs['Emission Color'].default_value = (*lin, 1.0)
         bsdf.inputs['Emission Strength'].default_value = emit
-    m.diffuse_color = (*lin, 1.0)
+    if alpha < 1.0:
+        bsdf.inputs['Alpha'].default_value = alpha
+        try:
+            m.surface_render_method = 'BLENDED'
+        except Exception:
+            pass
+    m.diffuse_color = (*lin, alpha)
     m.roughness = rough
     m.metallic = metal
-    # every mesh is a closed shell with outward normals, so export single-sided (cheaper in three.js)
-    m.use_backface_culling = True
+    # every mesh is a closed shell with outward normals, so export single-sided (cheaper in three.js);
+    # see-through materials stay double-sided so the far side of a tank shows through the near side.
+    m.use_backface_culling = alpha >= 1.0
     return m
 
 
-def M(name, color=None):
-    return material(name, color)
-
-
-def body(color):
-    """The tintable company-color material. The game recolors every material named exactly Body."""
-    return material('Body', color, 0.5, 0.0)
+def M(name, color=None, **kw):
+    return material(name, color, **kw)
 
 
 # ------------------------------------------------------------------ geometry
@@ -171,6 +195,39 @@ def arc(cu, cv, r, a0, a1, n):
             for i in range(n + 1)]
 
 
+def rrect(w, h, r, n=3, cu=0.0, cv=0.0):
+    """Counterclockwise rounded rectangle (2D) centered at (cu, cv)."""
+    r = min(r, w / 2 - 1e-4, h / 2 - 1e-4)
+    hw, hh = w / 2 - r, h / 2 - r
+    pts = []
+    for (x, y, a0) in ((hw, -hh, -90), (hw, hh, 0), (-hw, hh, 90), (-hw, -hh, 180)):
+        pts += arc(cu + x, cv + y, r, a0, a0 + 90, n)
+    return pts
+
+
+def ellipse(rx, ry, n=16, cu=0.0, cv=0.0):
+    return [(cu + rx * math.cos(2 * math.pi * i / n), cv + ry * math.sin(2 * math.pi * i / n)) for i in range(n)]
+
+
+def tooth2d(w=1.0, h=1.0, n=5):
+    """A cartoon molar silhouette (two crown lobes, two rounded roots), counterclockwise, centered, w x h."""
+    right = []
+    right += arc(0.0, -0.215, 0.075, 90, 0, n)[1:]                  # notch between the roots (from the middle)
+    right += [(0.09, -0.28)]
+    right += arc(0.2, -0.4, 0.1, 180, 360, n + 1)                   # rounded root tip
+    right += [(0.33, -0.2), (0.4, 0.0)]
+    right += arc(0.2, 0.2, 0.25, -30, 95, n + 2)                     # crown lobe
+    right += [(0.07, 0.43)]
+    pts = [(0.0, -0.14)] + right + [(0.0, 0.38)]
+    left = [(-x, y) for (x, y) in reversed(right)]
+    pts += left
+    out = []
+    for p in pts:
+        if not out or (abs(out[-1][0] - p[0]) + abs(out[-1][1] - p[1])) > 1e-3:
+            out.append(p)
+    return [(x * w, y * h) for (x, y) in out]
+
+
 class Part:
     """Accumulates primitives into one mesh. finish() makes the object."""
 
@@ -188,6 +245,8 @@ class Part:
     def _emit(self, tmp, m, flat, matrix=None):
         if matrix is not None:
             bmesh.ops.transform(tmp, matrix=matrix, verts=tmp.verts)
+            if matrix.determinant() < 0:
+                bmesh.ops.reverse_faces(tmp, faces=tmp.faces[:])
         idx = self._mi(m)
         vmap = {}
         for v in tmp.verts:
@@ -229,6 +288,11 @@ class Part:
     def bx(self, x0, x1, y0, y1, z0, z1, m, **kw):
         self.box((abs(x1 - x0), abs(y1 - y0), abs(z1 - z0)), ((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), m, **kw)
 
+    def rbox(self, size, loc, m, r=0.02, seg=2, rot=None, **kw):
+        """Rounded box: bevel radius r clamped to the smallest half-extent."""
+        r = min(r, min(size) * 0.49)
+        self.box(size, loc, m, bevel=r, seg=seg, rot=rot, flat=False, **kw)
+
     def cyl(self, r, depth, loc, m, axis='Z', verts=16, r2=None, bevel=0.0, seg=1, rot=None, flat=False,
             caps=True, scale=None):
         tmp = bmesh.new()
@@ -242,8 +306,6 @@ class Part:
         mm = _mat4(loc, rot)
         if AXIS_ROT[axis]:
             mm = mm @ Euler(tuple(rad(a) for a in AXIS_ROT[axis]), 'XYZ').to_matrix().to_4x4()
-        if axis == 'X':  # put a vertex at the bottom so wheels touch the ground exactly
-            mm = mm @ Matrix.Rotation(rad(-90), 4, 'Z')
         if scale:
             mm = mm @ Matrix.Diagonal((*scale, 1.0))
         self._emit(tmp, m, flat, mm)
@@ -258,6 +320,21 @@ class Part:
         mm = Matrix.Translation((p1 + p2) / 2) @ q.to_matrix().to_4x4()
         self._emit(tmp, m, flat, mm)
 
+    def capsule(self, p1, p2, r, m, verts=10, rings=3, r2=None):
+        """A rounded limb from p1 to p2 (radius r at p1, r2 at p2), hemispherical ends."""
+        p1, p2 = Vector(p1), Vector(p2)
+        r2 = r if r2 is None else r2
+        L = (p2 - p1).length
+        prof = []
+        for i in range(rings + 1):             # bottom cap (at p1) from the pole up
+            a = -90 + 90 * i / rings
+            prof.append((r * math.cos(rad(a)), r * math.sin(rad(a))))
+        for i in range(rings + 1):             # top cap (at p2)
+            a = 90 * i / rings
+            prof.append((r2 * math.cos(rad(a)), L + r2 * math.sin(rad(a))))
+        q = Vector((0, 0, 1)).rotation_difference((p2 - p1).normalized())
+        self.lathe(prof, (0, 0, 0), m, segs=verts, matrix=Matrix.Translation(p1) @ q.to_matrix().to_4x4())
+
     def sphere(self, r, loc, m, seg=12, rings=8, scale=None, rot=None, flat=False, ico=None):
         tmp = bmesh.new()
         if ico is not None:
@@ -265,6 +342,53 @@ class Part:
         else:
             bmesh.ops.create_uvsphere(tmp, u_segments=seg, v_segments=rings, radius=r)
         self._emit(tmp, m, flat, _mat4(loc, rot, scale))
+
+    def sphere_cut(self, r, loc, m, plane_no, plane_off=0.0, seg=16, rings=12, scale=None, rot=None, flat=False,
+                   keep='below'):
+        """A sphere sliced by a plane (normal plane_no in the sphere's local frame, offset plane_off from the
+        center along it) with the cut filled: keep 'below' drops the part the normal points into."""
+        tmp = bmesh.new()
+        bmesh.ops.create_uvsphere(tmp, u_segments=seg, v_segments=rings, radius=r)
+        n = Vector(plane_no).normalized()
+        geom = list(tmp.verts) + list(tmp.edges) + list(tmp.faces)
+        bmesh.ops.bisect_plane(tmp, geom=geom, dist=1e-5, plane_co=n * plane_off, plane_no=n,
+                               clear_outer=(keep == 'below'), clear_inner=(keep != 'below'))
+        boundary = [e for e in tmp.edges if e.is_boundary]
+        if boundary:
+            bmesh.ops.holes_fill(tmp, edges=boundary, sides=0)
+        bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
+        self._emit(tmp, m, flat, _mat4(loc, rot, scale))
+
+    def lathe(self, prof, loc, m, segs=16, scale=None, rot=None, flat=False, matrix=None, a0=0.0):
+        """Revolve a (radius, z) profile, listed bottom to top, around Z. r == 0 ends become poles,
+        open ends get capped, so the result is a closed shell."""
+        tmp = bmesh.new()
+        rings = []
+        for (r, z) in prof:
+            if r < 1e-6:
+                rings.append([tmp.verts.new((0, 0, z))])
+            else:
+                rings.append([tmp.verts.new((r * math.cos(2 * math.pi * k / segs + a0),
+                                             r * math.sin(2 * math.pi * k / segs + a0), z)) for k in range(segs)])
+        for i in range(len(rings) - 1):
+            a, b = rings[i], rings[i + 1]
+            if len(a) == 1 and len(b) == 1:
+                continue
+            for k in range(segs):
+                k2 = (k + 1) % segs
+                if len(a) == 1:
+                    tmp.faces.new([a[0], b[k], b[k2]])
+                elif len(b) == 1:
+                    tmp.faces.new([a[k], b[0], a[k2]])
+                else:
+                    tmp.faces.new([a[k], a[k2], b[k2], b[k]])
+        if len(rings[0]) > 1:
+            tmp.faces.new(list(reversed(rings[0])))
+        if len(rings[-1]) > 1:
+            tmp.faces.new(rings[-1])
+        bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
+        mm = matrix if matrix is not None else _mat4(loc, rot, scale)
+        self._emit(tmp, m, flat, mm)
 
     def sweep(self, pts, r, m, verts=8, closed=False, caps=True, flat=False, rscale=None):
         """Tube along a polyline with mitered joints. rscale=(sx, sy) makes an oval section."""
@@ -322,6 +446,14 @@ class Part:
         bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
         self._emit(tmp, m, flat)
 
+    def torus(self, R, r, loc, m, segs=20, verts=8, rot=None, scale=None):
+        """A ring of major radius R around Z (tube radius r)."""
+        pts = [(R * math.cos(2 * math.pi * i / segs), R * math.sin(2 * math.pi * i / segs), 0) for i in range(segs)]
+        tmp_part = Part('_t')
+        tmp_part.sweep(pts, r, m, verts=verts, closed=True)
+        tmp = tmp_part.bm
+        self._emit(tmp, m, False, _mat4(loc, rot, scale))
+
     def prism(self, pts, width, m, axis='X', center=0.0, bevel=0.0, seg=1, flat=True, loc=(0, 0, 0), rot=None):
         """Extrude a 2D polygon. axis X: pts are (y, z). axis Y: (x, z). axis Z: (x, y)."""
         tmp = bmesh.new()
@@ -344,6 +476,11 @@ class Part:
         self._bevel_all(tmp, bevel, seg)
         self._emit(tmp, m, flat, _mat4(loc, rot))
 
+    def plate(self, pts, t, loc, m, axis='Y', rot=None, bevel=0.0, seg=1, flat=True):
+        """A flat 2D shape of thickness t facing -Y (axis Y, pts are (x, z)) or up (axis Z, pts are (x, y)),
+        centered on loc."""
+        self.prism(pts, t, m, axis=axis, center=0.0, bevel=bevel, seg=seg, flat=flat, loc=loc, rot=rot)
+
     def slab(self, pts, t, m, flat=True):
         """A thin plate from a planar 3D polygon, thickened by t along its normal."""
         tmp = bmesh.new()
@@ -362,42 +499,26 @@ class Part:
         bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
         self._emit(tmp, m, flat)
 
-    def reel(self, length, r, loc, m_blade, m_core, blades=5, twist=70.0, segs=8, thick=0.022, depth=0.035,
-             spider_verts=12, core=True):
-        """Spiral reel cylinder along X centered at loc: helical blades, a shaft and end spiders."""
-        cx, cy, cz = loc
-        tmp = bmesh.new()
-        for b in range(blades):
-            a0 = 2 * math.pi * b / blades
-            sections = []
-            for i in range(segs + 1):
-                x = -length / 2 + length * i / segs
-                th = a0 + rad(twist) * i / segs
-                d = thick / (2 * r)
-                sec = []
-                for (rr, dd) in ((r - depth, -d), (r, -d), (r, d), (r - depth, d)):
-                    sec.append(tmp.verts.new((x, math.cos(th + dd) * rr, math.sin(th + dd) * rr)))
-                sections.append(sec)
-            for i in range(segs):
-                s0, s1 = sections[i], sections[i + 1]
-                for k in range(4):
-                    k2 = (k + 1) % 4
-                    tmp.faces.new([s0[k], s0[k2], s1[k2], s1[k]])
-            tmp.faces.new(list(reversed(sections[0])))
-            tmp.faces.new(sections[-1])
-        bmesh.ops.recalc_face_normals(tmp, faces=tmp.faces[:])
-        self._emit(tmp, m_blade, True, Matrix.Translation((cx, cy, cz)))
-        if core:
-            self.cyl(r * 0.18, length, loc, m_core, axis='X', verts=8)
-        for s in (-1, 1):
-            self.cyl(r * 0.92, 0.02, (cx + s * (length / 2 - 0.01), cy, cz), m_core, axis='X', verts=spider_verts)
-
     def transform(self, loc=(0, 0, 0), rot=None, scale=None):
-        """Transform everything added so far (used to pose a whole tool)."""
+        """Transform everything added so far (used to pose a whole sub-assembly)."""
         bmesh.ops.transform(self.bm, matrix=_mat4(loc, rot, scale), verts=self.bm.verts)
 
+    def mark(self):
+        """Remember the vertex count, so a sub-assembly built after it can be posed with xform_since."""
+        self.bm.verts.ensure_lookup_table()
+        return len(self.bm.verts)
+
+    def xform_since(self, mark, loc=(0, 0, 0), rot=None, scale=None, pivot=(0, 0, 0)):
+        """Rotate/scale the geometry added since `mark` about `pivot`, then move it by loc."""
+        self.bm.verts.ensure_lookup_table()
+        vs = [self.bm.verts[i] for i in range(mark, len(self.bm.verts))]
+        mm = Matrix.Translation(Vector(pivot) + Vector(loc)) @ _mat4((0, 0, 0), rot, scale) @ \
+            Matrix.Translation(-Vector(pivot))
+        bmesh.ops.transform(self.bm, matrix=mm, verts=vs)
+
     # -- output
-    def finish(self, origin=(0, 0, 0), parent=None, smooth_angle=38.0):
+    def finish(self, origin=(0, 0, 0), parent=None, smooth_angle=61.0, mesh_name=None):
+        """Make the object. Vertices are stored relative to `origin` (world), which becomes the pivot."""
         bpy.context.view_layer.update()
         bm = self.bm
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
@@ -412,56 +533,35 @@ class Part:
                 e.smooth = False
         o = Vector(origin)
         bmesh.ops.translate(bm, vec=-o, verts=bm.verts)
-        me = bpy.data.meshes.new(self.name)
+        me = bpy.data.meshes.new(mesh_name or (self.name + 'Mesh'))
         bm.to_mesh(me)
         bm.free()
         for m in self.mats:
             me.materials.append(m)
         ob = bpy.data.objects.new(self.name, me)
         link(ob)
-        ob.location = o
-        if parent is not None:
-            ob.parent = parent
-            ob.location = o - parent.matrix_world.translation
+        set_parent(ob, parent, o)
         return ob
 
 
-def wheel(name, r, w, loc, rim_m=None, tire_m=None, verts=18, rim_frac=0.62, hub_m=None, style='turf', side=0):
-    """A wheel object spinning around X with its origin at the axle."""
-    tire_m = tire_m or M('Tire')
-    rim_m = rim_m or M('Rim')
-    hub_m = hub_m or M('Hub')
-    p = Part(name)
-    x, y, z = loc
-    p.cyl(r, w, loc, tire_m, axis='X', verts=verts, bevel=min(w * 0.32, r * 0.25), seg=2)
-    if style == 'thin':  # bicycle
-        p.cyl(r * 0.86, w * 1.1, loc, rim_m, axis='X', verts=verts)
-        p.cyl(r * 0.8, w * 1.15, loc, M('Metal'), axis='X', verts=verts, caps=True)
-        for k in range(3):
-            p.box((w * 0.6, r * 1.6, 0.012), loc, rim_m, rot=(k * 60, 0, 0))
-        p.cyl(r * 0.1, w * 1.8, loc, hub_m, axis='X', verts=8)
-    else:
-        p.cyl(r * rim_frac, w + 0.012, loc, rim_m, axis='X', verts=verts)
-        p.cyl(r * rim_frac * 0.42, w + 0.04, loc, hub_m, axis='X', verts=8)
-        if style == 'car':
-            sides = (side,) if side else (-1, 1)
-            for k in range(5):
-                a = 2 * math.pi * k / 5
-                for s in sides:
-                    p.cyl(r * 0.05, 0.03, (x + s * (w / 2 + 0.012), y + math.cos(a) * r * rim_frac * 0.62,
-                                           z + math.sin(a) * r * rim_frac * 0.62), hub_m, axis='X', verts=6)
-    return p.finish(origin=loc)
+# ------------------------------------------------------------------ reusable bits
+
+def caster(p, x, y, r=0.035, m_wheel=None, m_fork=None):
+    """A small swivel caster with its wheel touching the floor at (x, y)."""
+    m_wheel = m_wheel or M('Rubber')
+    m_fork = m_fork or M('Steel')
+    p.cyl(r, r * 0.9, (x, y, r), m_wheel, axis='X', verts=10)
+    p.bx(x - r * 0.7, x + r * 0.7, y - r * 0.5, y + r * 0.5, r * 1.2, r * 2.2, m_fork)
 
 
-def caster_fork(p, x, y, z_axle, z_top, r, m_fork, m_pivot, w=0.12):
-    """Swivel fork (added to Part p) holding a caster wheel at (x, y, z_axle)."""
-    off = 0.06
-    for s in (-1, 1):
-        p.bx(x + s * (w / 2 + 0.03) - 0.015, x + s * (w / 2 + 0.03) + 0.015, y - 0.035, y + 0.035 + off, z_axle - 0.02,
-             z_top - 0.05, m_fork)
-    p.bx(x - w / 2 - 0.05, x + w / 2 + 0.05, y - 0.04, y + 0.05 + off, z_top - 0.07, z_top - 0.02, m_fork)
-    p.cyl(0.045, 0.14, (x, y + off, z_top + 0.03), m_pivot, verts=10)
-    p.cyl(r * 0.3, w + 0.08, (x, y, z_axle), m_pivot, axis='X', verts=8)
+def star_base(p, r, z, m, legs=5, leg_w=0.05, caster_r=0.03, hub_r=0.06):
+    """Five-leg rolling base (office-chair style) with casters."""
+    for k in range(legs):
+        a = 2 * math.pi * k / legs + math.pi / 2
+        x, y = math.cos(a) * r, math.sin(a) * r
+        p.tube((0, 0, z + caster_r * 2.4), (x, y, z + caster_r * 2.4), leg_w / 2, m, verts=8)
+        caster(p, x, y, caster_r)
+    p.cyl(hub_r, 0.06, (0, 0, z + caster_r * 2.4), m, verts=12, bevel=0.01)
 
 
 # ------------------------------------------------------------------ utilities
@@ -471,20 +571,14 @@ def mesh_objects():
 
 
 def world_bbox(objs=None):
-    objs = objs if objs is not None else mesh_objects()
-    mn = Vector((1e9, 1e9, 1e9))
-    mx = Vector((-1e9, -1e9, -1e9))
-    bpy.context.view_layer.update()
-    for o in objs:
-        for v in o.data.vertices:
-            w = o.matrix_world @ v.co
-            mn = Vector((min(mn.x, w.x), min(mn.y, w.y), min(mn.z, w.z)))
-            mx = Vector((max(mx.x, w.x), max(mx.y, w.y), max(mx.z, w.z)))
-    return mn, mx
+    import numpy as np
+    P = world_points(objs)
+    mn, mx = P.min(axis=0), P.max(axis=0)
+    return Vector(mn.tolist()), Vector(mx.tolist())
 
 
 def recenter_xy():
-    """Move every root object so the footprint center sits at the origin (vehicles and add-ons)."""
+    """Move every root object so the footprint center sits at the origin."""
     mn, mx = world_bbox()
     c = Vector(((mn.x + mx.x) / 2, (mn.y + mx.y) / 2, 0))
     for o in scene().objects:
@@ -514,10 +608,10 @@ def export_glb(key):
 
 # ------------------------------------------------------------------ rendering
 
-def setup_studio(size=256, samples=48):
+def setup_studio(size=256, samples=48, width=None):
     sc = scene()
     sc.render.engine = 'BLENDER_EEVEE'
-    sc.render.resolution_x = size
+    sc.render.resolution_x = width or size
     sc.render.resolution_y = size
     sc.render.resolution_percentage = 100
     sc.render.film_transparent = True
@@ -540,8 +634,8 @@ def setup_studio(size=256, samples=48):
     except Exception:
         pass
     bg = world.node_tree.nodes.get('Background')
-    bg.inputs['Color'].default_value = (0.62, 0.66, 0.72, 1.0)
-    bg.inputs['Strength'].default_value = 0.85
+    bg.inputs['Color'].default_value = (0.78, 0.84, 0.86, 1.0)
+    bg.inputs['Strength'].default_value = 0.75
 
     def sun(name, direction, strength, angle, shadow=True):
         ld = bpy.data.lights.get(name) or bpy.data.lights.new(name, 'SUN')
@@ -554,9 +648,9 @@ def setup_studio(size=256, samples=48):
         ob = bpy.data.objects.get(name) or link(bpy.data.objects.new(name, ld))
         ob.rotation_euler = (-Vector(direction)).to_track_quat('-Z', 'Y').to_euler()
         return ob
-    sun('KeyLight', (-0.8, -1.0, 1.5), 3.2, 12)
-    sun('FillLight', (1.3, -0.4, 0.5), 1.1, 30, False)
-    sun('RimLight', (0.4, 1.6, 1.0), 1.6, 20, False)
+    sun('KeyLight', (-0.9, -1.2, 1.6), 2.6, 25)
+    sun('FillLight', (1.4, -0.6, 0.6), 0.9, 40, False)
+    sun('RimLight', (0.5, 1.6, 1.0), 1.3, 30, False)
 
 
 def world_points(objs=None):
@@ -577,7 +671,7 @@ def world_points(objs=None):
     return np.concatenate(chunks) if chunks else np.zeros((1, 3))
 
 
-def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, aspect=1.0):
+def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, aspect=1.0, points=None):
     """Perspective camera looking along -direction, framed so the model's silhouette spans `fill`
     of the frame (fit on the actual vertices, not the bounding box) and sits centered."""
     import numpy as np
@@ -587,7 +681,7 @@ def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, as
     cd.sensor_fit = 'AUTO'
     cam = bpy.data.objects.get('ThumbCam') or link(bpy.data.objects.new('ThumbCam', cd))
     sc.camera = cam
-    P = world_points(objs)
+    P = world_points(objs) if points is None else points
     mn, mx = P.min(axis=0), P.max(axis=0)
     center = (mn + mx) / 2
     diag = float(np.linalg.norm(mx - mn))
@@ -604,6 +698,8 @@ def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, as
     def extents(dist, tgt):
         v = P - (tgt + dn * dist)
         depth = v @ fwd
+        if depth.min() < 0.05:
+            return -1e9, 1e9, -1e9, 1e9      # part of the model is behind the camera: far too close
         xs = (v @ right) / depth / tanh
         ys = (v @ upv) / depth / tanh
         return xs.min(), xs.max(), ys.min(), ys.max()
@@ -614,7 +710,7 @@ def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, as
         for _ in range(40):
             mid = (lo + hi) / 2
             x0, x1, y0, y1 = extents(mid, target)
-            if max(x1 - x0, (y1 - y0) * aspect) / 2 > fill:
+            if max((x1 - x0) / aspect, (y1 - y0)) / 2 > fill:
                 lo = mid
             else:
                 hi = mid
@@ -624,7 +720,7 @@ def frame_camera(direction=(1.0, -1.25, 0.8), fill=0.8, lens=50.0, objs=None, as
         target = target + right * ((x0 + x1) / 2) * tanh * depth_c + upv * ((y0 + y1) / 2) * tanh * depth_c
     cam.location = Vector(target + dn * dist)
     cam.rotation_euler = rot.to_euler()
-    cd.clip_start = 0.05
+    cd.clip_start = 0.02
     cd.clip_end = dist * 4 + 100
     return cam
 
@@ -635,9 +731,26 @@ def render_to(path):
     bpy.ops.render.render(write_still=True)
 
 
-def render_thumb(key, size=256, direction=None):
+THUMB_DIR_VEC = (1.0, -1.3, 0.85)   # 3/4 view from the front-right, a little above
+
+
+def render_thumb(key, size=256, direction=None, min_z=None, fill=0.84):
+    """Shop thumbnail. min_z frames the camera on the part above that height (tall thin props), letting a pole
+    run off the bottom edge so the recognizable head fills the card."""
     setup_studio(size)
-    frame_camera(direction=direction or (1.0, -1.25, 0.8))
+    pts = None
+    if min_z is not None:
+        P = world_points()
+        pts = P[P[:, 2] >= min_z]
+    frame_camera(direction=direction or THUMB_DIR_VEC, fill=fill, points=pts)
     path = os.path.join(THUMBS_DIR, key + '.png')
+    render_to(path)
+    return path
+
+
+def render_preview(key, size=384, direction=None):
+    setup_studio(size, samples=24)
+    frame_camera(direction=direction or THUMB_DIR_VEC, fill=0.86)
+    path = os.path.join(PREVIEW_DIR, key + '.png')
     render_to(path)
     return path

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>Clean harness</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #F3D2BE; font-family: 'Nunito', system-ui, sans-serif; color: #16323A; }
+    #stage { position: fixed; inset: 0; }
+    #result { position: fixed; inset: 0; display: none; place-items: center; background: #EAF8F4; }
+    #result .card { background: #FFFDF7; border-radius: 24px; padding: 24px 28px; box-shadow: 0 8px 24px rgba(22,50,58,.16); max-width: min(560px, 92vw); }
+    #result h2 { margin: 0 0 8px; font: 800 30px 'Baloo 2', sans-serif; }
+    #result pre { margin: 0 0 16px; font-size: 13px; line-height: 1.35; background: #F2F6F5; padding: 12px; border-radius: 12px; max-height: 50vh; overflow: auto; }
+    #result button { height: 56px; padding: 0 24px; border: 0; border-radius: 18px; background: #3DD6B5; font: 800 17px 'Nunito', sans-serif; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="result"><div class="card"><h2 id="rtitle">Result</h2><pre id="rjson"></pre><button id="again">Clean again</button></div></div>
+  <script type="module" src="./clean.ts"></script>
+</body>
+</html>
