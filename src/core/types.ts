@@ -405,7 +405,11 @@ export interface GameState {
   huddleDay: number;           // day the morning huddle was last completed
   pendingEvents: PendingEvent[];   // event cards awaiting a decision this morning (at most one per location)
   eventLog: { day: number; eventId: string; clinicId: string; choice: number; text: string }[];   // last 30
-  settings: { autoHuddle: boolean };   // skip the huddle and keep yesterday's focus (events auto-resolve with the first choice)
+  settings: {
+    autoHuddle: boolean;   // skip the huddle and keep yesterday's focus (events auto-resolve with the first choice)
+    autoRaise?: boolean;   // approve raise requests up to +15% automatically at day close
+    autoPause?: boolean;   // pause the game on key events (default on; undefined = on)
+  };
 }
 
 // ------------------------------------------------------------------ sim events (UI toasts, audio, clinic view)
