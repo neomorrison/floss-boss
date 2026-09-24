@@ -35,6 +35,9 @@ export function applyQuality(): void {
  */
 export function attachRenderer(container: HTMLElement, onResize: (w: number, h: number) => void): () => void {
   const r = getRenderer();
+  // The canvas moves between the clinic view and the clean scene; the clean scene hides the cursor over
+  // teeth (the 3D tool replaces it), so every hand-over starts from the default cursor.
+  r.domElement.style.cursor = '';
   container.appendChild(r.domElement);
   const fit = () => {
     const w = Math.max(1, container.clientWidth);
@@ -47,6 +50,7 @@ export function attachRenderer(container: HTMLElement, onResize: (w: number, h: 
   ro.observe(container);
   return () => {
     ro.disconnect();
+    r.domElement.style.cursor = '';
     if (r.domElement.parentElement === container) container.removeChild(r.domElement);
   };
 }
