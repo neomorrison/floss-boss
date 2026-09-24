@@ -157,6 +157,7 @@ export interface GumOptions {
   arch: 'upper' | 'lower';
   placements: ToothPlacement[];     // all 28
   missing: Set<number>;
+  segments?: number;                // along the arch (default 160; the pick proxy uses fewer)
 }
 
 /**
@@ -199,7 +200,7 @@ export function gumGeometry(o: GumOptions): THREE.BufferGeometry {
     [-0.45, 1.22, 0], [0, 1.32, 0], [0.4, 1.22, 0], [0.64, 1.0, 0], [0.76, 0.7, 0.2], [0.76, 0.35, 0.5],
     [0.66, 0.08, 0.9], [0.52, 0.0, 1], [0.36, -0.02, 1],
   ];
-  const NSEG = 160;
+  const NSEG = o.segments ?? 160;
   const P = prof.length;
   const pos: number[] = [];
   const col: number[] = [];
@@ -253,7 +254,7 @@ export function gumGeometry(o: GumOptions): THREE.BufferGeometry {
  */
 export function skirtGeometry(): THREE.BufferGeometry {
   const NS = 80;
-  const rows = [0.0, 0.35, 0.8, 1.5, 2.6, 4.0];
+  const rows = [0.0, 0.35, 0.8, 1.5, 2.6, 4.0, 5.8];
   const pos: number[] = [];
   const col: number[] = [];
   const top = new THREE.Color('#EE8198'), bottom = new THREE.Color('#C8566E');
@@ -309,8 +310,8 @@ export function palateGeometry(): THREE.BufferGeometry {
 
 // ------------------------------------------------------------------ tongue, cavity, lips, skin, throat
 
-export function tongueGeometry(): THREE.BufferGeometry {
-  const g = new THREE.SphereGeometry(1, 48, 28);
+export function tongueGeometry(ws = 48, hs = 28): THREE.BufferGeometry {
+  const g = new THREE.SphereGeometry(1, ws, hs);
   const p = g.getAttribute('position');
   const col: number[] = [];
   const base = new THREE.Color('#F27D8E'), groove = new THREE.Color('#D65A70'), tip = new THREE.Color('#FF96A6');
@@ -405,9 +406,8 @@ export function uvulaGeometry(): THREE.BufferGeometry {
 }
 
 /** Cartoon lips: a thick closed tube around the mouth opening, with a cupid's bow. */
-export function lipsGeometry(half: 'upper' | 'lower'): THREE.BufferGeometry {
+export function lipsGeometry(half: 'upper' | 'lower', N = 90, M = 18): THREE.BufferGeometry {
   const RX = 5.55, RY = 3.55, Z = 3.3;
-  const N = 90, M = 18;
   const pos: number[] = [];
   const a0 = half === 'upper' ? 0 : Math.PI, a1 = a0 + Math.PI;
   const centre = new THREE.Vector3(), tangent = new THREE.Vector3(), normal = new THREE.Vector3();
@@ -460,9 +460,8 @@ function fixLipWinding(g: THREE.BufferGeometry) {
 }
 
 /** Face skin around the mouth: a polar grid around the elliptical opening, cheeks puffed toward the camera. */
-export function skinGeometry(): THREE.BufferGeometry {
+export function skinGeometry(S = 120): THREE.BufferGeometry {
   const RX = 5.5, RY = 3.5;
-  const S = 120;
   const rings = [1, 1.05, 1.12, 1.22, 1.35, 1.5, 1.7, 1.95, 2.3, 2.8, 3.5, 4.5, 6, 8.5];
   const pos: number[] = [];
   const col: number[] = [];
@@ -573,10 +572,36 @@ function mergeVerticesSimple(src: THREE.BufferGeometry): THREE.BufferGeometry {
   return g;
 }
 
-export type DebrisGeo = { geo: THREE.BufferGeometry; color: string; rough: number };
+export type DebrisGeo = { geo: THREE.BufferGeometry; color: string; rough: number; metal?: number };
 
-export function debrisGeometry(kind: 'popcorn' | 'spinach' | 'seed' | 'candy'): DebrisGeo {
+export function debrisGeometry(kind: 'popcorn' | 'spinach' | 'seed' | 'candy' | 'seaweed' | 'doubloon'): DebrisGeo {
   switch (kind) {
+    case 'seaweed': {
+      // three wavy ribbons hanging out of the gap
+      const parts: THREE.BufferGeometry[] = [];
+      for (let k = 0; k < 3; k++) {
+        const g = new THREE.PlaneGeometry(0.07, 0.5, 1, 10);
+        const p = g.getAttribute('position');
+        for (let i = 0; i < p.count; i++) {
+          const y = p.getY(i);
+          p.setX(i, p.getX(i) + Math.sin(y * 14 + k * 2) * 0.035 + (k - 1) * 0.06);
+          p.setZ(i, Math.cos(y * 9 + k) * 0.03);
+        }
+        g.rotateZ((k - 1) * 0.35);
+        g.translate(0, -0.12, 0);
+        parts.push(g);
+      }
+      return { geo: withColors(mergeGeos(parts), ['#2F8F4A', '#3FAE5A', '#1F6B3A']), color: '#ffffff', rough: 0.35 };
+    }
+    case 'doubloon': {
+      const coin = new THREE.CylinderGeometry(0.17, 0.17, 0.045, 28);
+      const rim = new THREE.TorusGeometry(0.16, 0.022, 6, 28);
+      rim.rotateX(Math.PI / 2);
+      const face = new THREE.CylinderGeometry(0.08, 0.08, 0.06, 5);
+      const g = mergeGeos([coin, rim, face]);
+      g.rotateX(Math.PI / 2);
+      return { geo: withColors(g, ['#F4C542', '#E8B030', '#FFD866']), color: '#ffffff', rough: 0.22, metal: 0.9 };
+    }
     case 'popcorn': {
       const parts: THREE.BufferGeometry[] = [];
       const rnd = mulberry32(5);
@@ -748,6 +773,31 @@ export function toolModel(key: string): ToolParts {
       if (hve) g.add(cyl(0.26, 0.26, 1.2, plastic('#0E8F8A'), 3.2, 14));
       break;
     }
+    case 'tool_gelbrush': {
+      g.add(cyl(0.2, 0.17, 4.6, plastic('#FFFFFF', 0.35), 1.3, 14));
+      g.add(cyl(0.22, 0.22, 0.4, plastic('#7FD8FF'), 4.2, 14));
+      g.add(cyl(0.1, 0.16, 0.6, steel(), 0.7, 12));
+      const tipG = new THREE.ConeGeometry(0.12, 0.7, 14);
+      tipG.rotateX(Math.PI);
+      tipG.translate(0, 0.35, 0);
+      const tip = new THREE.Mesh(tipG, new THREE.MeshStandardMaterial({ color: '#8FE3FF', roughness: 0.6, emissive: '#3FB8E8', emissiveIntensity: 0.25 }));
+      g.add(tip);
+      break;
+    }
+    case 'tool_uvlamp': {
+      g.add(cyl(0.3, 0.26, 4.2, plastic('#2B3B55', 0.3), 1.8, 18));
+      g.add(cyl(0.32, 0.32, 0.3, plastic('#7C6CFF'), 3.2, 18));
+      const neck = tube([new THREE.Vector3(0, 1.9, 0), new THREE.Vector3(0, 1.2, 0.1), new THREE.Vector3(0, 0.55, 0.3)], 0.12, plastic('#2B3B55', 0.3));
+      g.add(neck);
+      const head = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.26, 0.3, 20), plastic('#2B3B55', 0.3));
+      head.position.set(0, 0.35, 0.35); head.rotation.x = Math.PI / 2 - 0.3;
+      g.add(head);
+      const lens = new THREE.Mesh(new THREE.CircleGeometry(0.27, 20), new THREE.MeshBasicMaterial({ color: '#B9A8FF' }));
+      lens.position.set(0, 0.28, 0.5); lens.rotation.x = -0.3;
+      g.add(lens);
+      nozzle.set(0, 0.28, 0.5);
+      break;
+    }
     default: { // tool_syringe
       g.add(cyl(0.26, 0.24, 3.4, steel(), 2.0, 14));
       g.add(cyl(0.3, 0.3, 0.3, plastic('#3DD6B5'), 4.6, 14));
@@ -763,3 +813,145 @@ export function toolModel(key: string): ToolParts {
 }
 
 export const GUM_HEIGHTS = { upper: UPPER_GUM_Y, lower: LOWER_GUM_Y };
+
+
+// ------------------------------------------------------------------ case props (procedural fallbacks)
+
+/** A cone-shaped barnacle shell with ridges: base at y = 0, +Y out of the tooth, about 0.34 across. */
+export function barnacleGeometry(variant: number): THREE.BufferGeometry {
+  const pts: THREE.Vector2[] = [];
+  const prof: [number, number][] = [[0.17, 0], [0.175, 0.02], [0.15, 0.07], [0.11, 0.13], [0.075, 0.17], [0.06, 0.165], [0.045, 0.13], [0.0, 0.12]];
+  for (const [r, y] of prof) pts.push(new THREE.Vector2(r, y));
+  const g = new THREE.LatheGeometry(pts, 22);
+  const p = g.getAttribute('position');
+  const col: number[] = [];
+  const shell = new THREE.Color('#EDE6D2'), ridge = new THREE.Color('#BFB49A'), hole = new THREE.Color('#4A3B2A'), moss = new THREE.Color('#9BA873');
+  const c = new THREE.Color();
+  const rnd = mulberry32(77 + variant * 13);
+  const jitter = Array.from({ length: 8 }, () => 0.8 + rnd() * 0.4);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const a = Math.atan2(z, x);
+    const plates = Math.pow(Math.abs(Math.cos(a * 3)), 0.5);
+    const k = (0.88 + 0.14 * plates) * jitter[Math.floor(((a + Math.PI) / (Math.PI * 2)) * 8) % 8];
+    p.setXYZ(i, x * k, y * (0.9 + 0.15 * jitter[(i >> 2) % 8]), z * k);
+    const r = Math.hypot(x, z);
+    c.copy(shell).lerp(ridge, (1 - plates) * 0.7);
+    if (y > 0.12 && r < 0.07) c.copy(hole);
+    if (y < 0.03) c.lerp(moss, 0.5);
+    col.push(c.r, c.g, c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A thin dark zig-zag crack ribbon lying on top of a deposit (tartar space: base y = 0, lump ~0.34 wide). */
+export function crackGeometry(seed: number): THREE.BufferGeometry {
+  const rnd = mulberry32(seed);
+  const pos: number[] = [];
+  const idx: number[] = [];
+  const n = 6;
+  let x = -0.16, z = (rnd() - 0.5) * 0.08;
+  for (let i = 0; i <= n; i++) {
+    const w = 0.012 * (1 - Math.abs(i / n - 0.5));
+    pos.push(x, 0, z - w, x, 0, z + w);
+    x += 0.32 / n;
+    z += (rnd() - 0.5) * 0.09;
+    if (i < n) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Orthodontic bracket: a small rounded steel block with wings and a slot for the wire, facing +Z. */
+export function bracketGeometry(): THREE.BufferGeometry {
+  const base = new THREE.BoxGeometry(0.26, 0.24, 0.05);
+  base.translate(0, 0, 0.025);
+  const parts: THREE.BufferGeometry[] = [base];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const w = new THREE.BoxGeometry(0.08, 0.07, 0.07);
+    w.translate(sx * 0.075, sy * 0.075, 0.07);
+    parts.push(w);
+  }
+  return mergeGeos(parts);
+}
+
+/** A cartoon sugar bug: gumdrop body, googly eyes, six little legs. About 0.24 long, feet at y = 0, facing +Z. */
+export function sugarBugModel(): { group: THREE.Group; legs: THREE.Object3D[]; body: THREE.Mesh; mats: THREE.Material[]; geos: THREE.BufferGeometry[] } {
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshPhysicalMaterial({ color: '#B45CFF', roughness: 0.25, clearcoat: 0.9, clearcoatRoughness: 0.1, sheen: 0.4 });
+  const white = new THREE.MeshStandardMaterial({ color: '#FFFFFF', roughness: 0.3 });
+  const ink = new THREE.MeshStandardMaterial({ color: '#16323A', roughness: 0.4 });
+  const legMat = new THREE.MeshStandardMaterial({ color: '#6E2FA8', roughness: 0.5 });
+  const bodyG = new THREE.SphereGeometry(0.1, 16, 12);
+  bodyG.scale(1, 0.72, 1.25);
+  const body = new THREE.Mesh(bodyG, bodyMat);
+  body.position.y = 0.07;
+  group.add(body);
+  // sugar crystals on the back
+  const sprG = new THREE.OctahedronGeometry(0.018, 0);
+  const sprMat = new THREE.MeshStandardMaterial({ color: '#FFF6FF', roughness: 0.2, emissive: '#FFFFFF', emissiveIntensity: 0.15 });
+  for (let i = 0; i < 7; i++) {
+    const sp = new THREE.Mesh(sprG, sprMat);
+    const a = i * 2.4;
+    sp.position.set(Math.cos(a) * 0.05, 0.13, Math.sin(a) * 0.06 - 0.01);
+    group.add(sp);
+  }
+  const eyeG = new THREE.SphereGeometry(0.035, 12, 10);
+  const pupG = new THREE.SphereGeometry(0.017, 8, 8);
+  for (const sx of [-1, 1]) {
+    const e = new THREE.Mesh(eyeG, white);
+    e.position.set(sx * 0.042, 0.12, 0.1);
+    const pu = new THREE.Mesh(pupG, ink);
+    pu.position.set(sx * 0.045, 0.12, 0.13);
+    group.add(e, pu);
+  }
+  const legG = new THREE.CylinderGeometry(0.01, 0.008, 0.08, 5);
+  legG.rotateZ(Math.PI / 2);
+  legG.translate(0.04, 0, 0);
+  const legs: THREE.Object3D[] = [];
+  for (const sx of [-1, 1]) for (let k = 0; k < 3; k++) {
+    const pivot = new THREE.Group();
+    pivot.position.set(sx * 0.08, 0.03, (k - 1) * 0.06);
+    const l = new THREE.Mesh(legG, legMat);
+    l.rotation.z = -0.5;
+    if (sx < 0) pivot.rotation.y = Math.PI;
+    pivot.add(l);
+    group.add(pivot);
+    legs.push(pivot);
+  }
+  group.traverse((o) => { (o as THREE.Mesh).castShadow = true; });
+  return { group, legs, body, mats: [bodyMat, white, ink, legMat, sprMat], geos: [bodyG, sprG, eyeG, pupG, legG] };
+}
+
+/** A flattened torus lying in the XZ plane (radius 1): problem-tooth rings, the polisher wrap ring. */
+export function flatRingGeometry(tube = 0.07): THREE.BufferGeometry {
+  const g = new THREE.TorusGeometry(1, tube, 6, 48);
+  g.rotateX(Math.PI / 2);
+  g.scale(1, 0.5, 1);
+  return g;
+}
+
+/** A puffy gum pocket: a squashed capsule along X (the arch tangent), about 0.5 wide. */
+export function pocketGeometry(): THREE.BufferGeometry {
+  // a swollen lobe of gum: wide along the arch, shallow, a little lumpy
+  const g = new THREE.SphereGeometry(1, 24, 14);
+  const p = g.getAttribute('position');
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const lump = 1 + 0.07 * Math.sin(x * 3.1 + 1) * Math.cos(z * 2.3);
+    p.setXYZ(i, x * 0.36 * lump, y * 0.1 * lump, z * 0.1 * lump);
+  }
+  g.computeVertexNormals();
+  // angry red in the middle, fading to gum pink at the rim
+  const col: number[] = [];
+  const mid = new THREE.Color('#FF5A74'), rim = new THREE.Color('#F4909F');
+  const c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) { const k = Math.min(1, Math.abs(p.getX(i)) / 0.36); col.push(...c.copy(mid).lerp(rim, k * k).toArray()); }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return g;
+}

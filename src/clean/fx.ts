@@ -185,10 +185,11 @@ export class Fx {
   }
 
   /** Launch an existing object (already in this.group's space). `done` fires when it expires. */
-  fly(obj: THREE.Object3D, vx: number, vy: number, vz: number, life = 1.4, done?: () => void) {
+  fly(obj: THREE.Object3D, vx: number, vy: number, vz: number, life = 1.4, done?: () => void, spin?: [number, number, number], floor = this.floorY) {
     this.flyers.push({
-      obj, vx, vy, vz, sx: (Math.random() - 0.5) * 18, sy: (Math.random() - 0.5) * 18, sz: (Math.random() - 0.5) * 18,
-      life, max: life, s0: obj.scale.x, floor: this.floorY, done,
+      obj, vx, vy, vz,
+      sx: spin ? spin[0] : (Math.random() - 0.5) * 18, sy: spin ? spin[1] : (Math.random() - 0.5) * 18, sz: spin ? spin[2] : (Math.random() - 0.5) * 18,
+      life, max: life, s0: obj.scale.x, floor, done,
     });
   }
 

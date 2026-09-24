@@ -14,12 +14,13 @@
     #result .card { background: #FFFDF7; border-radius: 24px; padding: 24px 28px; box-shadow: 0 8px 24px rgba(22,50,58,.16); max-width: min(560px, 92vw); }
     #result h2 { margin: 0 0 8px; font: 800 30px 'Baloo 2', sans-serif; }
     #result pre { margin: 0 0 16px; font-size: 13px; line-height: 1.35; background: #F2F6F5; padding: 12px; border-radius: 12px; max-height: 50vh; overflow: auto; }
+    #ba { display: flex; gap: 8px; margin-bottom: 10px; } #ba img { width: 50%; border-radius: 10px; }
     #result button { height: 56px; padding: 0 24px; border: 0; border-radius: 18px; background: #3DD6B5; font: 800 17px 'Nunito', sans-serif; cursor: pointer; }
   </style>
 </head>
 <body>
   <div id="stage"></div>
-  <div id="result"><div class="card"><h2 id="rtitle">Result</h2><pre id="rjson"></pre><button id="again">Clean again</button></div></div>
+  <div id="result"><div class="card"><h2 id="rtitle">Result</h2><div id="ba"></div><pre id="rjson"></pre><button id="again">Clean again</button></div></div>
   <script type="module" src="./clean.ts"></script>
 </body>
 </html>

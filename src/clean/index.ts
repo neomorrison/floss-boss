@@ -6,6 +6,7 @@ import type { CleanResult, CleanSetup } from '../core/types';
 import { preloadModels } from '../core/assets';
 import { TOOLS } from '../data/tools';
 import { CleanController, neededModels } from './session';
+import { CASE_TOOL_MODELS } from './slots';
 
 export interface CleanSession {
   /** Resolves when the player presses Done, the patient walks out, or the player backs out (quit 'abort'). */
@@ -30,7 +31,7 @@ export function startClean(container: HTMLElement, setup: CleanSetup): CleanSess
 /** Warm up models and textures (call on the title screen). */
 export function preloadClean(): Promise<void> {
   const tools = Object.values(TOOLS).flat().map((t) => t.model);
-  return preloadModels([...neededModels(null), ...tools]).catch(() => undefined);
+  return preloadModels([...neededModels(null), ...tools, ...Object.values(CASE_TOOL_MODELS)]).catch(() => undefined);
 }
 
 export { buildSetup, modsFromSkills } from './setup';

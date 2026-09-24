@@ -32,11 +32,17 @@ export function makeSharedToothUniforms(): SharedToothUniforms {
 
 export interface ToothMat {
   material: THREE.MeshPhysicalMaterial;
-  texture: THREE.DataTexture;
+  texture: THREE.DataTexture;     // R plaque, G stain, B polish, A prophy paste
   data: Uint8Array;
+  caseTex: THREE.DataTexture;     // R gel / sealant
+  caseData: Uint8Array;
   highlight: { value: number };   // 0..1 tutorial / focus pulse
-  flash: { value: number };       // 0..1 white flash when the tooth becomes spotless
-  wet: { value: number };         // 0..1 extra shine right after rinsing
+  flash: { value: number };       // 0..1 white flash when the tooth snaps
+  wet: { value: number };         // 0..1 extra shine right after rinsing (the reveal wave)
+  shade: { value: number };       // 0 (shade 1, brightest) .. 1 (shade 16)
+  gold: { value: number };        // 1 = gold crown (pirate)
+  lamp: { value: number };        // 0..1 UV lamp glow on this tooth
+  gelCol: { value: THREE.Color }; // whitening gel or sealant colour
 }
 
 const GLSL_NOISE = /* glsl */`
@@ -48,8 +54,7 @@ float fbNoise(vec3 x) {
 }
 `;
 
-export function makeToothMaterial(height: number, shared: SharedToothUniforms, tipBlue: number): ToothMat {
-  const data = new Uint8Array(DIRT_GU * DIRT_GV * 4);
+function dataTex(data: Uint8Array): THREE.DataTexture {
   const texture = new THREE.DataTexture(data, DIRT_GU, DIRT_GV, THREE.RGBAFormat, THREE.UnsignedByteType);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -58,6 +63,14 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.NoColorSpace;
   texture.needsUpdate = true;
+  return texture;
+}
+
+export function makeToothMaterial(height: number, shared: SharedToothUniforms, tipBlue: number): ToothMat {
+  const data = new Uint8Array(DIRT_GU * DIRT_GV * 4);
+  const texture = dataTex(data);
+  const caseData = new Uint8Array(DIRT_GU * DIRT_GV * 4);
+  const caseTex = dataTex(caseData);
 
   const material = new THREE.MeshPhysicalMaterial({
     color: '#FFFCF3', roughness: 0.26, metalness: 0, clearcoat: 0.7, clearcoatRoughness: 0.1,
@@ -66,10 +79,14 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
   const highlight = { value: 0 };
   const flash = { value: 0 };
   const wet = { value: 0 };
+  const shade = { value: 0.2 };
+  const gold = { value: 0 };
+  const lamp = { value: 0 };
+  const gelCol = { value: new THREE.Color('#8FE3FF') };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, shared, {
-      uDirt: { value: texture }, uH: { value: height }, uTipBlue: { value: tipBlue },
-      uHighlight: highlight, uFlash: flash, uWet: wet,
+      uDirt: { value: texture }, uCase: { value: caseTex }, uH: { value: height }, uTipBlue: { value: tipBlue },
+      uHighlight: highlight, uFlash: flash, uWet: wet, uShade: shade, uGold: gold, uLamp: lamp, uGelCol: gelCol,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFbLocal;\nvarying vec3 vFbWorld;')
@@ -80,10 +97,11 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
 varying vec3 vFbLocal;
 varying vec3 vFbWorld;
 uniform sampler2D uDirt;
-uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uWet;
+uniform sampler2D uCase;
+uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uWet, uShade, uGold, uLamp;
 uniform vec4 uBrush;
-uniform vec3 uPlaqueA, uPlaqueB, uStainA, uStainB, uDiscloseCol, uEagleCol;
-float fbPlaque = 0.0; float fbStain = 0.0; float fbPolish = 0.0; float fbEdge = 0.0;
+uniform vec3 uPlaqueA, uPlaqueB, uStainA, uStainB, uDiscloseCol, uEagleCol, uGelCol;
+float fbPlaque = 0.0; float fbStain = 0.0; float fbPolish = 0.0; float fbEdge = 0.0; float fbPaste = 0.0; float fbGel = 0.0; float fbV = 0.0;
 ${GLSL_NOISE}`)
       .replace('#include <map_fragment>', `#include <map_fragment>
 {
@@ -99,6 +117,10 @@ ${GLSL_NOISE}`)
   vec3 enamel = diffuseColor.rgb;
   enamel *= mix(vec3(0.93, 0.86, 0.74), vec3(1.0), smoothstep(-0.05, 0.4, fv));          // warmer at the neck
   enamel = mix(enamel, enamel * vec3(0.9, 0.96, 1.06), smoothstep(0.78, 1.0, fv) * uTipBlue); // translucent edge
+  enamel = mix(enamel, enamel * vec3(0.9, 0.77, 0.55), uShade);                           // shade guide tint
+  // gold crown: dull and brownish until buffed, then bright
+  vec3 goldCol = mix(vec3(0.74, 0.58, 0.28), vec3(1.0, 0.8, 0.3), smoothstep(0.0, 0.9, d.b));
+  enamel = mix(enamel, goldCol * (0.92 + 0.16 * fbNoise(vFbLocal * 22.0)), uGold);
   float pRaw = d.r + (n1 - 0.5) * 0.42;
   float pm = smoothstep(0.2, 0.44, pRaw);
   float sm = smoothstep(0.2, 0.44, d.g + (n2 - 0.5) * 0.4);
@@ -110,21 +132,36 @@ ${GLSL_NOISE}`)
   fbEdge = pm * (1.0 - pm) * 4.0;
   col *= 1.0 - 0.3 * fbEdge;                           // fuzzy rim reads as thickness
   col *= 1.0 - 0.08 * pm * smoothstep(0.55, 0.9, n1);  // speckle
+  // gritty pink prophy paste (only rinse removes it)
+  float pa = smoothstep(0.12, 0.5, d.a + (n1 - 0.5) * 0.35);
+  vec3 pasteCol = mix(vec3(0.95, 0.46, 0.62), vec3(0.88, 0.36, 0.54), smoothstep(0.35, 0.8, n2));
+  float grit = smoothstep(0.62, 0.9, fbNoise(vFbLocal * 80.0));
+  pasteCol = mix(pasteCol, vec3(1.0, 0.86, 0.9), grit * 0.7);
+  col = mix(col, pasteCol, pa * 0.92);
+  // whitening gel / sealant: a glossy coat
+  vec4 cs = texture2D(uCase, vec2(fu, fv));
+  float gl = smoothstep(0.15, 0.55, cs.r + (n2 - 0.5) * 0.2);
+  col = mix(col, uGelCol, gl * 0.5);
   diffuseColor.rgb = col;
-  fbPlaque = pm; fbStain = sm; fbPolish = d.b * (1.0 - pm) * (1.0 - sm);
+  fbPlaque = pm; fbStain = sm; fbPolish = d.b * (1.0 - pm) * (1.0 - sm) * (1.0 - pa); fbPaste = pa; fbGel = gl; fbV = fv;
 }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
 roughnessFactor = mix(roughnessFactor, 0.72, fbPlaque);
 roughnessFactor = mix(roughnessFactor, 0.5, fbStain * 0.6);
-roughnessFactor = mix(roughnessFactor, 0.06, max(fbPolish, uWet * 0.6));`)
+roughnessFactor = mix(roughnessFactor, 0.06, max(fbPolish, uWet * 0.6));
+roughnessFactor = mix(roughnessFactor, 0.85, fbPaste);
+roughnessFactor = mix(roughnessFactor, 0.04, fbGel);
+roughnessFactor = mix(roughnessFactor, mix(0.55, 0.12, fbPolish), uGold);`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+metalnessFactor = mix(metalnessFactor, 0.9, uGold);`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
 #ifdef USE_CLEARCOAT
-material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain);
+material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain) * (1.0 - 0.8 * fbPaste);
 #endif`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 {
   float tw = fbNoise(vFbLocal * 46.0 + vec3(0.0, uTime * 2.1, uTime * 1.3));
-  float sparkle = pow(tw, 16.0) * 9.0 * fbPolish;
+  float sparkle = pow(tw, 16.0) * 9.0 * fbPolish * (1.0 + 1.5 * uGold);
   totalEmissiveRadiance += vec3(1.0, 0.97, 0.88) * sparkle;
   totalEmissiveRadiance += vec3(1.0, 0.99, 0.95) * fbPolish * 0.05;
   float dirt = max(fbPlaque, fbStain);
@@ -137,23 +174,39 @@ material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain);
   }
   totalEmissiveRadiance += vec3(0.3, 0.95, 0.82) * uHighlight * (0.18 + 0.12 * sin(uTime * 6.0));
   totalEmissiveRadiance += vec3(1.0, 0.98, 0.9) * uFlash * 0.9;
+  // the rinse reveal: a bright band sweeping up a freshly washed tooth
+  float wave = smoothstep(0.18, 0.0, abs(fbV - (1.15 - uWet * 1.3))) * step(0.02, uWet);
+  totalEmissiveRadiance += vec3(1.0, 1.0, 0.96) * wave * (0.25 + 0.6 * fbPolish);
+  totalEmissiveRadiance += vec3(0.45, 0.35, 1.0) * uLamp * (0.25 + 0.5 * fbGel);
 }`);
   };
-  material.customProgramCacheKey = () => 'fbTooth1';
-  return { material, texture, data, highlight, flash, wet };
+  material.customProgramCacheKey = () => 'fbTooth2';
+  return { material, texture, data, caseTex, caseData, highlight, flash, wet, shade, gold, lamp, gelCol };
 }
 
 /** Write a tooth's layers into its texture bytes. */
-export function uploadDirt(tm: ToothMat, plaque: Float32Array, stain: Float32Array, polish: Float32Array) {
+export function uploadDirt(tm: ToothMat, plaque: Float32Array, stain: Float32Array, polish: Float32Array, paste?: Float32Array, gel?: Float32Array) {
   const d = tm.data;
   for (let i = 0, n = plaque.length; i < n; i++) {
     const o = i * 4;
     d[o] = plaque[i] * 255;
     d[o + 1] = stain[i] * 255;
     d[o + 2] = polish[i] * 255;
-    d[o + 3] = 255;
+    d[o + 3] = paste ? paste[i] * 255 : 0;
   }
   tm.texture.needsUpdate = true;
+  if (gel) {
+    const c = tm.caseData;
+    for (let i = 0, n = gel.length; i < n; i++) c[i * 4] = gel[i] * 255;
+    tm.caseTex.needsUpdate = true;
+  }
+}
+
+/** Dispose a tooth material and both of its data textures. */
+export function disposeToothMat(tm: ToothMat) {
+  tm.texture.dispose();
+  tm.caseTex.dispose();
+  tm.material.dispose();
 }
 
 // ------------------------------------------------------------------ water
@@ -274,4 +327,44 @@ export function getDropTexture(): THREE.Texture {
   dropTex = new THREE.CanvasTexture(c);
   dropTex.colorSpace = THREE.SRGBColorSpace;
   return dropTex;
+}
+
+let ringTex: THREE.Texture | null = null;
+/** A soft glowing ring (floss gap markers, problem-tooth rings). Cached for the page. */
+export function getRingTexture(): THREE.Texture {
+  if (ringTex) return ringTex;
+  const s = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(s / 2, s / 2, s * 0.18, s / 2, s / 2, s / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,0)');
+  grd.addColorStop(0.45, 'rgba(255,255,255,0.15)');
+  grd.addColorStop(0.62, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.78, 'rgba(255,255,255,0.35)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, s, s);
+  ringTex = new THREE.CanvasTexture(c);
+  ringTex.colorSpace = THREE.SRGBColorSpace;
+  return ringTex;
+}
+
+let glowTex: THREE.Texture | null = null;
+/** A soft round glow (sensitive gums). Cached for the page. */
+export function getGlowTexture(): THREE.Texture {
+  if (glowTex) return glowTex;
+  const s = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grd.addColorStop(0.45, 'rgba(255,255,255,0.4)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, s, s);
+  glowTex = new THREE.CanvasTexture(c);
+  glowTex.colorSpace = THREE.SRGBColorSpace;
+  return glowTex;
 }
