@@ -167,7 +167,8 @@ export interface Staff {
   level: number;
   xp: number;                 // patients served toward next level
   hiredDay: number;
-  offUntilDay: number;        // training / off
+  offUntilDay: number;        // training / off (last day away)
+  offFrom?: number;           // first day away on a course, when booked
   patientsToday: number;
   // live (not important for save but kept simple)
   task: 'idle' | 'cleaning' | 'checkin' | 'walking' | 'exam' | 'break' | 'off';
@@ -232,12 +233,14 @@ export interface DayReport {
   perLocation: { clinicId: string; name: string; stats: ClinicDayStats; rating: number; ratingDelta: number }[];
   income: DayLine[];
   expenses: DayLine[];
-  net: number;
+  net: number;                 // total cash change of the day, including purchases and loans
+  operatingNet?: number;       // clinic income minus running costs only (use this for profit displays)
   cashAfter: number;
   xpGained: number;
   levelUps: number;
   goalsDone: string[];
   notes: string[];             // events worth reading (quit, raise request, milestones)
+  events?: SimEvent[];         // events raised while closing the day (achievements, level-ups); the UI emits them after the report
 }
 
 export interface Goal {

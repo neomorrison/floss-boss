@@ -15,7 +15,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { id: 'lead', name: 'Lead Hygienist', text: 'Reach level 7.' },
   { id: 'ultrasonic', name: 'Good Vibrations', text: 'Buy an ultrasonic scaler.' },
   { id: 'owner', name: 'Open for Business', text: 'Open your own practice.' },
-  { id: 'firstHire', name: 'Team Player', text: 'Hire your first employee.' },
+  { id: 'firstHire', name: 'Team Player', text: 'Hire your first team member.' },
   { id: 'fullStaff', name: 'Full House', text: 'Staff every operatory in an office.' },
   { id: 'dentist', name: 'Doctor in the House', text: 'Hire a dentist.' },
   { id: 'rating45', name: 'Five-Star Office', text: 'Reach a 4.5 rating.' },

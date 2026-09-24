@@ -3,8 +3,11 @@
 //
 // Cookies: chunks of <= 3800 chars named fb_s0..fb_sN plus fb_meta = "<chunks>|<savedAt>|<checksum>",
 // scoped to the page's directory path so other apps on the same github.io domain are untouched.
-// Budget: at most MAX_CHUNKS chunks. If the compressed save is bigger, bulky history
-// (ledger, day reports, reviews) is trimmed from the cookie copy only.
+// localStorage holds the full save and is the primary store. Cookies ride along on every HTTP request
+// to the game path, and hosts reject request headers past ~16 KB (HTTP 431 locks the whole site), so
+// the cookie copy is a compact backup with a hard budget of MAX_CHUNKS chunks (~7.6 KB): history and
+// today's patients are dropped from it, and if it still does not fit, no cookie is written at all.
+// The loader prefers localStorage and only falls back to the cookie when localStorage is empty.
 import LZString from 'lz-string';
 import type { GameState } from './types';
 
@@ -12,7 +15,7 @@ export const SAVE_VERSION = 1;
 const PREFIX = 'fb_s';
 const META = 'fb_meta';
 const CHUNK = 3800;
-const MAX_CHUNKS = 24;         // ~91 KB; GitHub Pages accepted 100 KB cookie headers in testing (2026-09-23)
+const MAX_CHUNKS = 2;          // ~7.6 KB: Node/Vite reject > 16 KB of headers (431), so stay far below
 const LS_KEY = 'flossboss.save';
 const LS_SETTINGS = 'flossboss.settings';
 const TEN_YEARS = 60 * 60 * 24 * 365 * 10;
@@ -57,15 +60,24 @@ export function decodeSave(data: string): GameState | null {
   }
 }
 
-function trimmedForCookie(state: GameState): string {
-  let data = encodeSave(state);
-  if (data.length <= CHUNK * MAX_CHUNKS) return data;
-  const slim: GameState = { ...state, ledger: [], reports: state.reports.slice(-5) };
-  data = encodeSave(slim);
-  if (data.length <= CHUNK * MAX_CHUNKS) return data;
-  const trimClinic = (c: GameState['locations'][number]) => ({ ...c, reviews: c.reviews.slice(-10) });
-  const slimmer: GameState = { ...slim, reports: [], candidates: [], locations: slim.locations.map(trimClinic), employer: slim.employer ? trimClinic(slim.employer) : null };
-  return encodeSave(slimmer);
+function trimmedForCookie(state: GameState): string | null {
+  const fits = (d: string) => d.length <= CHUNK * MAX_CHUNKS;
+  // compact backup: no history, no candidates, no reviews text, no patients of the day
+  const trimClinic = (c: GameState['locations'][number]) => ({ ...c, reviews: c.reviews.slice(-5), patients: [] });
+  const slim: GameState = {
+    ...state, ledger: [], reports: [], candidates: [],
+    locations: state.locations.map(trimClinic), employer: state.employer ? trimClinic(state.employer) : null,
+  };
+  const data = encodeSave(slim);
+  if (fits(data)) return data;
+  const slimmer: GameState = { ...slim, locations: slim.locations.map((c) => ({ ...c, reviews: [] })), employer: slim.employer ? { ...slim.employer, reviews: [] } : null };
+  const d2 = encodeSave(slimmer);
+  return fits(d2) ? d2 : null;
+}
+
+function clearCookieSave(): void {
+  const c = getCookies();
+  for (const k of Object.keys(c)) if (k.startsWith(PREFIX) || k === META) setCookie(k, '', 0);
 }
 
 function writeCookies(data: string, savedAt: number): boolean {
@@ -107,7 +119,9 @@ export function saveGame(state: GameState): SaveInfo {
   let local = false;
   const full = encodeSave(state);
   try {
-    cookie = writeCookies(trimmedForCookie(state), savedAt);
+    const compact = trimmedForCookie(state);
+    if (compact) cookie = writeCookies(compact, savedAt);
+    else clearCookieSave();
   } catch (e) {
     console.warn('cookie save failed', e);
   }
@@ -132,8 +146,9 @@ export function loadGame(): GameState | null {
       return null;
     }
   })();
-  const candidates = [fromCookie, fromLocal].filter(Boolean) as { data: string; savedAt: number }[];
-  candidates.sort((a, b) => b.savedAt - a.savedAt);
+  // The full localStorage copy wins unless the compact cookie is strictly newer (localStorage failed).
+  const cookieFirst = !!fromCookie && (!fromLocal || fromCookie.savedAt > fromLocal.savedAt);
+  const candidates = (cookieFirst ? [fromCookie, fromLocal] : [fromLocal, fromCookie]).filter(Boolean) as { data: string; savedAt: number }[];
   for (const c of candidates) {
     const s = decodeSave(c.data);
     if (s) return s;
