@@ -16,7 +16,7 @@
 //   {"drag": [[x1, y1], [x2, y2], ...], "ms": 800}   mouse down, glide through the points over ms, mouse up
 //   {"scrub": [x, y], "radius": 30, "ms": 2000}       down, zig-zag around a point for ms (scraping), up
 //   {"shot": "out/name.png"}  {"size": [1600, 900]}
-// Flags: --size WxH (default 1440x900), --mobile (390x844 touch), --touch (touch + mobile UA at --size, e.g. iPad 1024x768), --verbose
+// Flags: --size WxH (default 1440x900), --mobile (390x844 touch), --touch (touch + mobile UA at --size, e.g. iPad 1024x768), --gpu (real GPU via D3D11: ~60 fps instead of ~2 fps SwiftShader; use it for feel/timing checks), --verbose
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,7 +86,7 @@ if (has('dist')) {
 const [w, h] = (has('mobile') ? '390x844' : flag('size', '1440x900')).split('x').map(Number);
 const browser = await puppeteer.launch({
   executablePath, headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+  args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', ...(has('gpu') ? ['--use-angle=d3d11', '--enable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']), '--ignore-gpu-blocklist'],
 });
 const page = await browser.newPage();
 const touch = has('mobile') || has('touch');
