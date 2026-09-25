@@ -173,6 +173,7 @@ export class Actors {
   readonly ctx = new FlowContext();
   private frameNo = 0;
   private layout: ClinicLayout | null = null;
+  private clinicId = '';
   private t = 0;
   private roleCount = { hygienist: 0, receptionist: 0, assistant: 0, dentist: 0, manager: 0 };
   private rate = 1;
@@ -207,9 +208,13 @@ export class Actors {
     yield* this.staff.values();
   }
 
+  /** Drop every actor without paying out any pending coins/stars (a location switch, out/fix/clinic.md
+   * "multi-location overlay bug": the old location's patients never had the chance to actually reach the
+   * new layout's checkout, so their pending pay/review must be dropped, not flushed there). */
   clear(): void {
     for (const a of this.all()) { this.group.remove(a.person.root); disposePerson(a.person); }
     this.patients.clear(); this.staff.clear();
+    this.effects.length = 0;
   }
 
   private make(id: string, role: Actor['role'], kind: PersonKind, tint: Tint): Actor {
@@ -273,7 +278,11 @@ export class Actors {
    * jump). `gameRate` is game minutes per real second (5 at 1x).
    */
   sync(c: Clinic, l: ClinicLayout, minute: number, dt: number, live: boolean, gameRate: number): void {
-    if (l !== this.layout) { this.clear(); this.layout = l; live = false; }
+    // A same-tier location switch keeps the identical cached ClinicLayout object (layoutFor caches by
+    // tier), so the layout check alone misses it; check clinicId too (out/fix/followup.md multi-location
+    // overlay bug) or the old location's actors fall into the "sim dropped this patient" branch below and
+    // flushPay() pops their coins/stars at the new location's checkout instead of being dropped.
+    if (l !== this.layout || c.id !== this.clinicId) { this.clear(); this.layout = l; this.clinicId = c.id; live = false; }
     this.t += dt;
     this.frameNo++;
     const fn = this.frameNo;

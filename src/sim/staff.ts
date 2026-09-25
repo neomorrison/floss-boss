@@ -116,8 +116,8 @@ export function perkPool(s: Staff): PerkId[] {
   return (Object.keys(PERKS) as PerkId[]).filter((id) => PERKS[id].roles.includes(s.role) && !perksOf(s).includes(id));
 }
 
-/** Offer two perks (DESIGN 10.4) when a staff member reaches a perk level. */
-function offerPerks(state: GameState, s: SimStaff, rng: Rng): boolean {
+/** Roll two perks (DESIGN 10.4) for a staff member who reached a perk level. */
+function rollPerks(state: GameState, s: SimStaff, rng: Rng): boolean {
   if (s.pendingPerks && s.pendingPerks.length) return false;
   const pool = perkPool(s);
   if (!pool.length) return false;
@@ -126,6 +126,23 @@ function offerPerks(state: GameState, s: SimStaff, rng: Rng): boolean {
   s.pendingPerks = rest.length ? [a, rng.pick(rest)] : [a];
   s.perkDay = state.day;
   return true;
+}
+
+/** Offer a perk choice now with the level-up rules (role pool, not owned, two picks, auto-pick after
+ * PERK_AUTO_DAYS). For the debug hook; an offer already waiting is kept. */
+export function offerPerks(state: GameState, clinicIndex: number, staffId: string): ActionResult {
+  if (state.phase !== 'owner') return { ok: false, reason: 'Open a practice first' };
+  // tolerate the older (state, staffId) call: look the staff member up at every location
+  const byId = typeof (clinicIndex as unknown) === 'string' ? String(clinicIndex) : null;
+  const c = byId ? state.locations.find((l) => l.staff.some((x) => x.id === byId)) : state.locations[clinicIndex];
+  if (!c) return { ok: false, reason: 'Location not found' };
+  const id = byId ?? staffId;
+  const s = c.staff.find((x) => x.id === id) as SimStaff | undefined;
+  if (!s) return { ok: false, reason: 'Staff member not found' };
+  if (s.tempUntilDay != null) return { ok: false, reason: 'Temporary staff do not pick perks' };
+  if (s.pendingPerks && s.pendingPerks.length) return { ok: true, message: `${s.name.split(' ')[0]} is choosing a perk` };
+  if (!withRng(state, (rng) => rollPerks(state, s, rng))) return { ok: false, reason: 'No perks left for this role' };
+  return { ok: true, message: `${s.name.split(' ')[0]} leveled up: choose a perk` };
 }
 
 /** Pick one of the two offered perks. */
@@ -271,6 +288,12 @@ export function setSalary(state: GameState, clinicIndex: number, staffId: string
   const raised = v > s.salary;
   s.salary = v;
   if (raised && v >= s.ask) s.morale = Math.min(100, s.morale + 5);
+  // a raise answers any request in the pipeline and starts the quiet period (DESIGN 8.5)
+  if (raised) {
+    const ss = s as SimStaff;
+    ss.raiseDay = state.day;
+    if (v >= s.ask * RAISE_CONTENT) delete ss.raiseDue;
+  }
   return { ok: true, message: `${s.name}: ${money(v)} per day` };
 }
 
@@ -345,6 +368,59 @@ export const COURSE_SKILL = 8;
 /** Morale lost per day while cash is below zero (not offset by managers, Leader or the break room). */
 const BROKE_MORALE = 8;
 
+/** Raise requests (DESIGN 8.5): a staff member asks at most once per RAISE_COOLDOWN working days, counted
+ * from hiring, their last request or their last raise, and never while paid at least RAISE_CONTENT of the ask. */
+export const RAISE_COOLDOWN = 10;
+export const RAISE_CONTENT = 0.95;
+/** Auto raises (settings.autoRaise, or an Office Manager at the location) approve asks up to this much above the salary. */
+export const AUTO_RAISE_MAX = 0.15;
+/** Underpaid Ambitious staff also ask on a random day with this chance (still once per cooldown). */
+export const AMBITIOUS_ASK = 0.1;
+/** Ask increase per staff level, up to LEVEL_ASK_MAX (a veteran's ask stops climbing at about 1.55x their
+ * hiring ask; stats still grow). Without the cap an owner who approves every raise, or runs auto raises,
+ * eventually pays more in salaries than the chairs can earn. */
+export const LEVEL_ASK = 1.05;
+export const LEVEL_ASK_MAX = 10;
+
+/** Paid below RAISE_CONTENT of the ask: the staff member would ask for a raise. */
+export function wantsRaise(s: Staff): boolean {
+  return s.tempUntilDay == null && s.salary < s.ask * RAISE_CONTENT;
+}
+
+/** Raises at this location are handled without the owner: the pay policy, or an Office Manager on staff. */
+export function autoRaises(state: GameState, c: Clinic): boolean {
+  return state.settings?.autoRaise === true || c.staff.some((x) => x.role === 'manager' && x.tempUntilDay == null);
+}
+
+/** First name for report notes ("Auto raise: Ava +$12"), the full name when a teammate anywhere shares it. */
+function shortName(state: GameState, s: Staff): string {
+  const first = s.name.split(' ')[0];
+  const twin = state.locations.some((l) => l.staff.some((x) => x !== s && x.name.split(' ')[0] === first));
+  return twin ? s.name : first;
+}
+
+/** A raise request waiting in the pipeline (level-up, course, event) becomes an auto raise, a request to the
+ * owner once the quiet period is over, or nothing when the pay already satisfies the ask. */
+function settleRaise(state: GameState, c: Clinic, s: SimStaff, ev: SimEvent[] | null): void {
+  if (!s.raiseDue) return;
+  if (!wantsRaise(s)) { delete s.raiseDue; return; }
+  if (autoRaises(state, c) && s.ask <= s.salary * (1 + AUTO_RAISE_MAX)) {
+    if (state.cash < 0) return;   // auto raises wait while cash is below zero; the ask stays in the pipeline
+    const gain = s.ask - s.salary;
+    s.salary = s.ask;
+    s.morale = Math.min(100, s.morale + 5);
+    s.raiseDay = state.day;
+    delete s.raiseDue;
+    note(state, `Auto raise: ${shortName(state, s)} +${money(gain)}`);
+    return;
+  }
+  if (state.day - (s.raiseDay ?? s.hiredDay) < RAISE_COOLDOWN) return;   // asks when the quiet period ends
+  s.raiseDay = state.day;
+  delete s.raiseDue;
+  pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
+  note(state, `${s.name} asks for a raise to ${money(s.ask)} per day`);
+}
+
 /** Morale floor with Morale Officer. */
 export const MORALE_OFFICER_FLOOR = 30;
 /** Rooftop Garden: staff only quit after this many days in a row under 25 morale. */
@@ -388,7 +464,7 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
         note(state, `${s.name} finished the course: skill ${s.skill}`);
         if (ask > s.ask) {
           s.ask = ask;
-          if (s.salary < s.ask) pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
+          if (wantsRaise(s)) s.raiseDue = true;
         }
       }
       // levels: every 25 * level patients; perk choices at PERK_LEVELS
@@ -399,22 +475,21 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
         s.skill = Math.min(99, s.skill + 3);
         s.speed = Math.min(99, s.speed + 2);
         s.bedside = Math.min(99, s.bedside + 2);
-        if (s.tempUntilDay == null) s.ask = Math.round(s.ask * 1.08);
-        if (PERK_LEVELS.includes(s.level) && s.tempUntilDay == null && offerPerks(state, s, rng)) {
+        if (s.tempUntilDay == null && s.level <= LEVEL_ASK_MAX) s.ask = Math.round(s.ask * LEVEL_ASK);
+        if (PERK_LEVELS.includes(s.level) && s.tempUntilDay == null && rollPerks(state, s, rng)) {
           note(state, `${s.name.split(' ')[0]} leveled up: choose a perk`);
         }
       }
       s.xp = Math.round(s.xp * 100) / 100;
+      // raise requests (DESIGN 8.5): mostly at level-ups, at most one per RAISE_COOLDOWN days, none while
+      // paid within 5% of the ask; auto raises (pay policy or an Office Manager) never reach the owner
       if (s.level > lv0) {
         note(state, `${s.name} reached level ${s.level}`);
-        if (s.salary < s.ask) {
-          pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
-          note(state, `${s.name} asks for a raise to ${money(s.ask)} per day`);
-        }
-      } else if (s.traits.includes('ambitious') && s.salary < s.ask && rng.chance(0.15)) {
-        pushEvent(ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
-        note(state, `${s.name} asks for a raise to ${money(s.ask)} per day`);
+        if (wantsRaise(s)) s.raiseDue = true;
+      } else if (s.traits.includes('ambitious') && !s.raiseDue && wantsRaise(s) && rng.chance(AMBITIOUS_ASK)) {
+        s.raiseDue = true;
       }
+      settleRaise(state, c, s, ev);
       // an unpicked perk choice is made for you after two days (the first offered)
       if (s.pendingPerks && s.pendingPerks.length && state.day - (s.perkDay ?? state.day) >= PERK_AUTO_DAYS) {
         const pick = s.pendingPerks[0];

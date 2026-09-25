@@ -53,17 +53,20 @@ export function autoRun(s: GameState): void {
   store.commit();
   if (autoToastDay === s.day) return;
   autoToastDay = s.day;
+  // several locations: say where each event happened
+  const where = (clinicId: string) => (s.locations.length > 1 ? s.locations.find((c) => c.id === clinicId)?.name ?? '' : '');
+  const withPlace = (clinicId: string, text: string) => (where(clinicId) ? `${where(clinicId)}: ${text}` : text);
   if (views.length) {
     views.forEach((v, i) => {
       const o = outs.find((x) => x.eventId === v.pe.eventId && x.clinicId === v.pe.clinicId);
-      toast({ text: v.title, sub: noDash(o?.text ?? v.choices[0]?.label ?? ''), kind: o && !o.good ? 'bad' : 'info', icon: v.art, ms: 5200, key: `auto-ev-${i}` });
+      toast({ text: v.title, sub: withPlace(v.pe.clinicId, noDash(o?.text ?? v.choices[0]?.label ?? '')), kind: o && !o.good ? 'bad' : 'info', icon: v.art, ms: 5200, key: `auto-ev-${i}` });
     });
     return;
   }
   // the sim answered them at day close: read today's log
   (s.eventLog ?? []).filter((e) => e.day === s.day).slice(-3).forEach((e, i) => {
     const def = mgr.eventDef(e.eventId);
-    toast({ text: def?.title ?? 'Event', sub: noDash(e.text), kind: 'info', icon: def?.art ?? 'bell', ms: 5200, key: `auto-ev-${i}` });
+    toast({ text: def?.title ?? 'Event', sub: withPlace(e.clinicId, noDash(e.text)), kind: 'info', icon: def?.art ?? 'bell', ms: 5200, key: `auto-ev-${i}` });
   });
 }
 

@@ -145,10 +145,17 @@ function propSpotFor(key: string, l: ClinicLayout): { x: number; z: number; yaw:
   switch (key) {
     case 'prop_balloons': return { x: l.desk.x - 1.1, z: l.desk.z + 0.3, yaw: 0 };
     case 'prop_jolly_roger': return { x: l.sign.x - 0.7, z: l.sign.z - 0.5, yaw: 0.3 };
-    case 'prop_rival_sign': return { x: l.zones.street.x1 - 1.6, z: l.zones.street.z1 - 0.3, yaw: Math.PI };
+    // yaw 0, not Math.PI: local +Z is the sign's readable face (the light decal sits forward of the
+    // backing board), and the camera looks back toward -Z from out past the street, so yaw 0 turns that
+    // face to the camera instead of back at the building (out/fix/followup.md, owner report).
+    case 'prop_rival_sign': return { x: l.zones.street.x1 - 1.6, z: l.zones.street.z1 - 0.3, yaw: 0 };
     case 'prop_camera_crew': return { x: l.zones.sidewalk.x0 + 1.6, z: (l.zones.sidewalk.z0 + l.zones.sidewalk.z1) / 2, yaw: 0.4 };
     case 'prop_generator': return { x: l.floor.x1 + 0.9, z: l.floor.z0 + 1.4, yaw: Math.PI / 2 };
-    case 'prop_red_carpet': return { x: l.door.x, z: (l.door.inside.z + l.door.outside.z) / 2, yaw: 0 };
+    // Fully on the sidewalk (its near edge at the door frame, not door.inside): the old midpoint placement
+    // ran the carpet 0.8m into the lobby, into the check-in queue's path and the door leaf's inward swing
+    // arc. Leading up to the door from the street reads the same ("roll out the red carpet") without
+    // sitting in a walk path (owner report).
+    case 'prop_red_carpet': return { x: l.door.x, z: l.door.outside.z, yaw: 0 };
     default: return null;
   }
 }

@@ -12,7 +12,8 @@ import { locationPicker } from './office';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import * as mgr from '../mgr';
 import { candidateBlock, openPerkChoice, staffBlock } from '../staffcard';
-import { btn, empty, tabs } from '../widgets';
+import { autoRaiseOn, setGameSettings } from '../pause';
+import { btn, empty, tabs, toggle } from '../widgets';
 
 let intent: { tab: 'team' | 'hire'; role: StaffRole | 'all' } | null = null;
 /** Open the Staff panel on a given tab and role filter next time it is built (for example from the operatory panel). */
@@ -34,7 +35,7 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
       return JSON.stringify([
         s.active, s.day, s.locations.length,
         c.staff.map((x) => [x.id, x.salary, x.ask, Math.round(x.morale), x.level, x.xp, x.patientsToday, x.offUntilDay, x.offFrom ?? 0, x.perks, x.pendingPerks, x.tempUntilDay ?? 0]),
-        s.player.skills.includes('negotiator'),
+        s.player.skills.includes('negotiator'), autoRaiseOn(s),
         c.ops.map((o) => [o.id, o.staffId, o.assistantId]),
         s.candidates.map((x) => [x.id, x.interviewed]),
         [mgr.trainingCost(s), mgr.interviewCost(s), ...s.candidates.map((x) => x.ask)].map((p) => (s.cash >= p ? 1 : 0)).join(''),
@@ -65,10 +66,21 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
         const list = c.staff.length
           ? h('div.grid.grid-auto-lg.staff-grid', ...c.staff.slice().sort((a, b) => (b.pendingPerks?.length ? 1 : 0) - (a.pendingPerks?.length ? 1 : 0) || ROLE_IDS.indexOf(a.role) - ROLE_IDS.indexOf(b.role)).map((st) => staffBlock(c, loc, st)))
           : empty('userPlus', 'No team yet', 'Hygienists clean patients for you. Receptionists speed up check-in.', h('button.btn.btn-primary', { type: 'button', onClick: () => { tab = 'hire'; ctx.rerender(); } }, 'Hire board'));
+        // pay policy: auto-approve small raises chain-wide; an Office Manager settles raises at their location
+        const manager = c.staff.find((x) => x.role === 'manager' && x.tempUntilDay == null) ?? null;
+        const policy = h('div.pay-policy', { class: { 'is-on': autoRaiseOn(s) } },
+          h('div.pay-policy-icon', icon('trendUp')),
+          h('div.grow',
+            h('b', 'Approve raises up to 15%'),
+            h('span.small.muted', 'Raise requests within 15% of current pay are approved at the end of the day.'),
+            manager ? h('span.pay-policy-mgr', icon('staff'), `${manager.name}, your ${ROLES.manager.name}, approves raises up to 15% at ${c.name}.`) : null,
+          ),
+          toggle(autoRaiseOn(s), (v) => { if (!store.loaded) return; setGameSettings(store.state, { autoRaise: v }); store.commit(); }, 'Approve raises up to 15%'),
+        );
         const offers = mgr.perkOffers(s).filter((o) => o.clinicIndex !== loc);
         const elsewhere = offers.length ? h('div.staff-elsewhere', icon('sparkle'), h('span.grow', `${offers.map((o) => o.staff.name.split(' ')[0]).join(', ')} at ${offers[0].clinic.name}${offers.length > 1 && offers.some((o) => o.clinic !== offers[0].clinic) ? ' and more' : ''} can pick a perk`),
           btn('Choose', { variant: 'sun', size: 'sm', onClick: () => openPerkChoice(offers[0].staff.id) })) : null;
-        return h('div.staff-panel', head, elsewhere, summary, list);
+        return h('div.staff-panel', head, elsewhere, summary, policy, list);
       }
       // hire board
       const roles = Array.from(new Set(s.candidates.map((x) => x.role)));

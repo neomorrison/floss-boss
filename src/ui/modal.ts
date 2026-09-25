@@ -1,5 +1,5 @@
-// Modal manager. Modals stack; `blocking` ones pause the game loop. `enqueue` shows a modal once
-// nothing else is open (level up after a clean result, day report after a toast storm).
+// Modal manager. Modals stack; any open modal holds the clinic clock (hub frame, src/ui/pause.ts).
+// `enqueue` shows a modal once nothing else is open (level up after a clean result, day report after a toast storm).
 import { h, type Child } from './dom';
 import { sfx } from './fx';
 import { icon } from './icons';
@@ -12,8 +12,9 @@ export interface ModalOpts {
   body: Child;
   actions?: Child[];
   size?: 'sm' | 'md' | 'lg' | 'xl';
-  blocking?: boolean;       // pauses the clinic clock (default true)
+  blocking?: boolean;       // a big blocking sheet (lg, xl) clears the toast stack (default true). Every modal holds the clock.
   dismissable?: boolean;    // Esc and backdrop close it (default true)
+  backdropClose?: boolean;  // a tap outside closes it (default = dismissable); false keeps Esc only
   closeButton?: boolean;    // show the X (default = dismissable)
   cls?: string;
   hero?: Child;             // full-bleed top area (art, badges)
@@ -78,9 +79,10 @@ export function openModal(o: ModalOpts): ModalHandle {
   );
   const backdrop = h('div.modal-backdrop');
   const root = h('div.modal-root', backdrop, h('div.modal-wrap', card));
-  if (dismissable) backdrop.addEventListener('click', () => handle.close());
+  const outside = dismissable && (o.backdropClose ?? true);
+  if (outside) backdrop.addEventListener('click', () => handle.close());
   root.querySelector('.modal-wrap')!.addEventListener('click', (e) => {
-    if (dismissable && e.target === e.currentTarget) handle.close();
+    if (outside && e.target === e.currentTarget) handle.close();
   });
 
   const fill = (el: HTMLElement, c: Child) => { if (c !== null && c !== undefined && c !== false) (Array.isArray(c) ? c : [c]).forEach((x) => { if (x instanceof Node) el.appendChild(x); else if (x !== null && x !== undefined && x !== false) el.appendChild(document.createTextNode(String(x))); }); };

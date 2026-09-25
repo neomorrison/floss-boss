@@ -38,7 +38,9 @@ export function tick(state: GameState, minutes: number): SimEvent[] { return tic
 /** True when the clinics are closed and every patient has left (state.dayOver). */
 export function isDayOver(state: GameState): boolean { return state.dayOver; }
 /** Close the day: charge costs, build the report, advance to the next working day (8:00) and book it.
- * The returned report carries `events` (achievements, level-ups, quits) for the UI to emit after it. */
+ * The returned report carries `events` (achievements, level-ups, quits) for the UI to emit after it.
+ * Raise asks are settled here (DESIGN 8.5): `settings.autoRaise` or an Office Manager at the location approves
+ * asks up to +15% (report note "Auto raise: Ava +$12"); only a request that needs the owner emits 'raiseRequest'. */
 export function closeDay(state: GameState): DayReport { return economy.closeDay(state); }
 
 // ------------------------------------------------------------------ school
@@ -88,6 +90,8 @@ export function openPractice(state: GameState, opts: { name: string; loan: numbe
 export function hire(state: GameState, candidateId: string, clinicIndex: number): ActionResult { return staff.hire(state, candidateId, clinicIndex); }
 export function fire(state: GameState, clinicIndex: number, staffId: string): ActionResult { return staff.fire(state, clinicIndex, staffId); }
 export function train(state: GameState, clinicIndex: number, staffId: string): ActionResult { return staff.train(state, clinicIndex, staffId); }
+/** Set a salary (75% to 200% of the ask). A raise starts the staff member's 10-day quiet period for raise
+ * requests (DESIGN 8.5). */
 export function setSalary(state: GameState, clinicIndex: number, staffId: string, salary: number): ActionResult { return staff.setSalary(state, clinicIndex, staffId, salary); }
 /** staffId: a hygienist id, 'player' (your chair) or null (empty). One op per hygienist; the player may hold one op per clinic. */
 export function assignHygienist(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return staff.assignHygienist(state, clinicIndex, opId, staffId); }
@@ -137,13 +141,17 @@ export function completeHuddle(state: GameState): { eventId: string; clinicId: s
  * -25%), its length, what is running and the cooldown day. */
 export function campaignStatus(state: GameState, clinicIndex: number, id: CampaignId): { ok: boolean; cost: number; days: number; reason?: string; active: CampaignId | null; activeUntil: number | null; cooldownUntil: number } { return manager.campaignStatus(state, clinicIndex, id); }
 /** Start a campaign (one per location, cooldown after). Before the doors open it runs from today, otherwise
- * from tomorrow. Adds a 'campaign:<id>:<day>' modifier (demand, case boost). */
+ * it starts tomorrow. Adds a 'campaign:<id>:<startDay>' modifier (demand, case boost) that is not in force
+ * before its start day: a start day after state.day reads "Starts tomorrow". */
 export function startCampaign(state: GameState, clinicIndex: number, id: CampaignId): ActionResult { return manager.startCampaign(state, clinicIndex, id); }
 /** Today's outlook of a location: expected new patients, capacity, booked and the waitlist booked first. */
 export function dayOutlook(state: GameState, clinicIndex: number): { lambda: number; capacity: number; booked: number; waitlist: number } { return manager.dayOutlook(state, clinicIndex); }
 /** Pick one of the two perks a staff member was offered at a level-up (Staff.pendingPerks). Unpicked perks
  * are auto-picked (the first) after 2 days. */
 export function pickPerk(state: GameState, clinicIndex: number, staffId: string, perk: PerkId): ActionResult { return staff.pickPerk(state, clinicIndex, staffId, perk); }
+/** Offer a perk choice now with the real level-up rules (two perks of the role not owned yet, auto-picked
+ * after 2 days). For the debug hook; an offer already waiting is kept. Fills Staff.pendingPerks. */
+export function offerPerks(state: GameState, clinicIndex: number, staffId: string): ActionResult { return staff.offerPerks(state, clinicIndex, staffId); }
 /** Interview a candidate: exact stats and traits (Candidate.interviewed, range collapses). */
 export function interview(state: GameState, candidateId: string): ActionResult { return staff.interview(state, candidateId); }
 /** What an interview costs now ($40 x tierScale of the active office, free with Talent Scout). */

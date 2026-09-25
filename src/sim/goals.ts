@@ -5,11 +5,11 @@ import { ACHIEVEMENTS } from '../data/achievements';
 import { money } from '../core/format';
 import { PLAYER_ID } from '../core/constants';
 import { CAMPAIGN_ORDER } from '../data/manager';
-import { OwnerGoalKind, S, SimGoal, addCash, nextId, pushEvent } from './internal';
+import { S, SimGoal, addCash, nextId, pushEvent } from './internal';
 import { avgNet, gainXp, tierIndex, valuation } from './progress';
 import { campaignStatus } from './manager';
 
-type Kind = Goal['kind'] | OwnerGoalKind;
+type Kind = Goal['kind'];
 
 function goalText(kind: Kind, target: number, limit?: number, where?: string): string {
   switch (kind) {
@@ -41,7 +41,7 @@ export function makeGoals(state: GameState, rng: Rng): void {
   const make = (kind: Kind, target: number, limit?: number, clinicId?: string): SimGoal => {
     const where = clinicId ? state.locations.find((c) => c.id === clinicId)?.name : undefined;
     return {
-      id: nextId(state, 'g'), kind: kind as Goal['kind'], target, progress: 0, rewardCash: cashEach, rewardXp: xpEach,
+      id: nextId(state, 'g'), kind, target, progress: 0, rewardCash: cashEach, rewardXp: xpEach,
       done: false, claimed: false, text: goalText(kind, kind === 'net' || kind === 'rating' ? limit ?? 0 : target, limit, where), limit, clinicId,
     };
   };
@@ -90,7 +90,7 @@ export function makeGoals(state: GameState, rng: Rng): void {
       );
     }
     // never two goals of the same kind
-    const fresh = third.filter((t) => !goals.some((x) => (x.kind as Kind) === t.kind));
+    const fresh = third.filter((t) => !goals.some((x) => x.kind === t.kind));
     const list = fresh.length ? fresh : third;
     goals.push(list[rng.int(0, list.length - 1)].f());
   }
@@ -108,7 +108,7 @@ export function shiftSize(level: number): number {
 /** Progress every open goal of `kind`. `value` is added (or, for combo/fastClean, compared). */
 export function progressGoal(state: GameState, kind: Kind, value: number, ev: SimEvent[] | null): void {
   for (const g of state.goals as SimGoal[]) {
-    if ((g.kind as Kind) !== kind || g.done) continue;
+    if (g.kind !== kind || g.done) continue;
     if (kind === 'combo') g.progress = Math.max(g.progress, Math.min(g.target, value));
     else if (kind === 'fastClean') { if (value > 0 && value <= (g.limit ?? 90)) g.progress = 1; }
     else g.progress = Math.min(g.target, g.progress + value);
@@ -138,7 +138,7 @@ export function claimGoal(state: GameState, goalId: string, ev: SimEvent[] | nul
 export function endOfDayGoals(state: GameState, opNet: number, ev: SimEvent[] | null): void {
   for (const g of state.goals as SimGoal[]) {
     if (g.done) continue;
-    const kind = g.kind as Kind;
+    const kind = g.kind;
     const c = g.clinicId ? state.locations.find((l) => l.id === g.clinicId) : null;
     let ok = false;
     if (kind === 'net') ok = opNet >= (g.limit ?? 0) && opNet > 0;

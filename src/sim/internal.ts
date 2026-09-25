@@ -43,6 +43,8 @@ export interface SimStaff extends Staff {
   courseGain?: number;       // skill gained when the booked course ends
   perkDay?: number;          // day the pending perk choice was offered (auto-picked after 2 days)
   lowDays?: number;          // consecutive days with morale under 25 (Rooftop Garden: quits need 5)
+  raiseDue?: boolean;        // a raise request waits for the day close (level-up, course, event)
+  raiseDay?: number;         // day of the last raise request or raise (quiet period, DESIGN 8.5)
 }
 export interface SimOp extends Operatory { freeAt?: number }
 export interface SimClinic extends Clinic {
@@ -61,9 +63,6 @@ export interface SimClinic extends Clinic {
   bookDay?: number;          // day the service prices below were locked for booking
   bookPrices?: { cleaning: number; deep: number };
 }
-/** Owner goal kinds beyond the core Goal['kind'] union (DESIGN 10.7). Stored in Goal.kind; the UI falls back
- * to a generic icon for kinds it does not know. */
-export type OwnerGoalKind = 'campaign' | 'noWalkouts' | 'net' | 'events' | 'rating';
 export interface SimGoal extends Goal { limit?: number; clinicId?: string }
 /** Reports saved before operatingNet existed carry opNet instead. */
 export interface SimReport extends DayReport { opNet?: number }

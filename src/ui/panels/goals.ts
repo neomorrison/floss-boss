@@ -16,11 +16,13 @@ import { masteryInfo, noDash } from '../logic';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { bar, btn, chip, empty, sectionTitle, tabs } from '../widgets';
 
-// owner goals (DESIGN 10.7) add management kinds beyond Goal['kind']: campaigns, events, net, rating, zero walkouts
-const GOAL_ICON: Record<string, string> = {
+// hands-on goals, then the owner's management goals (DESIGN 10.7): campaigns, zero walkouts, net, events, rating
+export const GOAL_ICON: Record<Goal['kind'], string> = {
   chunks: 'tooth', fiveStars: 'star', served: 'user', fastClean: 'timer', addons: 'receipt', perfect: 'sparkle', combo: 'bolt',
-  campaign: 'megaphone', events: 'bell', net: 'trendUp', opNet: 'trendUp', profit: 'trendUp', rating: 'star', noWalkouts: 'door', zeroWalkouts: 'door', walkouts: 'door',
+  campaign: 'megaphone', noWalkouts: 'shield', net: 'trendUp', events: 'bell', rating: 'starLine',
 };
+/** Owner goal kinds get their own tint (panels.css .goal-icon.kind-*). */
+const OWNER_KINDS = new Set<Goal['kind']>(['campaign', 'noWalkouts', 'net', 'events', 'rating']);
 
 type GoalsTab = 'goals' | 'cases';
 let pendingTab: GoalsTab | null = null;
@@ -77,7 +79,7 @@ function goalsTab(s: GameState): HTMLElement {
       });
     } else action = h('span.goal-progress.num', `${Math.min(g.progress, g.target)}/${g.target}`);
     return h('div.goal-card', { class: { 'is-done': g.done, 'is-claimed': g.claimed } },
-      h('div.goal-icon', icon(GOAL_ICON[g.kind] ?? 'goals')),
+      h('div.goal-icon', { class: OWNER_KINDS.has(g.kind) ? `kind-${g.kind}` : '' }, icon(GOAL_ICON[g.kind] ?? 'goals')),
       h('div.grow',
         h('div.goal-text', noDash(g.text)),
         bar(frac, g.done ? '' : 'sun', 'sm'),

@@ -18,6 +18,7 @@ import { attempt } from '../safe';
 import { confetti, sfx } from '../fx';
 import * as mgr from '../mgr';
 import { activeModifiers, campaignSummary, daysLeftLabel, modifierSource, modifierSummary } from '../mgrlogic';
+import { toast } from '../toasts';
 import { bar, btn, chip, sectionTitle, seg, slider, tabs } from '../widgets';
 
 export const CAMPAIGN_ICON: Record<CampaignId, string> = {
@@ -245,6 +246,11 @@ function capacityMeter(s: GameState, idx: number): HTMLElement {
   );
 }
 
+/** A campaign whose modifier starts after today (bought once the doors opened). */
+function startsLabel(startsIn: number): string {
+  return startsIn > 1 ? `Starts in ${startsIn} days` : startsIn === 1 ? 'Starts tomorrow' : 'Running';
+}
+
 function campaignCard(s: GameState, idx: number, c: Clinic, id: CampaignId): HTMLElement {
   const def = CAMPAIGNS[id];
   const info = mgr.campaignInfo(s, idx, id);
@@ -253,14 +259,19 @@ function campaignCard(s: GameState, idx: number, c: Clinic, id: CampaignId): HTM
   if (info.state === 'active') {
     const done = def.days - info.days;
     action = h('div.camp-live',
-      h('div.row.row-between.tiny.bold', h('span.good', info.startsIn > 0 ? 'Starts tomorrow' : 'Running'), h('span', info.days <= 1 ? 'Last day' : `${info.days} days left`)),
+      h('div.row.row-between.tiny.bold', h('span.good', startsLabel(info.startsIn)), h('span', info.startsIn > 0 ? `${info.days} days` : info.days <= 1 ? 'Last day' : `${info.days} days left`)),
       bar(info.startsIn > 0 ? 0.04 : Math.max(0.06, Math.min(1, done / def.days)), 'gum', 'sm'));
   } else if (info.state === 'ready') {
     action = btn('Start', {
       variant: 'sun', size: 'sm', icon: 'megaphone', block: true, sub: money(info.cost), sound: null, disabled: !afford, title: afford ? '' : 'Not enough cash',
       onClick: (ev) => {
         const from = ev.currentTarget as HTMLElement;
-        if (act(() => mgr.startCampaign(store.state, idx, id), { sound: null, success: `${def.name} starts at ${c.name}` })) { sfx('campaign_start'); confetti(from, 40); }
+        if (!act(() => mgr.startCampaign(store.state, idx, id), { sound: null, success: '' })) return;
+        // bought after the doors opened (or after the close) it starts tomorrow: say so
+        const now = mgr.campaignInfo(store.state, idx, id);
+        toast({ text: now.startsIn > 0 ? `${def.name} ${startsLabel(now.startsIn).toLowerCase()}` : `${def.name} started`, sub: c.name, kind: 'good', icon: CAMPAIGN_ICON[id] ?? 'megaphone', key: 'act' });
+        sfx('campaign_start');
+        confetti(from, 40);
       },
     });
   } else {

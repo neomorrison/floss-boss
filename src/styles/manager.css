@@ -239,6 +239,9 @@
 .report-clinic-line { display: flex; align-items: center; gap: 6px; padding: 0 4px; }
 .report-clinic-line .icon { width: 16px; height: 16px; color: var(--ink-3); }
 .report-note-tip { color: var(--ink-3); }
+.report-roll { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0 4px; font-weight: 800; color: var(--ink-2); }
+.report-roll > span { display: inline-flex; align-items: center; gap: 6px; }
+.report-roll .icon { width: 16px; height: 16px; color: var(--teal); }
 .report-event { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; border-radius: 16px; background: var(--surface); border: 2px solid var(--line); }
 .report-event > .icon { width: 18px; height: 18px; color: var(--gum-d); flex: none; margin-top: 2px; }
 @media (max-width: 640px) {

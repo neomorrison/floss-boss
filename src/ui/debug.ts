@@ -8,6 +8,8 @@ import { OFFICES, TIER_ORDER } from '../data/offices';
 import { EQUIPMENT, EQUIP_ORDER } from '../data/upgrades';
 import { showHuddle } from './huddle';
 import * as mgr from './mgr';
+import { noticeOpen, noticesWaiting, notify } from './notices';
+import { autoPauseOn, setGameSettings } from './pause';
 import { openPerkChoice } from './staffcard';
 import * as sim from '../sim';
 import { go } from './app';
@@ -55,6 +57,32 @@ function fakeSnapshot(dirty: boolean): string {
     }
   }
   return c.toDataURL('image/jpeg', 0.8);
+}
+
+/** Debug: fill every operatory of a location with a hygienist (hire from the board, clone when it runs dry) and a receptionist. */
+function staffUp(idx: number): void {
+  const s = store.state;
+  const c = s.locations[idx];
+  if (!c) return;
+  s.cash += 200000;
+  while (c.ops.length < OFFICES[c.tier].opSlots) {
+    const r = attempt(() => sim.buyOperatory(s, idx), { ok: false as const, reason: 'sim' }, 'buyOperatory');
+    if (!r.ok) break;
+  }
+  const want = (role: string) => s.candidates.find((x) => x.role === role);
+  let guard = 20;
+  while (c.ops.some((o) => !o.staffId) && guard-- > 0) {
+    const cand = want('hygienist');
+    if (cand) { attempt(() => sim.hire(s, cand.id, idx), null, 'hire'); continue; }
+    const base = s.locations.flatMap((x) => x.staff).find((x) => x.role === 'hygienist');
+    if (!base) break;
+    const clone = { ...base, id: `dbg${s.nextId++}`, name: `${base.name.split(' ')[0]} ${String.fromCharCode(65 + (guard % 26))}.`, portrait: base.portrait, perks: [], pendingPerks: null, patientsToday: 0 };
+    c.staff.push(clone);
+    const free = c.ops.find((o) => !o.staffId);
+    if (free) attempt(() => sim.assignHygienist(s, idx, free.id, clone.id), null, 'assign');
+  }
+  for (const o of c.ops) if (!o.staffId) { const h2 = c.staff.find((x) => x.role === 'hygienist' && !c.ops.some((op) => op.staffId === x.id)); if (h2) attempt(() => sim.assignHygienist(s, idx, o.id, h2.id), null, 'assign'); }
+  if (!c.staff.some((x) => x.role === 'receptionist')) { const r = want('receptionist'); if (r) attempt(() => sim.hire(s, r.id, idx), null, 'hire'); }
 }
 
 export function installDebug(): void {
@@ -244,7 +272,8 @@ export function installDebug(): void {
       void showHuddle();
       return s.pendingEvents.map((e) => e.eventId);
     },
-    /** Offer two perks to a staff member now (first hygienist of the active location by default) and open the choice. */
+    /** Offer two perks to a staff member now (sim.offerPerks: first hygienist of the active location by default)
+     * and open the choice: the key event notice when auto-pause is on, else the perk card. */
     perks(staffId?: string, open = true) {
       if (!store.loaded) return null;
       const s = store.state;
@@ -253,8 +282,82 @@ export function installDebug(): void {
       if (!id) return null;
       const got = mgr.offerPerks(s, id);
       store.commit();
-      if (got && open) openPerkChoice(id);
+      if (got && open) {
+        const at = s.locations.find((x) => x.staff.some((st) => st.id === id));
+        if (autoPauseOn(s) && at) notify('perk', { id, clinicId: at.id });
+        else openPerkChoice(id);
+      }
       return got;
+    },
+    /** A staff member quits now, as the sim does it at the close (first hygienist of the active location by default). */
+    quit(staffId?: string, clinicIndex?: number) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const idx = clinicIndex ?? Math.max(0, s.active);
+      const c = s.locations[idx];
+      const st = staffId ? c?.staff.find((x) => x.id === staffId) : c?.staff.find((x) => x.role === 'hygienist') ?? c?.staff[0];
+      if (!c || !st) return null;
+      for (const o of c.ops) {
+        if (o.staffId === st.id) o.staffId = null;
+        if (o.assistantId === st.id) o.assistantId = null;
+      }
+      c.staff = c.staff.filter((x) => x.id !== st.id);
+      bus.emit('sim:events', [{ type: 'staffQuit', clinicId: c.id, staffId: st.id, name: st.name }]);
+      store.commit();
+      return st.name;
+    },
+    /** A staff member asks for a raise now (their ask goes `pct` above the salary). */
+    raise(staffId?: string, pct = 0.12, clinicIndex?: number) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const idx = clinicIndex ?? Math.max(0, s.active);
+      const c = s.locations[idx];
+      const st = staffId ? c?.staff.find((x) => x.id === staffId) : c?.staff.find((x) => x.role === 'hygienist' && x.salary >= x.ask) ?? c?.staff[0];
+      if (!c || !st) return null;
+      st.ask = Math.max(st.ask, Math.round((st.salary * (1 + pct)) / 5) * 5);
+      bus.emit('sim:events', [{ type: 'raiseRequest', clinicId: c.id, staffId: st.id, name: st.name, ask: st.ask }]);
+      store.commit();
+      return { name: st.name, salary: st.salary, ask: st.ask };
+    },
+    /** Open another location (default a Family Clinic) with every operatory staffed. */
+    location(tier: OfficeTierId = 't1', name?: string) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      if (s.phase !== 'owner') debug.owner('t2');
+      if (!s.locations.some((c) => TIER_ORDER.indexOf(c.tier) >= 1)) debug.owner('t2');
+      const q = attempt(() => sim.locationQuote(s, tier), null, 'locationQuote');
+      if (q) s.cash += q.price;
+      const cash = s.cash;
+      const r = attempt(() => sim.openLocation(s, tier, name ?? `Location ${s.locations.length + 1}`, 0), { ok: false as const, reason: 'sim' }, 'openLocation');
+      if (!r.ok) { store.commit(); return r; }
+      const idx = s.locations.length - 1;
+      staffUp(idx);
+      s.cash = cash;
+      store.commit({ saveNow: true });
+      return { index: idx, name: s.locations[idx].name, ops: s.locations[idx].ops.length, staff: s.locations[idx].staff.length };
+    },
+    /** Put yourself in an operatory at a location (hands on), for the "patient waiting in your chair" notice. */
+    chairAt(clinicIndex = 0) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const c = s.locations[clinicIndex];
+      const op = c?.ops[0];
+      if (!c || !op) return null;
+      attempt(() => sim.assignHygienist(s, clinicIndex, op.id, 'player'), null, 'assign');
+      attempt(() => sim.setPlayerMode(s, clinicIndex, op.id, 'hands'), null, 'mode');
+      store.commit();
+      return op.id;
+    },
+    /** Game options saved with the game: auto-pause on key events, auto-raise. */
+    options(o: { autoPause?: boolean; autoRaise?: boolean } = {}) {
+      if (!store.loaded) return null;
+      setGameSettings(store.state, o);
+      store.commit();
+      return store.state.settings;
+    },
+    /** The notice on screen and how many wait. */
+    notices() {
+      return { open: noticeOpen(), waiting: noticesWaiting(), title: document.querySelector('.modal-notice .modal-title')?.textContent ?? null };
     },
     /** Jump to an owner game at an office tier: every operatory staffed, a receptionist, cash to spend. */
     owner(tier: OfficeTierId = 't2', cash?: number) {
@@ -273,26 +376,7 @@ export function installDebug(): void {
       }
       const c = s.locations[0];
       attempt(() => sim.setActive(s, 0), undefined);
-      s.cash += 200000;
-      while (c.ops.length < OFFICES[c.tier].opSlots) {
-        const r = attempt(() => sim.buyOperatory(s, 0), { ok: false as const, reason: 'sim' }, 'buyOperatory');
-        if (!r.ok) break;
-      }
-      // hire from the board; when it runs dry, clone a hired hygienist (debug only)
-      const want = (role: string) => s.candidates.find((x) => x.role === role);
-      let guard = 20;
-      while (c.ops.some((o) => !o.staffId) && guard-- > 0) {
-        const cand = want('hygienist');
-        if (cand) { attempt(() => sim.hire(s, cand.id, 0), null, 'hire'); continue; }
-        const base = c.staff.find((x) => x.role === 'hygienist');
-        if (!base) break;
-        const clone = { ...base, id: `dbg${s.nextId++}`, name: `${base.name.split(' ')[0]} ${String.fromCharCode(65 + (guard % 26))}.`, portrait: base.portrait, perks: [], pendingPerks: null };
-        c.staff.push(clone);
-        const free = c.ops.find((o) => !o.staffId);
-        if (free) attempt(() => sim.assignHygienist(s, 0, free.id, clone.id), null, 'assign');
-      }
-      for (const o of c.ops) if (!o.staffId) { const h2 = c.staff.find((x) => x.role === 'hygienist' && !c.ops.some((op) => op.staffId === x.id)); if (h2) attempt(() => sim.assignHygienist(s, 0, o.id, h2.id), null, 'assign'); }
-      if (!c.staff.some((x) => x.role === 'receptionist')) { const r = want('receptionist'); if (r) attempt(() => sim.hire(s, r.id, 0), null, 'hire'); }
+      staffUp(0);
       s.cash = cash ?? Math.round(30000 * OFFICES[c.tier].tierScale);
       s.huddleDay = s.day;
       store.commit({ saveNow: true });

@@ -327,6 +327,10 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
       framesLive = 0;
       actors.door!.x = l.door.x; actors.door!.z = l.door.z;
       if (layoutChanged) needFit = true;
+      // out/fix/followup.md multi-location overlay bug: nothing queued for the old location (a coin/star
+      // pop already popped off actors.effects, or a pooled overlay item) should surface at the new one.
+      cashQueue.length = 0;
+      overlays.clear();
     }
     const tS = performance.now();
     if (modelsDirty) {

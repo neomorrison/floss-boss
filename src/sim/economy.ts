@@ -461,12 +461,12 @@ export function closeDay(state: GameState): DayReport {
     if (!NON_OPERATING_LABELS.has(e.label)) opNet += e.amount;
   }
   const clinics = state.phase === 'employee' ? (state.employer ? [state.employer] : []) : state.locations;
-  // perLocation entries carry `waitlist` (patients coming back tomorrow) beyond the core type
-  const perLocation = clinics.map((c) => ({
+  // waitlist: patients coming back tomorrow (booked first)
+  const perLocation: DayReport['perLocation'] = clinics.map((c) => ({
     clinicId: c.id, name: c.name, stats: { ...c.day }, rating: c.rating,
     ratingDelta: Math.round((c.rating - ((c as SimClinic).startRating ?? c.rating)) * 100) / 100,
     waitlist: (c as SimClinic).waitOut ?? 0,
-  })) as DayReport['perLocation'];
+  }));
   for (const m of s.dayNotes ?? []) if (!notes.includes(m)) notes.push(m);
   if (state.cash < 0) notes.push('Cash is below zero. Overdraft interest is charged daily and staff morale falls.');
   const report: SimReport = {

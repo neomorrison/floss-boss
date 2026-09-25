@@ -27,6 +27,9 @@ import { openPerkChoice, openStaffCard } from './staffcard';
 import { huddleOpen, queueHuddle, resumeHuddleIfDue } from './huddle';
 import { huddleDue, perkOffers } from './mgr';
 import { myDay, type MyDay } from './mgrlogic';
+import { locationTally } from './events';
+import { clearNotices, noticeOpen, notify, pumpNotices } from './notices';
+import { autoPauseOn, holdReason, tallyView } from './pause';
 
 interface NavItem { id: PanelName | 'clinic'; label: string; icon: string; ownerOnly?: boolean }
 const NAV: NavItem[] = [
@@ -97,7 +100,14 @@ export function hubScreen(): Screen {
     if (!mine.length) return;
     chairAttention();
     const away = mine.find((e) => !here || e.clinicId !== here.id);
-    if (!away && panels.current) {
+    const covered = !!panels.current || modals.count > 0;
+    // away from the hub (your chair at another location, or a menu covers the chair card): a key event
+    if (autoPauseOn(s) && (away ? s.phase === 'owner' : covered)) {
+      const e = away ?? mine[0];
+      notify('chair', { id: e.patientId, clinicId: e.clinicId });
+      return;
+    }
+    if (!away && covered) {
       // the open panel covers the chair card: say it once, tap to get back to the chair
       sfx('notify');
       toast({ text: 'A patient is waiting in your chair', kind: 'info', icon: 'chair', key: 'chair-here', ms: 5000, onClick: () => { panels.open(null); syncNav(); } });
@@ -203,35 +213,54 @@ export function hubScreen(): Screen {
     bd.setAttribute('aria-label', on ? 'Patient waiting in your chair' : '');
   }
 
-  /** New perk choices: say it once per staff member ("Ava leveled up: choose a perk"). */
+  /** New perk choices: say it once per staff member ("Ava leveled up: choose a perk"), as a key event notice. */
   const perkSeen = new Set<string>();
   function syncPerks(): void {
     if (!store.loaded || !isOwner(store.state)) return;
     const offers = perkOffers(store.state);
     const ids = new Set(offers.map((o) => o.staff.id));
     for (const id of [...perkSeen]) if (!ids.has(id)) perkSeen.delete(id);
+    const pause = autoPauseOn(store.state);
     let shown = 0;
     for (const o of offers) {
       if (perkSeen.has(o.staff.id)) continue;
       perkSeen.add(o.staff.id);
+      if (pause) { notify('perk', { id: o.staff.id, clinicId: o.clinic.id, name: o.staff.name }); continue; }
       if (shown++ >= 2) continue;
       sfx('notify', { volume: 0.6 });
       toast({ text: `${o.staff.name.split(' ')[0]} leveled up: choose a perk`, sub: o.clinic.name, kind: 'gold', icon: 'sparkle', key: `perk-${o.staff.id}`, ms: 6000, onClick: () => openPerkChoice(o.staff.id) });
     }
   }
 
+  /** What happened at the locations off screen: cleared when you look at one, and every morning. */
+  let tallyDay = -1;
+  let tallyActive = '';
+  function syncTally(): void {
+    const s = store.state;
+    if (s.day !== tallyDay) { tallyDay = s.day; locationTally.clearAll(); }
+    const id = activeClinic(s)?.id ?? '';
+    if (id !== tallyActive) { tallyActive = id; if (id) locationTally.clear(id); }
+  }
+
   function syncLocTabs(): void {
     if (!store.loaded) return;
     const s = store.state;
+    syncTally();
     const waitingAt = new Set(isOwner(s) ? playerWaiting(s).map((w) => w.clinicIndex) : []);
-    const key = `${s.phase}|${s.active}|${s.locations.map((c) => c.name + c.tier).join(',')}|${[...waitingAt].join(',')}`;
+    const key = `${s.phase}|${s.active}|${s.locations.map((c) => c.name + c.tier).join(',')}|${[...waitingAt].join(',')}|${locationTally.key()}`;
     if (key === lastLocKey) return;
     lastLocKey = key;
     const show = isOwner(s) && s.locations.length > 1;
     locTabs.style.display = show ? '' : 'none';
     if (!show) { locTabs.replaceChildren(); return; }
     locTabs.replaceChildren(...s.locations.map((c, i) => {
-      const b = h('button.loc-tab', { type: 'button', class: { 'is-on': i === s.active }, title: c.name }, icon('pin'), h('span.ellipsis', c.name),
+      const tv = i !== s.active ? tallyView(locationTally.get(c.id)) : null;
+      const tally = tv ? h('span.loc-tally', { class: tv.tone ? `is-${tv.tone}` : '', 'aria-label': tv.title },
+        tv.cash ? h('span.loc-tally-cash.num', tv.cash) : null,
+        tv.stars ? h('span.loc-tally-stars.num', icon('star'), tv.stars) : null,
+        tv.walkouts ? h('span.loc-tally-out.num', icon('door'), String(tv.walkouts)) : null) : null;
+      const b = h('button.loc-tab', { type: 'button', class: { 'is-on': i === s.active, 'has-tally': !!tv }, title: tv ? `${c.name}. ${tv.title}` : c.name }, icon('pin'), h('span.ellipsis', c.name),
+        tally,
         waitingAt.has(i) && i !== s.active ? h('span.badge.loc-badge', { 'aria-label': 'Patient waiting in your chair' }, icon('chair')) : null);
       b.addEventListener('click', () => {
         if (i === store.state.active) return;
@@ -292,20 +321,22 @@ export function hubScreen(): Screen {
     if (!store.loaded) return;
     const s = store.state;
     const cleaning = isCleaning();
-    // a panel pauses the clock in the employee phase (it is someone else's clinic), and for owners while a
-    // patient waits in your chair (the panel covers the chair card)
     attnT -= dt;
     if (attnT <= 0) {
       attnT = 0.25;
       waitingMine = !cleaning && s.phase !== 'school' && !s.dayOver && playerWaiting(s).length > 0;
       syncClinicBadge(!!panels.current && waitingMine);
     }
-    const panelPause = !!panels.current && (s.phase === 'employee' || waitingMine);
     // the sim opens the doors by itself if the clock runs before the Morning Huddle: hold it, and bring the
     // huddle back if nothing is showing it (reload, a modal that closed in between)
     const huddleHold = !cleaning && huddleDue(s);
     if (huddleHold && !modals.count && !huddleOpen()) { huddleT -= dt; if (huddleT <= 0) { huddleT = 0.6; queueHuddle(); } }
-    const paused = cleaning || modals.blocking || document.hidden || panelPause || huddleHold;
+    // a notice that waited for a panel to close shows once the clinic is in view again
+    if (!cleaning && !panels.current && !modals.count) pumpNotices();
+    // any panel, menu, modal or key event notice holds the clock in every phase; closing it resumes at the
+    // chosen speed (s.speed is never touched here)
+    const hold = holdReason({ cleaning, hidden: document.hidden, notice: noticeOpen(), huddle: huddleHold, modals: modals.count, panel: !!panels.current });
+    const paused = hold !== null;
     if (!paused && !s.dayOver && s.speed > 0 && s.phase !== 'school') {
       const minutes = (dt / REAL_SEC_PER_GAME_MIN) * s.speed;
       const events = attempt(() => sim.tick(s, minutes), [] as SimEvent[], 'tick');
@@ -316,7 +347,7 @@ export function hubScreen(): Screen {
       const c = activeClinic(s);
       if (view && c) attempt(() => view!.frame(c, s.minute, dt), undefined, 'view.frame');
       else if (!view) board.frame(dt);
-      hud.frame(dt, paused);
+      hud.frame(dt, hold);
       chair.frame();
     }
     hintT -= dt;
@@ -332,10 +363,13 @@ export function hubScreen(): Screen {
 
   // ---------------------------------------------------------------- keys
   const onKey = (e: KeyboardEvent) => {
-    if (!store.loaded || isCleaning()) return;
+    // Escape that already closed a modal (a notice over a panel) must not close the panel too
+    if (!store.loaded || isCleaning() || e.defaultPrevented) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     const s = store.state;
+    // a modal (notice, report, result) owns the keyboard: its buttons answer Space and Enter
+    if (modals.count && (e.key === ' ' || e.key === '1' || e.key === '2' || e.key === '3')) return;
     if (e.key === ' ') { e.preventDefault(); s.speed = s.speed === 0 ? 1 : 0; sfx('ui_tab'); store.commit(); }
     else if (e.key === '1' || e.key === '2' || e.key === '3') { s.speed = ([1, 2, 4] as const)[Number(e.key) - 1]; sfx('ui_tab'); store.commit(); }
     else if (e.key === 'Escape' && panels.current && !modals.count) { panels.open(null); syncNav(); }
@@ -356,6 +390,7 @@ export function hubScreen(): Screen {
     onState,
     dispose() {
       disposed = true;
+      clearNotices();
       setPanelOpener(null);
       setHubBridge(null);
       window.removeEventListener('keydown', onKey);

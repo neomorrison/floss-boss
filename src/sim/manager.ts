@@ -20,7 +20,7 @@ import { computeRating } from './clinic';
 import { bookClinic, capacityOf, demandLambda, makeVip, weekdayOf } from './booking';
 import { lastAppt } from './effects';
 import { gainXp, tierIndex } from './progress';
-import { askFor, makeStaff, removeStaff } from './staff';
+import { askFor, makeStaff, removeStaff, wantsRaise } from './staff';
 import { progressGoal } from './goals';
 
 const fail = (reason: string): ActionResult => ({ ok: false, reason });
@@ -342,7 +342,8 @@ function applyEffect(a: ApplyCtx, ef: EventEffect): boolean {
       const ask = askFor(s.role, s);
       if (ask > s.ask) {
         s.ask = ask;
-        if (s.salary < s.ask) pushEvent(a.ev, { type: 'raiseRequest', clinicId: c.id, staffId: s.id, name: s.name, ask: s.ask });
+        // the request (or an auto raise) is settled at the day close with the quiet period (DESIGN 8.5)
+        if (wantsRaise(s)) (s as SimStaff).raiseDue = true;
       }
       a.texts.push(`${s.name.split(' ')[0]}: skill ${s.skill}.`);
       return true;
@@ -553,20 +554,22 @@ export function campaignStatus(state: GameState, clinicIndex: number, id: Campai
   return { ok: true, ...base };
 }
 
-/** Start a campaign at a location (DESIGN 10.3). Before the doors open it runs from today, else from tomorrow. */
+/** Start a campaign at a location (DESIGN 10.3). Before the doors open it runs from today; bought later it
+ * starts tomorrow. The modifier id carries the real start day ('campaign:<id>:<startDay>'), and a modifier
+ * whose start day is still ahead is not in force yet (effects.modActive), so the UI can show "Starts tomorrow". */
 export function startCampaign(state: GameState, clinicIndex: number, id: CampaignId): ActionResult {
   const st = campaignStatus(state, clinicIndex, id);
   if (!st.ok) return fail(st.reason ?? 'Cannot start');
   const c = state.locations[clinicIndex];
   const def = CAMPAIGNS[id];
   addCash(state, -st.cost, 'Campaigns');
-  // before the doors open it runs from today; bought later it runs today (walk-ins) and the next `days` days
   const morning = !state.dayOver && isMorning(state, c);
-  const untilDay = state.day + def.days - (morning ? 1 : 0);
+  const startDay = morning ? state.day : state.day + 1;
+  const untilDay = startDay + def.days - 1;
   const boosts = Object.entries(def.caseBoost).map(([ct, v]) => `${CASE_LABEL[ct] ?? ct} x${v}`);
   const parts = [def.demand !== 1 ? `demand +${Math.round((def.demand - 1) * 100)}%` : '', ...boosts].filter(Boolean);
   c.modifiers.push({
-    id: modId(c, 'campaign', id, state.day), label: parts.length ? `${def.name}: ${parts.join(', ')}` : def.name, source: 'campaign', untilDay,
+    id: modId(c, 'campaign', id, startDay), label: parts.length ? `${def.name}: ${parts.join(', ')}` : def.name, source: 'campaign', untilDay,
     demand: def.demand, caseBoost: { ...def.caseBoost },
   });
   c.campaign = { id, untilDay };
@@ -574,7 +577,7 @@ export function startCampaign(state: GameState, clinicIndex: number, id: Campaig
   if (def.awareness) (c as SimClinic).awBonus = clamp(((c as SimClinic).awBonus ?? 0) + def.awareness, 0, AW_BONUS_MAX);
   if (morning) rebook(state, c);
   progressGoal(state, 'campaign', 1, null);
-  return { ok: true, message: `${def.name} runs until day ${untilDay}` };
+  return { ok: true, message: morning ? `${def.name} runs until day ${untilDay}` : `${def.name} starts tomorrow and runs until day ${untilDay}` };
 }
 
 const CASE_LABEL: Record<string, string> = { candy: 'sugar bug cases', whitening: 'whitening', deep: 'deep cleanings', braces: 'braces checks', pirate: 'pirates', routine: 'routine' };

@@ -7,8 +7,11 @@
 //   npm run balance              all bots, 5 seeds each
 //   npm run balance -- --seeds 9 --bot median --verbose
 //   npm run balance -- --no-checks
+//   npm run balance -- --raises ignore   every bot ignores raise requests (approve, ignore or auto)
 import * as sim from '../src/sim/index';
-import type { CampaignId, CaseType, CleanResult, CleanSetup, Clinic, FocusId, GameState, OfficeTierId, PendingEvent, Staff } from '../src/core/types';
+import type { CampaignId, CaseType, CleanResult, CleanSetup, Clinic, FocusId, GameState, OfficeTierId, PendingEvent, SimEvent, Staff } from '../src/core/types';
+import { makeStaff } from '../src/sim/staff';
+import { withRng } from '../src/sim/internal';
 import { makeRng } from '../src/core/rng';
 import { REAL_SEC_PER_GAME_MIN } from '../src/core/constants';
 import { OFFICES, TIER_ORDER } from '../src/data/offices';
@@ -30,16 +33,17 @@ interface Bot {
   priceMult: number;        // cleaning price multiplier the bot sets
   events: 'first' | 'smart';   // event policy: always the first choice, or a simple expected-value score
   manage: boolean;          // uses focus, campaigns, interviews and picks perks
+  raises: 'approve' | 'ignore' | 'auto';   // raise requests: approve each at once, ignore, or settings.autoRaise
   maxHours: number;
 }
 
 const BOTS: Bot[] = [
-  { name: 'casual (q 0.70)', quality: 0.7, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: true, maxHours: 14 },
-  { name: 'median (q 0.85)', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
-  { name: 'expert (q 0.95)', quality: 0.95, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
-  { name: 'idle owner', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, events: 'first', manage: false, maxHours: 14 },
-  { name: 'greedy expander', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, events: 'smart', manage: true, maxHours: 14 },
-  { name: 'median, no manager', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: false, maxHours: 14 },
+  { name: 'casual (q 0.70)', quality: 0.7, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: true, raises: 'approve', maxHours: 14 },
+  { name: 'median (q 0.85)', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
+  { name: 'expert (q 0.95)', quality: 0.95, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
+  { name: 'idle owner', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'auto', maxHours: 14 },
+  { name: 'greedy expander', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
+  { name: 'median, no manager', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'approve', maxHours: 14 },
 ];
 
 // ------------------------------------------------------------------ run state
@@ -73,6 +77,8 @@ interface Run {
   twoStarWait: number;
   oneStar: number;
   reviews: number;
+  raiseRequests: number;
+  autoRaises: number;
 }
 
 const M = (r: Run, key: string) => {
@@ -175,6 +181,15 @@ function playDay(r: Run): void {
   }
   r.real += s.phase === 'owner' ? 10 : 6;   // day report and a glance at the hub
   const rep = sim.closeDay(s);
+  // raise requests arrive with the report (DESIGN 8.5); auto raises are settled inside closeDay
+  for (const e of rep.events ?? []) {
+    if (e.type !== 'raiseRequest') continue;
+    r.raiseRequests++;
+    const li = s.locations.findIndex((l) => l.id === e.clinicId);
+    const st = s.locations[li]?.staff.find((x) => x.id === e.staffId);
+    if (st && r.bot.raises !== 'ignore') { sim.setSalary(s, li, st.id, st.ask); r.real += 3; }
+  }
+  r.autoRaises += rep.notes.filter((n) => n.startsWith('Auto raise')).length;
   for (const e of rep.income) if (e.label === 'Events') r.eventCash.in += e.amount;
   for (const e of rep.expenses) if (e.label === 'Events') r.eventCash.out += e.amount;
   if (s.cash < r.minCash) r.minCash = s.cash;
@@ -408,6 +423,7 @@ function ownerShopping(r: Run): void {
   const s = r.s;
   learnSkills(r);
   if (r.bot.idleOwner) s.settings.autoHuddle = true;
+  s.settings.autoRaise = r.bot.raises === 'auto';
   const costs = dailyCosts(s);
   const reserve = costs * (r.bot.greedy ? 0.5 : 1);
   const goal = Math.max(0, savingsGoal(r));
@@ -492,6 +508,7 @@ function newRun(bot: Bot, seed: number): Run {
     bot, s, real: 0, rng: makeRng(seed ^ 0x5eed), m: {}, mc: {}, md: {}, ownerDays: 0, log: [], handsToday: 0, maxLoanSeen: 0, minCash: 0, nets: [],
     treasure: 0, cases: {}, quicks: 0, lockedQuick: 0,
     tierDays: {}, eventCash: { in: 0, out: 0 }, eventsAnswered: 0, campaigns: {}, focus: {}, perks: 0, interviews: 0, twoStarWait: 0, oneStar: 0, reviews: 0,
+    raiseRequests: 0, autoRaises: 0,
   };
 }
 
@@ -567,7 +584,8 @@ function main() {
   const seedsN = Number(args[args.indexOf('--seeds') + 1]) || 5;
   const only = args.includes('--bot') ? args[args.indexOf('--bot') + 1] : null;
   const verbose = args.includes('--verbose');
-  const bots = only ? BOTS.filter((b) => b.name.includes(only)) : BOTS;
+  const raisePolicy = args.includes('--raises') ? args[args.indexOf('--raises') + 1] as Bot['raises'] : null;
+  const bots = (only ? BOTS.filter((b) => b.name.includes(only)) : BOTS).map((b) => (raisePolicy ? { ...b, raises: raisePolicy } : b));
   const all: Record<string, Run[]> = {};
   for (const bot of bots) {
     const runs: Run[] = [];
@@ -629,6 +647,12 @@ function main() {
     const foc = (id: FocusId) => med((r) => r.focus[id] ?? 0);
     console.log(`  ${b.name.padEnd(20)} events ${med((r) => r.eventsAnswered)}  cash +${med((r) => r.eventCash.in)}/-${med((r) => r.eventCash.out)}  campaigns open ${camp('grandOpening')} kids ${camp('kidsWeek')} smile ${camp('smileMakeover')} golden ${camp('goldenYears')} braces ${camp('bracesBonanza')} pirate ${camp('pirateDay')}  focus q ${foc('quality')} sp ${foc('speed')} wi ${foc('walkin')} up ${foc('upsell')} team ${foc('team')}  perks ${med((r) => r.perks)} interviews ${med((r) => r.interviews)}  reviews ${med((r) => r.reviews)} 1-star ${med((r) => r.oneStar)} 2-star wait ${med((r) => r.twoStarWait)}`);
   }
+  console.log('\nRaises (median per run, DESIGN 8.5): requests that reached the owner (per owner day), auto raises');
+  for (const b of bots) {
+    const runs = all[b.name];
+    const med = (f: (r: Run) => number) => median(runs.map(f));
+    console.log(`  ${b.name.padEnd(20)} policy ${b.raises}  requests ${med((r) => r.raiseRequests)} (${med((r) => r.raiseRequests / Math.max(1, r.ownerDays)).toFixed(2)}/day)  auto raises ${med((r) => r.autoRaises)}`);
+  }
   console.log('\nCases (median per run): hands-on cleans by case, treasure paid, quick cleans, locked quick cleans cleaned by hand, bronze badges');
   for (const b of bots) {
     const runs = all[b.name];
@@ -671,6 +695,57 @@ function plainDays(s: GameState, days: number, each?: (s: GameState) => void, an
 }
 
 const grant = (s: GameState, amount: number) => { s.cash += amount; s.ledger.push({ day: s.day, minute: s.minute, amount, label: 'test grant', kind: 'income' }); };
+
+/** Raise requests per day over 30 owner days at a fresh Main Street Office with 6 new staff (4 hygienists,
+ * a receptionist and an assistant, or an Office Manager instead of the assistant). The owner either approves
+ * every request at once or ignores them (DESIGN 8.5: at most one per staff member per 10 days). */
+function raiseFrequency(seed: number, policy: 'approve' | 'ignore' | 'auto' | 'manager'): { perDay: number; autos: number; quits: number } {
+  const s = sim.newGame({ name: 'Raise', avatar: 0, seed, nowMs: 0 });
+  for (const step of [1, 2] as const) sim.completeSchool(s, step, { quit: 'done', tartar: 0.85, plaque: 0.85, stain: 0.85, debris: 0.85, polish: 0.85, mess: 0, clean: 0.85, comfort: 80, quality: 0.85, stars: 4, seconds: 90, chunks: 6, bestCombo: 4, gumHits: 0, gags: 0, perfect: false, caseType: 'routine', objectives: [], bonusMet: false, treasure: false, shadeGain: 0, before: null, after: null });
+  grant(s, 3_000_000);
+  s.player.level = 8;
+  sim.openPractice(s, { name: 'Raise Dental', loan: 0 });
+  sim.closeDay(s);
+  sim.completeHuddle(s);
+  sim.moveOffice(s, 0, 't2', 0);
+  const c = s.locations[0];
+  while (c.ops.length < OFFICES[c.tier].opSlots) sim.buyOperatory(s, 0);
+  for (const op of c.ops) op.staffId = null;
+  c.staff = [];
+  const add = (role: Staff['role'], opId?: string) => {
+    const st = withRng(s, (rng) => makeStaff(s, rng, role, OFFICES.t2.candidateQuality));
+    c.staff.push(st);
+    if (opId) c.ops.find((o) => o.id === opId)!.staffId = st.id;
+    if (role === 'assistant') c.ops[0].assistantId = st.id;
+  };
+  for (const op of c.ops) add('hygienist', op.id);
+  add('receptionist');
+  add(policy === 'manager' ? 'manager' : 'assistant');
+  s.settings.autoRaise = policy === 'auto';
+  let n = 0;
+  let autos = 0;
+  let quits = 0;
+  const seen = (ev: SimEvent[]) => {
+    for (const e of ev) {
+      if (e.type === 'staffQuit') quits++;
+      if (e.type !== 'raiseRequest') continue;
+      n++;
+      const st = c.staff.find((x) => x.id === e.staffId);
+      if (st && policy !== 'ignore') sim.setSalary(s, 0, st.id, st.ask);
+    }
+  };
+  for (let d = 0; d < 30; d++) {
+    for (const x of c.staff) if (x.pendingPerks?.length) sim.pickPerk(s, 0, x.id, x.pendingPerks[0]);
+    while (s.pendingEvents.length) sim.resolveEvent(s, 0, 0);
+    sim.completeHuddle(s);
+    let g = 0;
+    while (!s.dayOver && g++ < 20000) seen(sim.tick(s, 3));
+    const rep = sim.closeDay(s);
+    seen(rep.events ?? []);
+    autos += rep.notes.filter((x) => x.startsWith('Auto raise')).length;
+  }
+  return { perDay: n / 30, autos, quits };
+}
 
 function checks(): void {
   console.log('\nDegenerate-strategy checks (A/B from the same forked state, 3 seeds):');
@@ -803,6 +878,15 @@ function checks(): void {
   rows.push(`  Insurance network at T2, net/day over 30 days: join ${insurance.map((x) => Math.round(x.join)).join(', ')} vs stay independent ${insurance.map((x) => Math.round(x.stay)).join(', ')}`);
   rows.push(`  Event money: richest choice every time ${eventAlways.map((x) => Math.round(x)).join(', ')} vs first choice ${eventNever.map((x) => Math.round(x)).join(', ')} net/day over 40 days`);
   rows.push(`  Loan round trip: take ${ml} ${took.ok ? 'ok' : 'refused'}, over the limit ${over.ok ? 'ALLOWED' : 'refused'}, repay ${back.ok ? 'ok' : 'refused'}, cash change ${s.cash - before}`);
+  // raise requests (owner: "make them ask for raises less"; v3 rules asked about 0.8 to 0.9 a day here)
+  const rf = (p: 'approve' | 'ignore' | 'auto' | 'manager') => [11, 23, 37, 41, 53].map((sd) => raiseFrequency(sd, p));
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+  const fmt = (p: 'approve' | 'ignore' | 'auto' | 'manager') => {
+    const r = rf(p);
+    const per = r.map((x) => x.perDay);
+    return `${mean(per).toFixed(2)}/day (max ${Math.max(...per).toFixed(2)}${p === 'auto' || p === 'manager' ? `, ${mean(r.map((x) => x.autos)).toFixed(1)} auto raises` : ''}, ${r.reduce((a, x) => a + x.quits, 0)} quits)`;
+  };
+  rows.push(`  Raise requests at a new T2 office, 6 new staff, 30 days, 5 seeds: owner approves each ${fmt('approve')} | ignores them ${fmt('ignore')} | autoRaise ${fmt('auto')} | Office Manager ${fmt('manager')}`);
   console.log(rows.join('\n'));
 }
 

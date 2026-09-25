@@ -68,6 +68,16 @@ export function showDayReport(report: DayReport, extra: { mine?: MyDay | null; a
       if (typeof waitlist === 'number' && st.turnedAway > wl) parts.push(`${plural(st.turnedAway - wl, 'patient')} went elsewhere.`);
       waitNote = h('div.report-note', icon('calendar'), h('span', parts.join(' '), h('span.report-note-tip', ' More operatories or hygienists fit them in.')));
     }
+    // several locations: what each one took and how it was reviewed (their toasts stayed quiet off screen)
+    let roll: HTMLElement | null = null;
+    if (store.loaded && store.state.locations.length > 1) {
+      const c = store.state.locations.find((x) => x.id === l.clinicId);
+      const rs = c ? c.reviews.filter((r) => r.day === report.day) : [];
+      const avg = rs.length ? rs.reduce((a, r) => a + r.stars, 0) / rs.length : 0;
+      roll = h('div.report-roll.small',
+        h('span', icon('wallet'), `Revenue ${money(Math.round(st.revenue + st.tips))}`),
+        rs.length ? h('span', icon('star'), `${plural(rs.length, 'review')}, ${avg.toFixed(1)} average`) : null);
+    }
     return h('div.report-loc',
       h('div.row.row-between.row-wrap',
         h('div.report-loc-name', icon('pin'), l.name),
@@ -80,6 +90,7 @@ export function showDayReport(report: DayReport, extra: { mine?: MyDay | null; a
         tile('No-shows', st.noShows, '', 'alert'),
         tile('Five stars', st.fiveStars, st.fiveStars ? 'good' : '', 'star'),
       ),
+      roll,
       waitNote,
     );
   });

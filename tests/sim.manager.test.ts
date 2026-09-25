@@ -868,7 +868,8 @@ describe('migrate and a 30-day managed run', () => {
     expect(m.huddleDay).toBe(m.day);
     expect(m.pendingEvents).toEqual([]);
     expect(m.eventLog).toEqual([]);
-    expect(m.settings).toEqual({ autoHuddle: false });
+    expect(m.settings).toEqual({ autoHuddle: false, autoRaise: false });
+    expect(m.settings.autoPause).toBeUndefined();
     const c = m.locations[0];
     expect(c.modifiers).toEqual([]);
     expect(c.campaign).toBeNull();

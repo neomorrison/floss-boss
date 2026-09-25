@@ -10,8 +10,16 @@ import { hasSkill, isPresent } from './internal';
 
 // ------------------------------------------------------------------ modifiers
 
+/** First day a modifier applies: the day in its id ('campaign:kidsWeek:12', 'event:puppy:9.2'). A campaign
+ * bought after the doors open carries tomorrow's day. 0 when the id has no day. */
+export function modStartDay(m: ClinicModifier): number {
+  const i = m.id.lastIndexOf(':');
+  const d = i >= 0 ? parseInt(m.id.slice(i + 1), 10) : NaN;
+  return Number.isFinite(d) ? d : 0;
+}
+
 export function modActive(state: GameState, m: ClinicModifier): boolean {
-  return m.untilDay == null || m.untilDay >= state.day;
+  return (m.untilDay == null || m.untilDay >= state.day) && modStartDay(m) <= state.day;
 }
 
 export interface ModAgg {

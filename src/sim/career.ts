@@ -16,7 +16,7 @@ import { SERVICES, defaultPrices } from '../data/services';
 import { SKILLS } from '../data/skills';
 import { CHAIRS } from '../data/upgrades';
 import {
-  S, SimClinic, SimPatient, addCash, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, priceOf, withRng,
+  S, SimClinic, SimPatient, SimStaff, addCash, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, priceOf, withRng,
 } from './internal';
 import { autoQuality, employeeRate, gainXp, starsFor, title } from './progress';
 import { addonMinutes, downgradeCase, handsFee } from './patients';
@@ -76,7 +76,7 @@ export function newGame(opts: { name: string; avatar: number; seed?: number; now
     huddleDay: 1,
     pendingEvents: [],
     eventLog: [],
-    settings: { autoHuddle: false },
+    settings: { autoHuddle: false, autoRaise: false },
   };
 }
 
@@ -104,6 +104,10 @@ function fixStaff(s: Staff): void {
   const pend = arr<PerkId>(s.pendingPerks).filter((p) => p in PERKS);
   s.pendingPerks = pend.length ? pend : null;
   if (typeof s.tempUntilDay !== 'number' || !Number.isFinite(s.tempUntilDay)) delete s.tempUntilDay;
+  // raise pipeline (DESIGN 8.5): a due request and the day of the last request or raise
+  const ss = s as SimStaff;
+  if (ss.raiseDue !== true) delete ss.raiseDue;
+  if (typeof ss.raiseDay !== 'number' || !Number.isFinite(ss.raiseDay)) delete ss.raiseDay;
 }
 
 function fixClinic(c: Clinic): void {
@@ -228,7 +232,9 @@ export function migrate(state: GameState): GameState {
   for (const e of s.pendingEvents) { e.vars = obj<Record<string, string>>(e.vars) as Record<string, string>; e.day = num(e.day, s.day); }
   s.eventLog = arr<GameState['eventLog'][number]>(s.eventLog).filter((e) => e && typeof e === 'object').slice(-30);
   const st = obj<GameState['settings']>(s.settings);
-  s.settings = { autoHuddle: st.autoHuddle === true };
+  // autoRaise is off unless chosen; autoPause stays undefined (= on) until the player sets it
+  s.settings = { autoHuddle: st.autoHuddle === true, autoRaise: st.autoRaise === true };
+  if (typeof st.autoPause === 'boolean') s.settings.autoPause = st.autoPause;
   s.version = SAVE_VERSION;
   s.player.title = title(s);
   return s;

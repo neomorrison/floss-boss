@@ -468,11 +468,17 @@ export function pickPerk(s: GameState, idx: number, staffId: string, perk: PerkI
 
 /** Debug: offer two perks to a staff member now. */
 export function offerPerks(s: GameState, staffId: string): PerkId[] | null {
-  for (const c of s.locations) {
+  for (let i = 0; i < s.locations.length; i++) {
+    const c = s.locations[i];
     const st = c.staff.find((x) => x.id === staffId);
     if (!st) continue;
+    // the sim's offerPerks(state, clinicIndex, staffId) rolls the offer with the level-up rules
     const fn = simFn('offerPerks');
-    if (fn) { const r = call(fn, s, staffId); if (r.ok && st.pendingPerks?.length) return st.pendingPerks; }
+    if (fn) {
+      const r = fn.length >= 3 ? call(fn, s, i, staffId) : call(fn, s, staffId);
+      if (r.ok && st.pendingPerks?.length) return st.pendingPerks;
+      if (r.ok && r.value && (r.value as { ok?: boolean }).ok === false) return null;
+    }
     const pool = perksForRole(PERKS, st.role, st.perks ?? []);
     if (pool.length < 1) return null;
     // case perks first so the specialist badge shows up in tests

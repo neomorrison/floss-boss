@@ -109,6 +109,11 @@
 .hud-speed-btn:active { transform: scale(.9); }
 .hud-speed-btn.is-on { background: var(--ink); color: #fff; box-shadow: 0 2px 0 rgba(0, 0, 0, .25); }
 .hud-speed-btn.is-on:first-child { background: var(--coral); }
+/* held by a menu or a notice: pause lights up, the chosen speed shows as the one it resumes at */
+.hud-speed-btn.is-held { box-shadow: inset 0 0 0 2px var(--ink-3); color: var(--ink); }
+.hud-time.is-held .hud-speed-btn.is-on:first-child { animation: held-pulse 1.6s var(--ease-out) infinite; }
+@keyframes held-pulse { 0%, 100% { box-shadow: 0 2px 0 rgba(0, 0, 0, .25); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--coral) 30%, transparent), 0 2px 0 rgba(0, 0, 0, .25); } }
+.reduced-motion .hud-time.is-held .hud-speed-btn.is-on:first-child { animation: none; }
 
 .hud-rating { gap: 8px; }
 .hud-star-one { display: none; color: var(--sun); width: 22px; height: 22px; filter: drop-shadow(0 1px 0 var(--sun-dd)); }
@@ -362,6 +367,18 @@
 }
 .loc-tab .loc-badge { width: 22px; min-width: 22px; height: 22px; padding: 0; margin-right: -6px; background: var(--gum); animation: bump 1.4s var(--spring) infinite; }
 .loc-tab .loc-badge .icon { width: 14px; height: 14px; color: #fff; }
+/* what happened at a location off screen since you last looked: takings, average review, walkouts */
+.loc-tab .ellipsis { min-width: 0; }
+.loc-tally { display: inline-flex; align-items: center; gap: 5px; flex: none; margin-right: -6px; padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-2); font-family: var(--font-ui); font-size: 12px; font-weight: 800; color: var(--ink-2); }
+.loc-tally > span { display: inline-flex; align-items: center; gap: 2px; }
+.loc-tab .loc-tally .icon { width: 12px; height: 12px; }
+.loc-tally-cash { color: var(--teal-d); }
+.loc-tab .loc-tally-stars .icon { color: var(--sun-d); }
+.loc-tally-out { color: var(--coral-d); }
+.loc-tab .loc-tally-out .icon { color: var(--coral-d); }
+.loc-tally.is-bad { background: var(--coral-l); }
+.loc-tally.is-good { background: var(--mint-ll); }
+.loc-tab.has-tally { max-width: 300px; }
 /* panels carry their own location picker: tabs would cover the panel header */
 .panel-open .loc-tabs { visibility: hidden; }
 @media (min-width: 641px) {

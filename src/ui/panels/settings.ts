@@ -1,4 +1,5 @@
-// Settings: volumes, quality, reduced motion, haptics, hints, save export/import, reset.
+// Settings: volumes, quality, reduced motion, haptics, hints, game options (auto-pause, huddle, auto-raise),
+// save export/import, reset.
 import { deleteSave, exportSave, importSave, saveGame } from '../../core/save';
 import { store } from '../../core/store';
 import { go } from '../app';
@@ -8,6 +9,7 @@ import { loadState } from '../flow';
 import { persist } from '../game';
 import { icon } from '../icons';
 import { autoHuddle, setAutoHuddle } from '../mgr';
+import { autoPauseOn, autoRaiseOn, setGameSettings } from '../pause';
 import { confirmModal, openModal } from '../modal';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { settings, updateSettings } from '../settings';
@@ -69,7 +71,18 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
   };
 
   exportBox = h('div.col.gap-6');
+  const owner = store.loaded && store.state.phase === 'owner';
   return h('div.settings-panel',
+    // owner options saved with the game (menus always pause; these are the key events and the chores)
+    inGame && owner ? sectionTitle('Game', 'clock', h('span.small.muted', 'Saved with this game')) : null,
+    inGame && owner ? h('div.list',
+      row('pause', 'Pause on key events', 'Stop the clock when someone quits, asks for a raise or can pick a perk, and when a patient waits in your chair at another location.',
+        toggle(autoPauseOn(store.state), (v) => { if (!store.loaded) return; setGameSettings(store.state, { autoPause: v }); store.commit(); }, 'Pause on key events')),
+      row('trendUp', 'Approve raises up to 15%', 'Raise requests within 15% of current pay are approved at the end of the day. An Office Manager does this at their location either way.',
+        toggle(autoRaiseOn(store.state), (v) => { if (!store.loaded) return; setGameSettings(store.state, { autoRaise: v }); store.commit(); }, 'Approve raises up to 15%')),
+      row('staff', 'Morning huddle', 'Pick the focus and answer events before the doors open. Off: the focus stays and events take the first choice.',
+        toggle(!autoHuddle(store.state), (v) => { if (!store.loaded) return; setAutoHuddle(store.state, !v); store.commit(); }, 'Morning huddle')),
+    ) : null,
     sectionTitle('Sound', 'volume'),
     h('div.list',
       row('volume', 'Master', '', volume('master')),
@@ -83,11 +96,6 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
       row('hand', 'Haptics', 'Small buzzes on supported devices', toggle(st.haptics, (v) => updateSettings({ haptics: v }), 'Haptics')),
       row('bulb', 'Hints', 'Tip line under the clock', toggle(st.showHints, (v) => updateSettings({ showHints: v }), 'Hints')),
     ),
-    inGame && store.loaded && store.state.phase === 'owner' ? sectionTitle('Mornings', 'calendar') : null,
-    inGame && store.loaded && store.state.phase === 'owner' ? h('div.list',
-      row('staff', 'Morning huddle', 'Pick the focus and answer events before the doors open. Off: the focus stays and events take the first choice.',
-        toggle(!autoHuddle(store.state), (v) => { if (!store.loaded) return; setAutoHuddle(store.state, !v); store.commit(); }, 'Morning huddle')),
-    ) : null,
     sectionTitle('Save', 'export', h('span.small.muted', 'Saved on this device automatically')),
     h('div.list',
       inGame ? h('div.list-row.list-col',

@@ -9,6 +9,7 @@ import { h, replay } from './dom';
 import { sfx } from './fx';
 import { isOwner, playerTitle } from './game';
 import { coin, icon } from './icons';
+import { holdLabel, type HoldReason } from './pause';
 import { attempt } from './safe';
 import { stars } from './widgets';
 
@@ -33,7 +34,8 @@ export const cashDisplay = {
 
 export interface Hud {
   el: HTMLElement;
-  frame(dt: number, paused: boolean): void;
+  /** `hold`: why the clock is held (a menu, a notice, the huddle), or null when it runs at the chosen speed. */
+  frame(dt: number, hold: HoldReason): void;
   sync(): void;
   dispose(): void;
 }
@@ -84,7 +86,7 @@ export function createHud(): Hud {
 
   let lastClock = '';
   let lastDay = '';
-  let lastSpeed = -1;
+  let lastSpeed = '';
   let lastRating = -1;
   let lastLevelKey = '';
 
@@ -105,7 +107,7 @@ export function createHud(): Hud {
     time.classList.toggle('is-school', s.phase === 'school');
   }
 
-  function frame(dt: number, paused: boolean): void {
+  function frame(dt: number, hold: HoldReason): void {
     if (!store.loaded) return;
     const s = store.state;
     // cash
@@ -129,11 +131,18 @@ export function createHud(): Hud {
     }
     const ck = s.dayOver ? 'Closed' : clock(s.minute);
     if (ck !== lastClock) { clockLabel.textContent = ck; lastClock = ck; }
-    const sp = s.speed + (paused ? 10 : 0);
+    // held by a menu or a notice: the pause button lights up and the chosen speed shows as the one it resumes at
+    const holding = hold !== null && hold !== 'hidden';
+    const sp = `${s.speed}|${holding ? hold : ''}`;
     if (sp !== lastSpeed) {
       lastSpeed = sp;
-      speeds.forEach((o, i) => speedBtns[i].classList.toggle('is-on', o.v === s.speed));
-      time.classList.toggle('is-paused', s.speed === 0 || paused);
+      speeds.forEach((o, i) => {
+        speedBtns[i].classList.toggle('is-on', holding ? o.v === 0 : o.v === s.speed);
+        speedBtns[i].classList.toggle('is-held', holding && o.v === s.speed && o.v !== 0);
+      });
+      time.classList.toggle('is-paused', s.speed === 0 || holding);
+      time.classList.toggle('is-held', holding);
+      time.title = holding ? holdLabel(hold) : '';
     }
 
     // rating
