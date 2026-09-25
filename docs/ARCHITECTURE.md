@@ -73,7 +73,8 @@ Hub = clinic view + HUD (cash, day and clock, speed, rating, level and XP, title
   ├─ Staff (owner): team per location, hire board, assign, train, raise, fire
   ├─ Office (owner): operatories, chairs, op upgrades, equipment, move up, new location
   ├─ Finance (owner): prices, marketing, loan, day history chart, valuation
-  ├─ Goals: daily goals, achievements
+  ├─ Smile City: district map, city Smile Index, next milestone (DESIGN 11)
+  ├─ Goals: daily goals, achievements, Cases, Legacy
   └─ Settings: audio, quality, reduced motion, haptics, save export/import, reset
 Modals: clean result, day report, level up, open practice, offline earnings, op panel, candidate card, confirm
 Location tabs when more than one location.
@@ -82,7 +83,7 @@ Location tabs when more than one location.
 ## Debug hooks (for headless tests)
 
 - `window.__fb` (main.ts, every build): `{ store, sim, debug: { newGame(), grant(cash), setLevel(n), skipSchool(), openPractice(), goto(screen), speed(n), fastForward(minutes), clean(patientId?) } }`.
-- Also on `__fb.debug`: `mastery(caseType, n)`, `patient(caseType, twists, bonus)`, `showResult({...})`, `levelUp(n)`, `huddle(eventIds?)`, `event(eventId, clinicIndex?)`, `perks(staffId?, open?)`, `owner(tier, cash?)`, `location(tier)`, `raise()`, `quit()`.
+- Also on `__fb.debug`: `mastery(caseType, n)`, `patient(caseType, twists, bonus)`, `showResult({...})`, `levelUp(n)`, `huddle(eventIds?)`, `event(eventId, clinicIndex?)`, `perks(staffId?, open?)`, `owner(tier, cash?)`, `location(tier)`, `raise()`, `quit()`, and the end game: `city(pct)`, `milestone(pct)`, `milestoneCard(pct)`, `gala()`, `galaResult(won, finale)`, `promote(title)`, `difficulty(id)`, `distress(n)`, `ribbon(kind)`, `parade()`, `credits()`, `legacyPage()`, `choice()`, `legacy(points)`, `vip()`.
 - `window.__fbClean` while a clean is running: `{ summary(), cheat(fraction), finish(), done(), skipIntro(), setTool(slot), memory() }`.
 - `window.__fbClinic` while the clinic view is mounted: `{ camera, scene, pick(x, y) }`.
 
