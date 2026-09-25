@@ -288,6 +288,11 @@ export function schoolSetup(state: GameState, step: 1 | 2): CleanSetup {
     twists: [], dirtLevel: 0.5, level: 1, tutorial: step === 1, consumeGel: false, firstOfCase: false, school: step,
   });
   setup.seed = hashSeed(state.seed, 'school', step);
+  if (step === 2) {
+    // Practical 2 teaches comfort: the dummy's comfort sensor drifts down so the "tap Reassure" hint shows.
+    setup.traits = { ...setup.traits, comfortStart: 70, comfortDrain: 1.0 };
+    setup.lines = ['(A little sensor light on the dummy blinks.)', ...setup.lines];
+  }
   return setup;
 }
 

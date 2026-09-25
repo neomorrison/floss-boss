@@ -40,7 +40,7 @@ A game day (8:00 to 17:00, 540 game minutes) lasts 108 s real time at 1x (1 game
 ## 3. Career phases (`state.phase`)
 
 ### 3.1 `school`
-Hygiene school practical. Two guided cleanings on "Dennis the Dummy" (a training mannequin, archetype `mannequin`), with tutorial prompts in the clean scene. No pay, XP only. Then graduation card and hire at Bright Smiles Dental.
+Hygiene school practical. Two guided cleanings on "Dennis the Dummy" (a training mannequin, archetype `mannequin`), with tutorial prompts in the clean scene. Practical 2 turns on the dummy's comfort sensor (starts at 70, drains) so the player meets the comfort hint and Reassure before real patients. No pay, XP only. Then graduation card and hire at Bright Smiles Dental.
 
 ### 3.2 `employee`
 You work at **Bright Smiles Dental**, owned by **Dr. Ruth Canal**. The employer clinic is a T2 layout with 4 operatories; 3 are run by NPC colleagues (display only, their revenue is not yours), one is **your chair**.

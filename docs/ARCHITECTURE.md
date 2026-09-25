@@ -82,7 +82,8 @@ Location tabs when more than one location.
 ## Debug hooks (for headless tests)
 
 - `window.__fb` (main.ts, every build): `{ store, sim, debug: { newGame(), grant(cash), setLevel(n), skipSchool(), openPractice(), goto(screen), speed(n), fastForward(minutes), clean(patientId?) } }`.
-- `window.__fbClean` while a clean is running: `{ summary(), cheat(fraction), finish(), setTool(slot) }`.
+- Also on `__fb.debug`: `mastery(caseType, n)`, `patient(caseType, twists, bonus)`, `showResult({...})`, `levelUp(n)`, `huddle(eventIds?)`, `event(eventId, clinicIndex?)`, `perks(staffId?, open?)`, `owner(tier, cash?)`, `location(tier)`, `raise()`, `quit()`.
+- `window.__fbClean` while a clean is running: `{ summary(), cheat(fraction), finish(), done(), skipIntro(), setTool(slot), memory() }`.
 - `window.__fbClinic` while the clinic view is mounted: `{ camera, scene, pick(x, y) }`.
 
 ## Coordinate conventions
@@ -106,6 +107,11 @@ Location tabs when more than one location.
 - Front faces +Z, origin on the floor at the footprint center. Low-poly, soft colors from the palette in DESIGN 9, closed shells.
 - Chairs: headrest toward -Z, footrest toward +Z, seat height about 0.55, length about 1.9. Tintable material `Upholstery`.
 - People (`char_*`): cartoon proportions (big head), adult about 1.6 m. Child nodes `Body`, `Head`, `LegL`, `LegR`, `ArmL`, `ArmR` with pivots at the hips, neck and shoulders, under one root at the floor. Tintable materials named exactly `Skin`, `Hair`, `Shirt`, `Pants`, `Shoes`, `Scrubs`, `Coat`.
+
+### Case props and event props
+- Case props in mouth space (`tartar_barnacle`, `sugar_bug`, `bracket`) follow the deposit convention: origin at the base center, +Y out of the tooth; brackets keep +X along the arch tangent. `mouth_frame` has a child `LipLower` (pivot at the jaw hinge) whose meshes carry morph target 0 `JawClose`.
+- Event props in clinic space are `prop_*` (under 90 KB); `prop_puppy` has nodes Body, Head, Tail. Wall-mounted equipment is modelled at its mounting height with the wall side at -Z.
+- UI code loads `src/clinic` and `src/clean` with dynamic `import()` (separate chunks); never import them, `core/renderer` or `core/assets` statically from `src/ui`.
 
 ### Thumbnails
 `public/img/thumbs/<modelKey>.png`, 256 px, transparent background, 3/4 view. Needed for every tool and extra, the three chairs, the op upgrades and the equipment (`OP_UPGRADES[].model`, `EQUIPMENT[].model`).
