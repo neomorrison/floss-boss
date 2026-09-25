@@ -1,7 +1,8 @@
 // Game lifecycle flows: new game, continue (with offline earnings), import.
 import { duration, money } from '../core/format';
 import { store } from '../core/store';
-import type { GameState, OfflineReport } from '../core/types';
+import type { Difficulty, GameState, LegacyPerkId, OfflineReport } from '../core/types';
+import { newGameWith } from './endgame';
 import * as sim from '../sim';
 import { go } from './app';
 import { h } from './dom';
@@ -14,8 +15,8 @@ import { attempt, tryRun } from './safe';
 import { toast } from './toasts';
 import { btn } from './widgets';
 
-export function startNewGame(name: string, avatar: number): void {
-  const r = tryRun(() => sim.newGame({ name, avatar, nowMs: Date.now() }));
+export function startNewGame(name: string, avatar: number, opts: { difficulty?: Difficulty; legacyPerks?: LegacyPerkId[] } = {}): void {
+  const r = tryRun(() => newGameWith({ name, avatar, difficulty: opts.difficulty ?? 'standard', legacyPerks: opts.legacyPerks ?? [] }));
   if (!r.ok) {
     sfx('error');
     toast({ text: 'Could not start a new game yet', kind: 'bad' });

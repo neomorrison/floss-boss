@@ -2,7 +2,8 @@
 // The sim keeps a few private bookkeeping fields on the shared objects (patients, staff,
 // operatories, the state). They are optional, JSON-safe and filled in by migrate().
 import type {
-  Clinic, DayPatient, DayReport, EquipId, GameState, Goal, Operatory, PriceKey, SimEvent, SkillId, Staff,
+  ArchetypeId, CaseType, Clinic, DayPatient, DayReport, DistrictId, EquipId, GameState, Goal, Operatory, PriceKey, SimEvent, SkillId, Staff,
+  TimelineEntry,
 } from '../core/types';
 import type { Rng } from '../core/rng';
 import { makeRng } from '../core/rng';
@@ -36,6 +37,7 @@ export interface SimPatient extends DayPatient {
   vipWeight?: number;        // VIP patient: review weight
   preTip?: number;           // tip left for a specialist (Pirate Whisperer), billed at checkout
   deskBy?: string;           // receptionist who checked the patient in (Upsell Star)
+  own?: boolean;             // cleaned hands-on by the player (counts double for the Smile Index)
 }
 
 export interface SimStaff extends Staff {
@@ -59,7 +61,8 @@ export interface SimClinic extends Clinic {
   ratingBonus?: number;      // rating from events (fades 5% a day)
   recentEvents?: Record<string, number>;   // event id -> last day it was drawn here
   openedDay?: number;        // day this location opened (Grand Opening)
-  vips?: { fee: number; weight: number; day: number }[];   // event VIPs booked for a day
+  vips?: { fee: number; weight: number; day: number; archetype?: ArchetypeId; caseType?: CaseType }[];   // event VIPs booked for a day
+  tierDay?: number;          // day this location opened or moved to its tier (rent growth, DESIGN 11.5)
   bookDay?: number;          // day the service prices below were locked for booking
   bookPrices?: { cleaning: number; deep: number };
 }
@@ -72,6 +75,11 @@ export interface SimState extends GameState {
   dayLevelUps?: number;
   dayGoals?: string[];
   dayNotes?: string[];
+  bestTitle?: number;        // highest owner title reached (index into OWNER_TITLES): titles never go down
+  cityDay?: Partial<Record<DistrictId, number>>;   // patients served per district today (decay, DESIGN 11.1)
+  galaDay?: number;          // day of the last Golden Molar Gala attempt (one try a day)
+  emergencyLoan?: number;    // part of the loan the bank forced at double interest (DESIGN 11.5)
+  legacyWinSaved?: boolean;  // the Golden Molar win was written to the Legacy store
 }
 
 export const S = (state: GameState) => state as SimState;
@@ -206,6 +214,12 @@ export function note(state: GameState, text: string): void {
   const s = S(state);
   if (!s.dayNotes) s.dayNotes = [];
   if (!s.dayNotes.includes(text)) s.dayNotes.push(text);
+}
+
+/** Add a career milestone to the Legacy timeline (DESIGN 11.2). */
+export function addTimeline(state: GameState, kind: TimelineEntry['kind'], text: string): void {
+  if (!Array.isArray(state.timeline)) state.timeline = [];
+  state.timeline.push({ day: state.day, text, kind });
 }
 
 export type { Rng, SimEvent, Goal };

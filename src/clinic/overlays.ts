@@ -81,6 +81,8 @@ export const CASE_BADGE: Record<CaseType, { fill: string; ring: string }> = {
   braces: { fill: '#5FA8F5', ring: '#FFFFFF' },
   pirate: { fill: '#16323A', ring: '#FFD166' },
   deep: { fill: '#F0555B', ring: '#FFFFFF' },
+  // grillz (DESIGN 11.6): a pale diamond-blue, distinct from braces' solid sky blue
+  grillz: { fill: '#BFE9F5', ring: '#FFFFFF' },
 };
 function badgeSvg(caseType: CaseType): string {
   const c = CASE_BADGE[caseType];

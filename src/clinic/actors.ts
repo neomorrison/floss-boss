@@ -13,7 +13,7 @@ import {
   FlowContext, emptyTarget, patientTarget, staffTarget, playerOp, cleaningProgress, keysFor,
   STAFF_HIDDEN, STAFF_IDLE, type Target,
 } from './flow';
-import { createPerson, applyPose, disposePerson, type Person, type PersonKind, type Tint, type PoseState, SKINS, HAIRS, SENIOR_HAIRS, SHIRTS, PANTS } from './people';
+import { createPerson, applyPose, disposePerson, personMaterial, type Person, type PersonKind, type Tint, type PoseState, SKINS, HAIRS, SENIOR_HAIRS, SHIRTS, PANTS } from './people';
 import { hash01, pickBy, mat, C } from './palette';
 import { seatCatchupBoost, walkRate } from './pace';
 import type { HitInfo } from './office';
@@ -74,6 +74,8 @@ export interface Actor {
   headY: number;
   hat: THREE.Object3D | null;   // pirate case: a small tricorn, worn for as long as the case does
   glasses: THREE.Object3D | null;   // VIP patient: sunglasses, worn for as long as DayPatient.vip does
+  dreads: THREE.Object3D | null;    // rapper archetype: dreadlocks, worn for as long as the archetype does
+  chain: THREE.Object3D | null;     // rapper archetype: a gold chain
   patient: DayPatient | null;
   staff: Staff | null;
   /** Patients visit their stops in order (desk, seat, chair, desk, door) even when the sim is ahead. */
@@ -149,6 +151,44 @@ function makeVipGlasses(): THREE.Group {
   return g;
 }
 
+// ------------------------------------------------------------------ rapper dreadlocks and chain (DESIGN 11.6)
+// The rap star VIP: a dozen thin dark dreadlocks hanging from the head and a gold chain at the neck, worn
+// for as long as the patient's archetype is rapper. Sunglasses come for free from the VIP glasses above,
+// since a rapper visit is always vip (DESIGN 11.6). Same shared-geometry, cheap-clone pattern as those.
+
+let dreadGeo: THREE.BufferGeometry | null = null;
+let chainGeo: THREE.BufferGeometry | null = null;
+
+function makeDreads(): THREE.Group {
+  dreadGeo ??= new THREE.CapsuleGeometry(0.018, 0.22, 2, 6);
+  const g = new THREE.Group();
+  g.name = 'dreads';
+  const m = mat(C.ink, 0.7, 0);
+  const n = 12;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const r = 0.15 + (i % 3) * 0.015;
+    const d = new THREE.Mesh(dreadGeo, m);
+    d.position.set(Math.cos(a) * r, -0.06 - (i % 2) * 0.03, Math.sin(a) * r);
+    d.rotation.x = 0.12 * Math.sin(a * 2);
+    d.rotation.z = 0.1 * Math.cos(a);
+    d.castShadow = true;
+    g.add(d);
+  }
+  return g;
+}
+
+function makeGoldChain(): THREE.Group {
+  chainGeo ??= new THREE.TorusGeometry(0.11, 0.018, 8, 20);
+  const g = new THREE.Group();
+  g.name = 'goldChain';
+  const chain = new THREE.Mesh(chainGeo, mat(C.sunshine, 0.2, 0.75, C.sunshine, 0.3));
+  chain.rotation.x = Math.PI / 2 + 0.25;
+  chain.castShadow = true;
+  g.add(chain);
+  return g;
+}
+
 export function staffTint(id: string, scrubs: string): Tint {
   return {
     skin: pickBy(SKINS, id, 21), hair: pickBy(HAIRS, id, 22), shirt: scrubs, pants: scrubs,
@@ -188,6 +228,22 @@ export class Actors {
     for (const a of this.all()) a.person.blob.visible = on;
   }
 
+  private playerGold = false;
+  /** Gold Scrubs legacy perk (DESIGN 11.4): tints the player's own scrubs gold. Retints the actor live if
+   * it already exists (the flag will not usually change mid-run, but this keeps it correct either way). */
+  setPlayerGold(gold: boolean): void {
+    if (gold === this.playerGold) return;
+    this.playerGold = gold;
+    const a = this.staff.get(PLAYER_ID);
+    if (!a) return;
+    const tint = staffTint('player-you', gold ? C.sunshine : '#FF7AA8');
+    a.tint = tint;
+    const next = personMaterial(tint);
+    a.person.model.traverse((o) => { if ((o as THREE.Mesh).isMesh && o.userData.personPart) (o as THREE.Mesh).material = next; });
+    a.person.material?.dispose();
+    a.person.material = next;
+  }
+
   /** Build every person again (the GLB rigs arrived). Keeps positions and states. */
   rebuildPeople(): void {
     for (const a of this.all()) {
@@ -200,6 +256,8 @@ export class Actors {
       a.person.blob.visible = this.blobs;
       if (a.hat) a.person.root.add(a.hat);
       if (a.glasses) a.person.root.add(a.glasses);
+      if (a.dreads) a.person.root.add(a.dreads);
+      if (a.chain) a.person.root.add(a.chain);
       this.group.add(a.person.root);
     }
   }
@@ -227,7 +285,7 @@ export class Actors {
       pose: { walk: 0, phase: hash01(id, 3) * 6, sit: 0, recline: 0, work: 0, angry: 0, t: 0, seed: hash01(id, 4) },
       scale: 1, growing: false, shrinking: false, gone: false, frame: 0,
       speedMul: kind === 'senior' ? 0.8 : kind === 'kid' ? 1.1 : 1, angry: false, chimed: false, entering: false,
-      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, hat: null, glasses: null, patient: null, staff: null,
+      hit: { kind: role === 'patient' ? 'patient' : 'staff', id }, headY: 1.9, hat: null, glasses: null, dreads: null, chain: null, patient: null, staff: null,
       plan: [], cur: 0, dwell: 0, drive: null as unknown as Target, pendingPaid: 0, pendingStars: 0, paid: false,
     };
     a.drive = a.tgt;
@@ -241,6 +299,8 @@ export class Actors {
     if (a.pendingPaid > 0 || a.pendingStars > 0) this.flushPay(a);
     if (a.hat) { a.person.root.remove(a.hat); a.hat = null; }
     if (a.glasses) { a.person.root.remove(a.glasses); a.glasses = null; }
+    if (a.dreads) { a.person.root.remove(a.dreads); a.dreads = null; }
+    if (a.chain) { a.person.root.remove(a.chain); a.chain = null; }
     this.group.remove(a.person.root);
     disposePerson(a.person);
     map.delete(a.id);
@@ -320,6 +380,12 @@ export class Actors {
       // VIP patient (DESIGN 10.2): sunglasses for as long as the visit stays VIP
       if (p.vip && !a.glasses) { a.glasses = makeVipGlasses(); a.person.root.add(a.glasses); }
       else if (!p.vip && a.glasses) { a.person.root.remove(a.glasses); a.glasses = null; }
+      // rapper VIP (DESIGN 11.6): dreadlocks and a gold chain, tied to the archetype, not the case in play
+      const wantDreads = p.archetype === 'rapper';
+      if (wantDreads && !a.dreads) { a.dreads = makeDreads(); a.person.root.add(a.dreads); }
+      else if (!wantDreads && a.dreads) { a.person.root.remove(a.dreads); a.dreads = null; }
+      if (wantDreads && !a.chain) { a.chain = makeGoldChain(); a.person.root.add(a.chain); }
+      else if (!wantDreads && a.chain) { a.person.root.remove(a.chain); a.chain = null; }
       // clicks on a patient in the chair open the operatory
       const inChair = (p.state === 'inChair' || p.state === 'toChair') && p.opId !== null;
       a.hit.kind = inChair ? 'op' : 'patient';
@@ -386,7 +452,7 @@ export class Actors {
       const tmp = a ? a.tgt : SCRATCH;
       staffTarget(tmp, PLAYER_STAFF, c, l, 0, 0);
       if (!a) {
-        a = this.make(PLAYER_ID, 'player', 'staff', staffTint('player-you', '#FF7AA8'));
+        a = this.make(PLAYER_ID, 'player', 'staff', staffTint('player-you', this.playerGold ? C.sunshine : '#FF7AA8'));
         this.staff.set(PLAYER_ID, a);
         copyTarget(a.tgt, SCRATCH);
         this.snap(a);
@@ -569,6 +635,8 @@ export class Actors {
     a.headY = a.person.height - (a.person.hipY - 0.52) * sitW - 0.55 * recW + 0.12;
     if (a.hat) a.hat.position.y = a.headY - 0.08;
     if (a.glasses) a.glasses.position.y = a.headY - 0.2;
+    if (a.dreads) a.dreads.position.y = a.headY + 0.08;
+    if (a.chain) a.chain.position.y = a.headY - 0.34;
   }
 
   private senseDoor(a: Actor): void {

@@ -19,6 +19,7 @@ import { bossPortrait, patientPortrait } from './portrait';
 import { reducedMotion } from './settings';
 import { attempt } from './safe';
 import { bar, btn, chip, setBar } from './widgets';
+import { fiveStarRule, type CleanRules } from './endlogic';
 
 export interface ResultOpts {
   patient: { name: string; archetype: ArchetypeId };
@@ -37,6 +38,8 @@ export interface ResultOpts {
   caseType?: CaseType;
   bonus?: BonusId | null;
   special?: Partial<CaseSpecial>;
+  /** Difficulty rules of this clean (DESIGN 11.5): the hero says what 5 stars needed. */
+  rules?: Partial<CleanRules> | null;
 }
 
 export function showCleanResult(o: ResultOpts): Promise<void> {
@@ -67,6 +70,7 @@ export function showCleanResult(o: ResultOpts): Promise<void> {
     h('div.result-stars', ...starEls),
     h('div.result-title', heroTitle),
     h('div.result-quality', walkout ? `Comfort ran out. Quality ${pct(r.quality)}` : `Quality ${pct(r.quality)}`),
+    o.rules && !o.school ? ruleLine(fiveStarRule(o.rules, o.parSeconds), r, starCount) : null,
   );
 
   // ---- before / after
@@ -334,6 +338,15 @@ export function showCleanResult(o: ResultOpts): Promise<void> {
   })().catch((e) => { console.error(e); finish(); });
 
   return m.closed.then(() => finish());
+}
+
+/** "5 stars: 94% and under 1:20" with what this clean reached. */
+function ruleLine(rule: ReturnType<typeof fiveStarRule>, r: CleanResult, stars: number): HTMLElement {
+  const qOk = r.quality >= rule.quality - 1e-6;
+  const tOk = rule.seconds === null || r.seconds <= rule.seconds;
+  const met = stars >= 5 || (qOk && tOk);
+  const miss = met ? '' : !qOk && !tOk ? 'Missed both' : !qOk ? 'Quality short' : 'Over time';
+  return h('div.result-rule', { class: { 'is-met': met } }, icon(met ? 'check' : 'target'), h('span', rule.text), miss ? h('span.result-rule-miss', miss) : null);
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));

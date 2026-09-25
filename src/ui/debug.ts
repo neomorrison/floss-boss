@@ -1,7 +1,14 @@
 // window.__fb debug hooks for headless tests (ARCHITECTURE "Debug hooks"). Available in every build.
 import { bus } from '../core/bus';
 import { store } from '../core/store';
-import type { BonusId, CaseSpecial, CaseType, CleanResult, EquipId, HandsOnPayout, OfficeTierId, PendingEvent, SimEvent, Speed, TwistId } from '../core/types';
+import type { BonusId, CaseSpecial, CaseType, CleanResult, Difficulty, DistrictState, EquipId, FinaleState, GameState, HandsOnPayout, OfficeTierId, PendingEvent, SimEvent, Speed, TwistId } from '../core/types';
+import { loadLegacy, saveLegacy } from '../core/legacy';
+import { DISTRICTS, DISTRICT_ORDER } from '../data/city';
+import { DIFFICULTIES } from '../data/difficulty';
+import { offerGalaCard, runFinale, ribbonCutting, showCredits, showGalaResult, showLegacyPage, showMilestone, showParade, showPromotion, showRetireChoice } from './ceremony';
+import { cityStatus } from './endgame';
+import { rulesFor, TITLE_ORDER } from './endlogic';
+import { playerTitle } from './game';
 import { CASES } from '../data/cases';
 import { EVENTS } from '../data/manager';
 import { OFFICES, TIER_ORDER } from '../data/offices';
@@ -83,6 +90,15 @@ function staffUp(idx: number): void {
   }
   for (const o of c.ops) if (!o.staffId) { const h2 = c.staff.find((x) => x.role === 'hygienist' && !c.ops.some((op) => op.staffId === x.id)); if (h2) attempt(() => sim.assignHygienist(s, idx, o.id, h2.id), null, 'assign'); }
   if (!c.staff.some((x) => x.role === 'receptionist')) { const r = want('receptionist'); if (r) attempt(() => sim.hire(s, r.id, idx), null, 'hire'); }
+}
+
+function ensureCity(s: GameState): DistrictState[] {
+  if (!Array.isArray(s.city) || !s.city.length) s.city = DISTRICT_ORDER.map((id) => ({ id, index: DISTRICTS[id].start, served: 0 }));
+  return s.city;
+}
+function ensureFinale(s: GameState): FinaleState {
+  if (!s.finale) s.finale = { milestones: [], galaUnlocked: false, attempts: 0, won: false, wonDay: null, retired: false };
+  return s.finale;
 }
 
 export function installDebug(): void {
@@ -238,6 +254,7 @@ export function installDebug(): void {
         patient: { name: ct === 'pirate' ? 'Captain Molar' : 'Test Patient', archetype: ct === 'pirate' ? 'pirate' : ct === 'candy' ? 'kid' : 'regular' },
         result: r, payout, parSeconds: 120, before: { level: s.player.level, xp: s.player.xp, cash }, after: { level: s.player.level, xp: s.player.xp, cash },
         events: [], phase: s.phase === 'school' ? 'employee' : s.phase, ownedClinicIds: [], caseType: ct, bonus: o.bonus === undefined ? 'combo' : o.bonus, special,
+        rules: attempt(() => sim.cleanRules(s), rulesFor(s.difficulty, playerTitle(s)), 'cleanRules'),
       });
       return CASES[ct].name;
     },
@@ -382,6 +399,106 @@ export function installDebug(): void {
       store.commit({ saveNow: true });
       go('hub');
       return { tier: c.tier, ops: c.ops.length, staff: c.staff.length, cash: s.cash };
+    },
+    // ---------------------------------------------------------------- end game (DESIGN 11)
+    /** Set every district so Smile City sits at `pct` percent (spread a little around it). */
+    city(pct = 50) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const city = ensureCity(s);
+      const t = Math.max(0, Math.min(1, pct / 100));
+      const spread: Record<string, number> = { downtown: 0.08, harbor: -0.06, maple: 0.03, university: -0.03, oldtown: 0.05, uptown: -0.07 };
+      for (const d of city) d.index = Math.max(0, Math.min(1, t + (t > 0 && t < 1 ? spread[d.id] ?? 0 : 0)));
+      store.commit();
+      return cityStatus(s).pct;
+    },
+    /** Reach a city milestone now: the celebration card (100: the parade, then the gala card). */
+    milestone(pct = 50) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const f = ensureFinale(s);
+      if (!f.milestones.includes(pct)) f.milestones = [...f.milestones, pct].sort((a, b) => a - b);
+      if (pct >= 100) f.galaUnlocked = true;
+      s.flags.ui_ms_init = true;
+      delete s.flags[`ui_ms_${pct}`];
+      store.commit();
+      return f.milestones;
+    },
+    /** The Golden Molar Gala is scheduled: show its card ("Take the stage" starts the showcase clean). */
+    gala() {
+      if (!store.loaded) return null;
+      const f = ensureFinale(store.state);
+      f.galaUnlocked = true;
+      store.commit();
+      offerGalaCard();
+      return f;
+    },
+    /** The gala result card (won: the trophy, then the credits, Legacy and the choice when `finale` is true). */
+    galaResult(won = true, finale = false) {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const f = ensureFinale(s);
+      if (won) { f.won = true; f.wonDay = s.day; }
+      store.commit();
+      void showGalaResult(won ? 5 : 3, won ? 0.95 : 0.7, 96, won, [], 'Lil Molar').then(() => { if (won && finale) void runFinale(); });
+      return f;
+    },
+    /** The promotion ceremony for a title (default the current one). */
+    promote(title?: string) {
+      const t = title ?? (store.loaded ? playerTitle(store.state) : TITLE_ORDER[1]);
+      void showPromotion(t);
+      return t;
+    },
+    /** Switch the difficulty of the running game (the chair card and results show its five-star rule). */
+    difficulty(id: Difficulty = 'veteran') {
+      if (!store.loaded || !DIFFICULTIES[id]) return null;
+      store.state.difficulty = id;
+      store.commit();
+      return rulesFor(id, playerTitle(store.state));
+    },
+    /** Cash below zero for n closes (the bank warning banner shows from 2). */
+    distress(n = 2) {
+      if (!store.loaded) return null;
+      store.state.distress = n;
+      store.commit();
+      return n;
+    },
+    /** The ribbon cutting for the active location. */
+    ribbon(kind: 'practice' | 'location' | 'move' = 'practice') {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const c = activeClinic(s);
+      void ribbonCutting({ kind, name: c?.name ?? 'Tester Family Dental', tier: c?.tier ?? 't1', district: c?.district ?? 'downtown' });
+      return kind;
+    },
+    parade() { void showParade(); return true; },
+    /** One milestone card now, without touching the save. */
+    milestoneCard(pct = 70) { void showMilestone(pct, 3500); return pct; },
+    credits() { void showCredits(); return true; },
+    legacyPage() { void showLegacyPage(); return true; },
+    choice() { void showRetireChoice(); return true; },
+    /** Legacy points to spend on the New Game screen. */
+    legacy(points = 8) {
+      const l = loadLegacy();
+      l.points += points;
+      l.earned += points;
+      saveLegacy(l);
+      return l;
+    },
+    /** The patient in your chair becomes the rap star VIP with a Grill Glow-Up. */
+    vip() {
+      if (!store.loaded) return null;
+      const s = store.state;
+      const q = attempt(() => sim.playerQueue(s), []);
+      const p = q[0] ?? activeClinic(s)?.patients.find((x) => x.state !== 'gone' && x.state !== 'noshow');
+      if (!p) return null;
+      p.archetype = 'rapper';
+      p.portrait = 'rapper';
+      p.name = 'Lil Molar';
+      p.caseType = 'grillz';
+      p.vip = true;
+      store.commit();
+      return p.id;
     },
     clean(patientId?: string) {
       if (!store.loaded) return null;

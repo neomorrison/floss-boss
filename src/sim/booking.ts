@@ -9,6 +9,7 @@ import { CASES, CASE_ORDER } from '../data/cases';
 import { ARCHETYPES, PATIENT_ARCHETYPES } from '../data/patients';
 import { SimClinic, SimPatient, emptyDayStats, hasSkill, isPresent, opClosed, opStaffed, q64, staffById } from './internal';
 import { archetypeWeight, makePatient, pickArchetype } from './patients';
+import { npcDirtTime } from './difficulty';
 import { archetypeForCase, caseAllowed, caseWeight, pickCase } from './cases';
 import { shiftSize } from './goals';
 import {
@@ -36,6 +37,9 @@ export const AWARENESS_MAX = 1.15;
 const WALKIN_RATE = 0.12;
 /** AI Scheduler capacity bonus. */
 const AI_SCHEDULER = 1.1;
+
+/** Legacy perk Famous Name: demand +10% at every location (DESIGN 11.4). */
+export const FAMOUS_NAME_DEMAND = 1.1;
 
 export function weekdayOf(day: number): number {
   return ((day - 1) % 5 + 5) % 5;
@@ -65,6 +69,7 @@ export function demandLambda(state: GameState, c: Clinic, weekday: number, clean
     * (hasSkill(state, 'marketer') ? 1.12 : 1)
     * equipDemand(state, c)
     * (c.ownedByPlayer ? modAgg(state, c).demand : 1)
+    * (c.ownedByPlayer && state.legacyPerks?.includes('famousName') ? FAMOUS_NAME_DEMAND : 1)
     * WEEKDAY_DEMAND[weekday];
   const idx = state.locations.indexOf(c);
   const hasManager = c.staff.some((s) => s.role === 'manager');
@@ -92,7 +97,7 @@ export function hygienistFactor(state: GameState, c: Clinic, op: Operatory, s: S
   if (asst && isPresent(state, asst)) f *= 0.8 / perkMult(asst, 'speed');
   f *= opDuration(c, op);
   f /= perkMult(s, 'speed');
-  if (c.ownedByPlayer) f /= modAgg(state, c).speed;
+  if (c.ownedByPlayer) f = f / modAgg(state, c).speed * npcDirtTime(state);   // heavier mouths on harder settings
   return f;
 }
 
@@ -302,19 +307,30 @@ export function bookClinic(state: GameState, c: Clinic, fromMin0 = OPEN_MIN): vo
   }
   // VIPs: event guests booked for today, and the Smile Studio makeover (one a day)
   const vips = (sc.vips ?? []).filter((v) => v.day === state.day);
-  if (has(c, 'smileStudio')) vips.push({ fee: STUDIO_VIP_FEE, weight: VIP_WEIGHT, day: state.day });
+  if (has(c, 'smileStudio')) {
+    // the Smile Studio's makeover VIP: an influencer most days, the rap star about one day in three (DESIGN 11.6)
+    const star = caseAllowed(state, c, 'grillz') && rng.chance(STUDIO_STAR_CHANCE);
+    vips.push({ fee: STUDIO_VIP_FEE, weight: VIP_WEIGHT, day: state.day, ...(star ? { archetype: 'rapper' as const, caseType: 'grillz' as const } : {}) });
+  }
   vips.forEach((v, i) => {
     const t = Math.round(Math.max(fromMin + 30, Math.min(last - 60, 600 + 150 * i + rng.range(0, 40))));
-    c.patients.push(makeVip(state, c, rng, t, v.fee, v.weight));
+    c.patients.push(makeVip(state, c, rng, t, v.fee, v.weight, v.archetype, v.caseType));
   });
   c.patients.sort((a, b) => a.apptMin - b.apptMin);
 }
 
-/** A VIP patient (event guest or Smile Studio makeover): flat fee, review weight 5, seated first. */
-export function makeVip(state: GameState, c: Clinic, rng: Rng, t: number, fee: number, weight: number): SimPatient {
+/** The Smile Studio's VIP is the rap star this share of days (the influencer otherwise). */
+export const STUDIO_STAR_CHANCE = 0.35;
+
+/** A VIP patient (event guest or Smile Studio makeover): flat fee, review weight 5, seated first. The event
+ * decides who comes (the Celebrity Walk-in brings the rap star and his grill); by default an influencer
+ * for a whitening (or routine) case. A case the clinic cannot take falls back the same way. */
+export function makeVip(state: GameState, c: Clinic, rng: Rng, t: number, fee: number, weight: number, archetype?: ArchetypeId, caseType?: CaseType): SimPatient {
   const white = caseAllowed(state, c, 'whitening');
+  const arch: ArchetypeId = archetype ?? 'influencer';
+  const ct: CaseType = caseType && caseAllowed(state, c, caseType) ? caseType : arch === 'influencer' ? (white ? 'whitening' : 'routine') : pickCase(state, c, arch, rng);
   const p = makePatient(state, c, rng, {
-    apptMin: t, arriveAt: q64(Math.max(OPEN_MIN, t - 5)), walkIn: false, archetype: 'influencer', caseType: white ? 'whitening' : 'routine',
+    apptMin: t, arriveAt: q64(Math.max(OPEN_MIN, t - 5)), walkIn: false, archetype: arch, caseType: ct,
   });
   p.vip = true;
   p.vipFee = Math.round(fee);

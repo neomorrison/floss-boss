@@ -3,6 +3,7 @@ import { bus } from '../core/bus';
 import { money } from '../core/format';
 import { store } from '../core/store';
 import type { CleanResult, CleanSetup, HandsOnPayout, SimEvent } from '../core/types';
+import type { ClinicView } from '../clinic';
 import * as sim from '../sim';
 import { layers } from './app';
 import { h } from './dom';
@@ -34,6 +35,8 @@ export function hubBridge(): HubBridge | null {
 }
 
 export interface HubBridge {
+  /** The 3D clinic view while it is mounted (ceremonies, city mood, trophies), else null. */
+  view?(): ClinicView | null;
   setClinicVisible(v: boolean): void;
   clinicEvents(events: SimEvent[]): void;
   focusOp(opId: string | null): void;
@@ -143,7 +146,7 @@ export async function cleanPatient(patientId: string, hub: HubBridge): Promise<v
   await showCleanResult({
     patient, patientId, result, payout: out.payout, parSeconds: setup.parSeconds, before, after,
     events: out.events, phase: s.phase, ownedClinicIds: ownedIds(),
-    caseType: setup.caseType, bonus: setup.bonus, special: setup.special,
+    caseType: setup.caseType, bonus: setup.bonus, special: setup.special, rules: setup.rules,
   });
   if (after.level > before.level) showLevelUp(after.level);
   // the next patient may already be seated after the fast-forward

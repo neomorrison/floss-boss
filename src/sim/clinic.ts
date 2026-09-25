@@ -22,6 +22,7 @@ import {
 import { hygienistFactor, onlyPlayerHands } from './booking';
 import { checkAchievements, progressGoal } from './goals';
 import { completeHuddle, eventById, huddlePending } from './manager';
+import { checkMilestones, creditPatient, creditWalkout } from './city';
 import {
   VIP_WEIGHT, addStaffXp, addonMinutesMult, closeMin, has, modAgg, opComfort, opDuration, opQuality, perkAdd, perkMult, specialty,
   suppliesMult,
@@ -84,6 +85,7 @@ export function tickWorld(state: GameState, minutes: number, hold: readonly stri
   }
   if (!state.dayOver) state.minute = end;
   state.rng = rng.state();
+  checkMilestones(state, ev);
   if (ev.length) checkAchievements(state, ev);
   return ev;
 }
@@ -499,6 +501,8 @@ function walkout(ctx: Ctx, p: SimPatient, t: number, reason: 'wait' | 'comfort')
   p.mood = 'angry';
   c.day.walkouts += 1;
   pushEvent(ctx.ev, { type: 'walkout', clinicId: c.id, patientId: p.id, reason });
+  // Smile City: a walkout costs the patient's district (DESIGN 11.1); employed, only your own patients count
+  if (ctx.owner || (ctx.employee && p.isPlayerPatient)) creditWalkout(state, c, p, reason);
   if (reason === 'wait') {
     // waited too long: reviews half the time, 2 stars, weight 0.5 (DESIGN 10.3); a VIP still counts more
     if (ctx.rng.chance(WAIT_REVIEW_CHANCE)) addReview(state, c, p, 2, ctx.ev, 'Waited too long. Left before my turn.', 1, WAIT_REVIEW_WEIGHT * (p.vip ? VIP_WEIGHT : 1));
@@ -545,6 +549,8 @@ function checkout(ctx: Ctx, p: SimPatient): void {
   for (const s of c.staff) {
     if (s.role === 'manager' && isPresent(state, s)) addStaffXp(state, c, s, 0.25);
   }
+  // Smile City (DESIGN 11.1): every patient served at your offices; employed, the patients of your chair
+  if (ctx.owner || p.isPlayerPatient) creditPatient(state, c, p, p.quality ?? 0.6, !!p.own);
   if (!p.reviewed) reviewFor(ctx, p);
 }
 
@@ -765,7 +771,7 @@ function dispatchDentists(ctx: Ctx): boolean {
 /** Drop bookkeeping a patient no longer needs once they have left (keeps saves small). */
 function compactGone(p: SimPatient): void {
   delete p.preQ; delete p.preC; delete p.wbase; delete p.stage; delete p.examUntil; delete p.examDone;
-  delete p.billed; delete p.arriveAt; delete p.hands; delete p.reviewed; delete p.pm; delete p.gel;
+  delete p.billed; delete p.arriveAt; delete p.hands; delete p.reviewed; delete p.pm; delete p.gel; delete p.own;
 }
 
 function sendEveryoneHome(ctx: Ctx): void {

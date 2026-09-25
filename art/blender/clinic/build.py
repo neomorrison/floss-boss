@@ -1,7 +1,7 @@
 # Floss Boss clinic + people models: headless Blender build.
 #
 #   "C:/Program Files/Blender Foundation/Blender 5.1/blender.exe" --background --factory-startup \
-#       --python art/blender/clinic/build.py -- [--only key,key | --only v3] [--preview] [--no-thumbs] [--no-export]
+#       --python art/blender/clinic/build.py -- [--only key,key | --only v3 | --only v4] [--preview] [--no-thumbs] [--no-export]
 #
 # Writes public/models/<key>.glb for every key in CLINIC_MODELS and PEOPLE_MODELS (src/data/assets.ts),
 # public/img/thumbs/<key>.png for the chairs, op upgrades and equipment, and with --preview a 384 px
@@ -28,12 +28,13 @@ import front  # noqa: E402
 import people  # noqa: E402
 import equipment  # noqa: E402
 import props  # noqa: E402
+import endgame  # noqa: E402
 
-for _m in (lib, chairs, operatory, front, people, equipment, props):
+for _m in (lib, chairs, operatory, front, people, equipment, props, endgame):
     importlib.reload(_m)
 
 REGISTRY = {}
-for _m in (chairs, operatory, front, people, equipment, props):
+for _m in (chairs, operatory, front, people, equipment, props, endgame):
     REGISTRY.update(_m.MODELS)
 
 # Keys listed in src/data/assets.ts, in order.
@@ -50,8 +51,11 @@ CLINIC_KEYS = [
     # v3 event props (DESIGN 10.2)
     'prop_puppy', 'prop_balloons', 'prop_jolly_roger', 'prop_rival_sign', 'prop_red_carpet', 'prop_generator',
     'prop_camera_crew',
+    # end game (DESIGN 11): Smile Van on the street, the trophy wall, the ribbon for openings
+    'smile_van', 'trophy_golden_molar', 'plaque_frame', 'prop_ribbon',
 ]
 V3_KEYS = CLINIC_KEYS[CLINIC_KEYS.index('water_filter'):]
+V4_KEYS = CLINIC_KEYS[CLINIC_KEYS.index('smile_van'):]
 PEOPLE_KEYS = ['char_adult', 'char_kid', 'char_senior', 'char_staff', 'char_dentist']
 ALL_KEYS = CLINIC_KEYS + PEOPLE_KEYS
 
@@ -66,6 +70,8 @@ THUMB_KEYS = [
     'water_filter', 'aroma_diffuser', 'loyalty_board', 'staff_lockers', 'digital_xray', 'sound_panel', 'patient_tablet',
     'laser_whitening', 'spa_lounge', 'cadcam_mill', 'rooftop_planter', 'smile_studio', 'research_desk', 'helipad_sign',
     'ai_screen',
+    # v4: EQUIPMENT smileVan
+    'smile_van',
 ]
 # Thumbnail camera direction overrides (Blender space, pointing from the model toward the camera). Tall thin
 # props get a higher camera, which foreshortens the pole so the whole object still reads at card size.
@@ -158,6 +164,8 @@ def main():
     keys = opts['only'] or ALL_KEYS
     if keys == ['v3']:
         keys = V3_KEYS
+    if keys == ['v4']:
+        keys = V4_KEYS
     unknown = [k for k in keys if k not in REGISTRY]
     if unknown:
         print('UNKNOWN KEYS', unknown)

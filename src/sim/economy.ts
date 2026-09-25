@@ -1,6 +1,6 @@
 // Shop, skills, the practice, offices, loans, prices and the day close. DESIGN 4.3, 4.4, 7, 8.6 to 8.8.
 import type {
-  ActionResult, ChairTier, Clinic, DayLine, DayReport, EquipId, ExtraId, GameState, OfficeTierId, OpUpgradeId, PriceKey,
+  ActionResult, ChairTier, Clinic, DayLine, DayReport, DistrictId, EquipId, ExtraId, GameState, OfficeTierId, OpUpgradeId, PriceKey,
   SimEvent, SkillId, ToolSlot,
 } from '../core/types';
 import { clamp } from '../core/rng';
@@ -14,10 +14,13 @@ import { SKILLS, skillById } from '../data/skills';
 import { EXTRAS, NUMBING_GEL_PRICE, TOOLS } from '../data/tools';
 import { CHAIRS, CHAIR_ORDER, EQUIPMENT, OP_UPGRADES } from '../data/upgrades';
 import {
-  REPORTS_MAX, S, SimClinic, SimOp, SimReport, addCash, emptyDayStats, hasSkill, nextId, plural, withRng,
+  REPORTS_MAX, S, SimClinic, SimOp, SimReport, addCash, addTimeline, emptyDayStats, hasSkill, nextId, note, plural, withRng,
 } from './internal';
 import { computeRating } from './clinic';
-import { tierIndex, title } from './progress';
+import { setTitle, tierIndex } from './progress';
+import { DISTRICTS } from '../data/city';
+import { VAN_UNLOCK_PCT, checkMilestones, cityDecay, pickDistrict, runSmileVans } from './city';
+import { diff, rentOf } from './difficulty';
 import { BOSS_DEMAND_EACH, BOSS_DEMAND_MAX, REACH_AFTER_MOVE, bookClinic, bookDay, capacityOf } from './booking';
 import { checkAchievements, claimGoal, endOfDayGoals, makeGoals } from './goals';
 import { makeCandidates, salaryCost, staffDaily } from './staff';
@@ -119,6 +122,7 @@ export function repayLoan(state: GameState, amount: number): ActionResult {
   if (state.cash < a) return fail(NO_CASH);
   addCash(state, -a, 'Loan repayment');
   state.loan -= a;
+  reduceEmergency(state, a);
   if (state.loan <= 0) { state.loan = 0; if (state.cash >= 0) state.flags.debtFree = true; checkAchievements(state, null); }
   return { ok: true, message: state.loan ? `Repaid ${money(a)}` : 'Loan paid off' };
 }
@@ -147,7 +151,7 @@ export function practiceStatus(state: GameState): { ok: boolean; price: number; 
   return { ok: reasons.length === 0, price, maxLoan: ml, cashNeeded, reasons };
 }
 
-function newClinic(state: GameState, tier: OfficeTierId, name: string, playerChair: boolean): Clinic {
+function newClinic(state: GameState, tier: OfficeTierId, name: string, playerChair: boolean, district: DistrictId): Clinic {
   return {
     id: nextId(state, 'c'),
     name: (name || 'My Practice').slice(0, 32),
@@ -170,17 +174,20 @@ function newClinic(state: GameState, tier: OfficeTierId, name: string, playerCha
     modifiers: [],
     campaign: null,
     campaignCooldownUntil: 0,
+    district,
     reach: 0,
     openedDay: state.day,
+    tierDay: state.day,
   } as SimClinic;
 }
 
-export function openPractice(state: GameState, opts: { name: string; loan: number }): ActionResult {
+export function openPractice(state: GameState, opts: { name: string; loan: number; district?: DistrictId }): ActionResult {
   const st = practiceStatus(state);
   if (!st.ok) return fail(st.reasons[0]);
   const err = financed(state, st.price, Math.min(opts.loan, st.maxLoan), st.maxLoan, 'Practice purchase');
   if (err) return err;
-  const c = newClinic(state, 't1', opts.name, true);
+  // the district picker (DESIGN 11.1); by default the least-smiling district
+  const c = newClinic(state, 't1', opts.name, true, pickDistrict(state, opts.district));
   // finished employee goals pay out before the owner goals replace them
   for (const g of state.goals) if (g.done && !g.claimed) claimGoal(state, g.id, null);
   state.phase = 'owner';
@@ -195,7 +202,8 @@ export function openPractice(state: GameState, opts: { name: string; loan: numbe
     makeCandidates(state, rng);
     makeGoals(state, rng);
   });
-  state.player.title = title(state);
+  addTimeline(state, 'office', `Opened ${c.name} in ${DISTRICTS[c.district].name}`);
+  setTitle(state);
   checkAchievements(state, null);
   return { ok: true, message: `${c.name} is open` };
 }
@@ -258,6 +266,7 @@ export function buyEquipment(state: GameState, clinicIndex: number, id: EquipId)
   if (c.equipment.includes(id)) return fail('Already installed');
   if (tierIndex(c.tier) < tierIndex(e.minTier)) return fail(`Needs a ${OFFICES[e.minTier].name}`);
   if (id === 'digitalXray' && !c.equipment.includes('xray')) return fail('Needs the X-Ray Suite');
+  if (id === 'smileVan' && !state.finale?.milestones.includes(VAN_UNLOCK_PCT)) return fail(`Unlocks at Smile City ${VAN_UNLOCK_PCT}%`);
   const price = equipmentPrice(state, clinicIndex, id);
   if (state.cash < price) return fail(NO_CASH);
   addCash(state, -price, 'Equipment');
@@ -316,7 +325,9 @@ export function moveOffice(state: GameState, clinicIndex: number, tier: OfficeTi
   // the bigger office reaches a new neighbourhood: awareness restarts from what word of mouth carries over
   const sc = c as SimClinic;
   sc.reach = Math.min(typeof sc.reach === 'number' ? sc.reach : c.served, REACH_AFTER_MOVE);
-  state.player.title = title(state);
+  sc.tierDay = state.day;   // rent growth starts over at the new tier (DESIGN 11.5)
+  addTimeline(state, 'office', `Moved ${c.name} into the ${OFFICES[tier].name}`);
+  setTitle(state);
   withRng(state, (rng) => makeCandidates(state, rng));   // tops the board up; candidates already on it stay
   checkAchievements(state, null);
   return { ok: true, message: `Moved into the ${OFFICES[tier].name}` };
@@ -340,16 +351,19 @@ export function locationQuote(state: GameState, tier: OfficeTierId): { price: nu
   return { price, maxLoan: ml, ok: true };
 }
 
-export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number): ActionResult {
+/** Open another location. `district` (DESIGN 11.1): where it serves; by default the least-smiling district
+ * without a location. A second location in a district that already has one adds only half as much there. */
+export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number, district?: DistrictId): ActionResult {
   const q = locationQuote(state, tier);
   if (!q.ok) return fail(q.reason ?? 'Cannot open');
   const err = financed(state, q.price, loan, q.maxLoan, 'New location');
   if (err) return err;
-  const c = newClinic(state, tier, name || `Location ${state.locations.length + 1}`, false);
+  const c = newClinic(state, tier, name || `Location ${state.locations.length + 1}`, false, pickDistrict(state, district));
   state.locations.push(c);
   if (!state.dayOver) bookClinic(state, c, Math.max(OPEN_MIN, Math.ceil(state.minute) + 5));
   applyFocus(state);
-  state.player.title = title(state);
+  addTimeline(state, 'office', `Opened ${c.name} in ${DISTRICTS[c.district].name}`);
+  setTitle(state);
   checkAchievements(state, null);
   return { ok: true, message: `${c.name} is open` };
 }
@@ -386,6 +400,8 @@ export const NON_OPERATING_LABELS = new Set([
   'Tools', 'Practice purchase', 'Office move', 'New location', 'Operatories', 'Chairs', 'Operatory upgrades', 'Equipment',
   'Bank loan', 'Loan repayment', 'Loan payment', 'Hiring fees', 'Training', 'Severance', 'Signing bonus', 'Earlier activity',
   'While you were away', 'Goal rewards', 'Events', 'Interviews',
+  // end game (DESIGN 11): city grants, the gala prize, the bank's forced sales and emergency loans, legacy perks
+  'City grant', 'Gala prize', 'Bank sale', 'Emergency loan', 'Head Start',
 ]);
 /** Daily interest on negative cash (DESIGN 8.8). */
 export const OVERDRAFT_RATE = 0.005;
@@ -396,6 +412,84 @@ export const LATE_CLAIM_SHARE = 0.5;
 /** Loan interest per day (Investor Relations halves it). */
 export function loanRate(state: GameState): number {
   return LOAN_DAILY_RATE * (hasSkill(state, 'investorRelations') ? 0.5 : 1);
+}
+
+/** Repayments pay off the emergency (double-interest) part of the loan first. */
+function reduceEmergency(state: GameState, paid: number): void {
+  const s = S(state);
+  if (!s.emergencyLoan) return;
+  s.emergencyLoan = Math.max(0, Math.min(state.loan, s.emergencyLoan - paid));
+  if (!s.emergencyLoan) delete s.emergencyLoan;
+}
+
+/** Closes below zero before the report warns (DESIGN 11.5). */
+export const DISTRESS_WARNING = 2;
+/** Equipment the bank sells goes for this share of its price. */
+export const BANK_SALE_SHARE = 0.5;
+/** A location the bank closes returns this share of its office price. */
+export const BANK_CLOSE_SHARE = 0.5;
+/** An emergency loan covers the overdraft plus this cushion. */
+export const EMERGENCY_CUSHION = 500;
+
+/**
+ * Bankruptcy pressure (DESIGN 11.5), at the day close after every cost: state.distress counts closes in a
+ * row with cash below zero. From DISTRESS_WARNING closes a warning note; at the difficulty's bankruptcyDays
+ * the bank acts: it sells equipment at 50%, newest first (newest location first), until cash is back at
+ * zero; if that is not enough it closes the newest location (half the office price back) when you own more
+ * than one; if cash is still below zero it forces an emergency loan at double interest. Relaxed never acts.
+ */
+export function bankruptcyCheck(state: GameState, notes: string[], ev: SimEvent[] | null): void {
+  if (state.phase !== 'owner') return;
+  if (state.cash >= 0) { state.distress = 0; return; }
+  state.distress = (state.distress ?? 0) + 1;
+  const limit = diff(state).bankruptcyDays;
+  if (limit >= 999) return;
+  if (state.distress < limit) {
+    if (state.distress >= DISTRESS_WARNING) {
+      const left = limit - state.distress;
+      notes.push(`Warning: cash has been below zero for ${state.distress} closes. The bank steps in after ${plural(left, 'more close', 'more closes')} below zero.`);
+      ev?.push({ type: 'toast', text: 'Cash below zero: the bank is watching', kind: 'bad' });
+    }
+    return;
+  }
+  bankActs(state, notes, ev);
+  state.distress = 0;
+}
+
+function bankActs(state: GameState, notes: string[], ev: SimEvent[] | null): void {
+  const sold: string[] = [];
+  // 1. equipment, newest first (newest location first)
+  for (let li = state.locations.length - 1; li >= 0 && state.cash < 0; li--) {
+    const c = state.locations[li];
+    while (c.equipment.length && state.cash < 0) {
+      const id = c.equipment.pop() as EquipId;
+      addCash(state, Math.round(EQUIPMENT[id].price * BANK_SALE_SHARE), 'Bank sale');
+      sold.push(EQUIPMENT[id].name);
+      if (id === 'fishTank' || id === 'spaLounge') c.rating = computeRating(c);
+    }
+  }
+  if (sold.length) notes.push(`The bank sold ${sold.join(', ')} at half price to cover the overdraft.`);
+  // 2. the newest location, when there is more than one
+  if (state.cash < 0 && state.locations.length > 1) {
+    const c = state.locations[state.locations.length - 1];
+    const back = Math.round(OFFICES[c.tier].price * BANK_CLOSE_SHARE);
+    state.locations.pop();
+    state.pendingEvents = (state.pendingEvents ?? []).filter((e) => e.clinicId !== c.id);
+    state.active = Math.max(0, Math.min(state.active, state.locations.length - 1));
+    addCash(state, back, 'Bank sale');
+    addTimeline(state, 'office', `The bank closed ${c.name}`);
+    notes.push(`The bank closed ${c.name} and sold the lease for ${money(back)}.`);
+  }
+  // 3. an emergency loan at double interest for whatever is still missing
+  if (state.cash < 0) {
+    const amt = Math.ceil((-state.cash + EMERGENCY_CUSHION) / 100) * 100;
+    state.loan += amt;
+    const s = S(state);
+    s.emergencyLoan = (s.emergencyLoan ?? 0) + amt;
+    addCash(state, amt, 'Emergency loan');
+    notes.push(`The bank forced an emergency loan of ${money(amt)} at double interest.`);
+  }
+  ev?.push({ type: 'toast', text: 'The bank stepped in', kind: 'bad' });
 }
 
 function todaysOpNet(state: GameState): number {
@@ -416,30 +510,43 @@ export function closeDay(state: GameState): DayReport {
       const sc = c as SimClinic;
       const sal = c.staff.reduce((t, st) => t + salaryCost(state, st), 0);
       addCash(state, -sal, 'Salaries');
-      addCash(state, -OFFICES[c.tier].rent, 'Rent');
+      addCash(state, -rentOf(state, c), 'Rent');
       addCash(state, -Math.round(c.day.supplies), 'Supplies');
       addCash(state, -marketingCost(c), 'Marketing');
       if (c.day.turnedAway > 0) notes.push(`${c.name}: ${plural(c.day.turnedAway, 'patient')} turned away`);
       if ((sc.waitOut ?? 0) > 0) notes.push(`${c.name}: ${plural(sc.waitOut ?? 0, 'patient')} on the waitlist for tomorrow`);
     }
     if (state.loan > 0) {
-      const interest = Math.max(1, Math.round(state.loan * loanRate(state)));
+      // an emergency loan from the bank runs at double interest (DESIGN 11.5)
+      const emergency = Math.min(state.loan, Math.max(0, s.emergencyLoan ?? 0));
+      const interest = Math.max(1, Math.round((state.loan + emergency) * loanRate(state)));
       const pay = Math.min(state.loan, Math.max(1, Math.round(state.loan * LOAN_DAILY_PAYMENT)));
       addCash(state, -interest, 'Loan interest');
       // the bank does not take its payment out of an overdraft (interest still runs)
       if (state.cash >= pay) {
         addCash(state, -pay, 'Loan payment');
         state.loan -= pay;
+        reduceEmergency(state, pay);
       }
       if (state.loan <= 0) {
         state.loan = 0;
+        delete s.emergencyLoan;
         if (state.cash >= 0) state.flags.debtFree = true;
         notes.push('Loan paid off');
       }
     }
     if (state.cash < 0) addCash(state, -Math.max(1, Math.round(-state.cash * OVERDRAFT_RATE)), 'Overdraft interest');
+    // bankruptcy pressure (DESIGN 11.5): closes in a row below zero, a warning, then the bank acts
+    bankruptcyCheck(state, notes, ev);
     withRng(state, (rng) => staffDaily(state, ev, rng));
     endOfDayGoals(state, todaysOpNet(state), ev);
+    // Smile City: the Smile Vans go out (DESIGN 11.1)
+    for (const n of runSmileVans(state)) notes.push(n);
+  }
+  if (state.phase !== 'school') {
+    // quiet districts drift back; milestones reached today get their note, grant and timeline entry
+    cityDecay(state);
+    checkMilestones(state, ev);
   }
   // finished goals left unclaimed: Paperwork Pro files them in full, otherwise they pay half
   const paperwork = hasSkill(state, 'paperworkPro');
@@ -468,7 +575,7 @@ export function closeDay(state: GameState): DayReport {
     waitlist: (c as SimClinic).waitOut ?? 0,
   }));
   for (const m of s.dayNotes ?? []) if (!notes.includes(m)) notes.push(m);
-  if (state.cash < 0) notes.push('Cash is below zero. Overdraft interest is charged daily and staff morale falls.');
+  if (state.cash < 0 && !notes.some((n) => n.startsWith('Warning: cash'))) notes.push('Cash is below zero. Overdraft interest is charged daily and staff morale falls.');
   const report: SimReport = {
     day: state.day,
     weekday: ((state.day - 1) % 5 + 5) % 5,
@@ -515,7 +622,9 @@ export function closeDay(state: GameState): DayReport {
   // the morning huddle: auto-huddle answers the events with their first choice and keeps the focus
   if (owner && state.settings?.autoHuddle) completeHuddle(state, ev);
   withRng(state, (rng) => makeGoals(state, rng));
-  state.player.title = title(state);
+  // a promotion (Floss Boss by valuation) lands here: its note goes to tomorrow's report and the UI compares
+  // player.title before and after closeDay for the ceremony
+  setTitle(state);
   // events raised while closing (achievements, level-ups, quits): the UI emits them after the report.
   // Kept off the saved report so saves stay small.
   return { ...report, events: ev.slice() };

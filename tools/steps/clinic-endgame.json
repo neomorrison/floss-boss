@@ -1,0 +1,54 @@
+[
+  {"goto": "/harness/clinic.html?tier=t1&clean=1&speed=1&player=1&equip=all&minute=600"},
+  {"wait": 2500},
+  {"shot": "out/clinic/t1_00_base.png"},
+
+  {"eval": "window.__harness.setTrophies({plaques:0,gold:0,milestones:0,goldenMolar:false})"},
+  {"wait": 300},
+  {"shot": "out/clinic/t1_01_trophies_empty.png"},
+
+  {"eval": "window.__harness.setTrophies({plaques:30,gold:10,milestones:8,goldenMolar:true})"},
+  {"wait": 500},
+  {"eval": "window.__harness.focus(null)"},
+  {"wait": 600},
+  {"shot": "out/clinic/t1_02_trophies_full.png"},
+
+  {"eval": "window.__harness.setCityMood(1, 0.9)"},
+  {"wait": 800},
+  {"shot": "out/clinic/t1_03_city_mood.png"},
+
+  {"eval": "window.__harness.buyVan()"},
+  {"wait": 400},
+  {"shot": "out/clinic/t1_04_van.png"},
+
+  {"eval": "window.__harness.toggleGoldScrubs()"},
+  {"eval": "window.__harness.select(0)"},
+  {"eval": "window.__harness.focus(0)"},
+  {"wait": 900},
+  {"shot": "out/clinic/t1_05_gold_scrubs.png"},
+
+  {"eval": "window.__harness.toggleRapperMode()"},
+  {"eval": "window.__harness.vipNext()"},
+  {"wait": 4500},
+  {"eval": "const p=window.__harness.clinic.patients.find(p=>p.archetype==='rapper'); if(p){window.__harness.select(null); window.__harness.view.focusOp(null);}"},
+  {"wait": 500},
+  {"shot": "out/clinic/t1_06_rapper.png"},
+
+  {"eval": "window.__harness.ceremony('ribbon')"},
+  {"wait": 700},
+  {"shot": "out/clinic/t1_07_ribbon_hold.png"},
+  {"wait": 700},
+  {"shot": "out/clinic/t1_08_ribbon_snap.png"},
+
+  {"eval": "window.__harness.celebrate && window.__harness.view.celebrate()"},
+  {"wait": 300},
+  {"shot": "out/clinic/t1_09_confetti.png"},
+
+  {"goto": "/harness/clinic.html?tier=t4&clean=1&speed=1&player=1&equip=all&minute=600"},
+  {"wait": 2500},
+  {"eval": "window.__harness.setTrophies({plaques:30,gold:10,milestones:8,goldenMolar:true})"},
+  {"eval": "window.__harness.setCityMood(1, 0.9)"},
+  {"eval": "window.__harness.buyVan()"},
+  {"wait": 800},
+  {"shot": "out/clinic/t4_00_full.png"}
+]

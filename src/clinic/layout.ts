@@ -54,6 +54,16 @@ export interface SeatLayout extends Spot {
 
 export interface WallLayout { rect: Rect; height: number; kind: 'solid' | 'low' | 'glass' }
 
+/** Wall-mounted trophy wall grid (DESIGN 11.2): up to `cols * rows` framed plaques on the lobby's back
+ * wall, plus a floor pedestal nearby for the Golden Molar trophy once it is won. Cell (col, row) center
+ * is `origin.x + col * cellX`, `origin.y - row * cellY`, at `origin.z` facing `origin.yaw`. */
+export interface TrophyWallLayout {
+  cols: number; rows: number;
+  cellX: number; cellY: number;
+  origin: { x: number; y: number; z: number; yaw: number };
+  pedestal: Spot;
+}
+
 export interface ClinicLayout {
   tier: OfficeTierId;
   width: number;
@@ -84,6 +94,8 @@ export interface ClinicLayout {
   walls: WallLayout[];
   sign: Spot;           // sidewalk sign with the clinic name
   deskHit: Rect;        // click target for the front desk
+  trophyWall: TrophyWallLayout;  // DESIGN 11.2
+  billboard: Spot;                // street billboard showing the city percentage (DESIGN 11.1)
 }
 
 // ------------------------------------------------------------------ footprints (meters, at yaw 0: w along X, d along Z)
@@ -343,8 +355,23 @@ function buildLayout(tier: OfficeTierId): ClinicLayout {
     { x: sx(S / 2 + 0.66), z: sz(breakV - 1.15), yaw: -0.5 },
   ];
 
+  // ---------------------------------------------------------------- trophy wall and billboard (DESIGN 11)
+  // A 12x2 grid on the lobby's back wall (wall-mounted, no floor footprint) leaves room on the right for
+  // a floor pedestal in the corner by the operatory wing, clear of the back-row waiting seats. The street
+  // billboard stands further down the sidewalk from the storefront sign.
+  const TW_COLS = 12, TW_ROWS = 2;
+  const twMarginL = 0.6, twMarginR = 1.5;
+  const twWidth = Math.max(0.5, L - twMarginL - twMarginR);
+  const trophyWall: TrophyWallLayout = {
+    cols: TW_COLS, rows: TW_ROWS, cellX: twWidth / (TW_COLS - 1), cellY: 0.5,
+    origin: { x: X0 + twMarginL, y: 1.85, z: Z0 + 0.04, yaw: 0 },
+    pedestal: { x: X0 + L - 0.6, z: Z0 + 0.6, yaw: 0 },
+  };
+  const billboard: Spot = { x: sign.x - 5.6, z: sign.z + 0.35, yaw: 0 };
+
   // ---------------------------------------------------------------- equipment spots
   const equipment: Record<EquipId, Piece> = {
+    smileVan: piece('smile_van', door.x - 1.6, (street.z0 + street.z1) / 2, 0, false, 0),
     deepCert: piece('certificate', X0 + deskU + 1.7, Z0 + 0.04, 0, false, 1.5),
     fishTank,
     espresso,
@@ -407,6 +434,7 @@ function buildLayout(tier: OfficeTierId): ClinicLayout {
     desk, checkin, checkout, queueStep, receptionists, seats, ops, office, manager, staffIdle,
     equipment, decor, outdoor, rugs, partitions, walls, sign,
     deskHit: { x0: deskFoot.x0 - 0.1, z0: deskFoot.z0 - 0.5, x1: deskFoot.x1 + 0.1, z1: deskFoot.z1 + 0.25 },
+    trophyWall, billboard,
   };
 }
 

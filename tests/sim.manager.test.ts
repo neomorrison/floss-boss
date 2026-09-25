@@ -491,7 +491,8 @@ describe('demand, capacity and the waitlist (DESIGN 10.3)', () => {
         for (const e of sim.tick(s, 2)) if (e.type === 'walkout' && e.reason === 'wait') walkouts++;
       }
       const fresh = c.reviews.slice(n0).filter((r) => r.text.startsWith('Waited'));
-      for (const r of fresh) { expect(r.stars).toBe(2); expect(r.weight).toBe(0.5); }
+      // a VIP (the rap star) still counts five times as much
+      for (const r of fresh) { expect(r.stars).toBe(2); expect(r.weight).toBe(r.archetype === 'rapper' ? 2.5 : 0.5); }
       expect(c.reviews.slice(n0).some((r) => r.stars === 1)).toBe(false);
       reviews += fresh.length;
     }

@@ -12,12 +12,12 @@ export interface DistrictDef {
 }
 
 export const DISTRICTS: Record<DistrictId, DistrictDef> = {
-  downtown: { id: 'downtown', name: 'Downtown', blurb: 'Office towers and coffee on every corner.', population: 900, start: 0.25, neighbors: ['harbor', 'oldtown', 'uptown'], color: '#3DD6B5' },
-  harbor: { id: 'harbor', name: 'Harbor', blurb: 'Fishing boats, salty air, the odd pirate.', population: 700, start: 0.15, neighbors: ['downtown', 'oldtown'], color: '#4C9BE8' },
-  maple: { id: 'maple', name: 'Maple Heights', blurb: 'Big yards, minivans, a lot of kids.', population: 800, start: 0.2, neighbors: ['university', 'uptown'], color: '#FFB347' },
-  university: { id: 'university', name: 'University Hill', blurb: 'Students living on energy drinks.', population: 750, start: 0.18, neighbors: ['maple', 'oldtown'], color: '#9B6CD6' },
-  oldtown: { id: 'oldtown', name: 'Old Town', blurb: 'Cobblestones, retirees, a very old bakery.', population: 650, start: 0.22, neighbors: ['downtown', 'harbor', 'university'], color: '#E9A23B' },
-  uptown: { id: 'uptown', name: 'Uptown', blurb: 'Penthouses, galleries, celebrity sightings.', population: 850, start: 0.12, neighbors: ['downtown', 'maple'], color: '#FF7AA8' },
+  downtown: { id: 'downtown', name: 'Downtown', blurb: 'Office towers and coffee on every corner.', population: 1440, start: 0.25, neighbors: ['harbor', 'oldtown', 'uptown'], color: '#3DD6B5' },
+  harbor: { id: 'harbor', name: 'Harbor', blurb: 'Fishing boats, salty air, the odd pirate.', population: 1120, start: 0.15, neighbors: ['downtown', 'oldtown'], color: '#4C9BE8' },
+  maple: { id: 'maple', name: 'Maple Heights', blurb: 'Big yards, minivans, a lot of kids.', population: 1280, start: 0.2, neighbors: ['university', 'uptown'], color: '#FFB347' },
+  university: { id: 'university', name: 'University Hill', blurb: 'Students living on energy drinks.', population: 1200, start: 0.18, neighbors: ['maple', 'oldtown'], color: '#9B6CD6' },
+  oldtown: { id: 'oldtown', name: 'Old Town', blurb: 'Cobblestones, retirees, a very old bakery.', population: 1040, start: 0.22, neighbors: ['downtown', 'harbor', 'university'], color: '#E9A23B' },
+  uptown: { id: 'uptown', name: 'Uptown', blurb: 'Penthouses, galleries, celebrity sightings.', population: 1360, start: 0.12, neighbors: ['downtown', 'maple'], color: '#FF7AA8' },
 };
 export const DISTRICT_ORDER: DistrictId[] = ['downtown', 'harbor', 'maple', 'university', 'oldtown', 'uptown'];
 /** Bright Smiles Dental (the employee phase) is in Downtown. */

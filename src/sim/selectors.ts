@@ -14,6 +14,8 @@ import { salaryCost } from './staff';
 import { campaignStatus } from './manager';
 import { CAMPAIGN_ORDER } from '../data/manager';
 import { LOAN_DAILY_PAYMENT } from '../core/constants';
+import { rentOf } from './difficulty';
+import { galaStatus } from './finale';
 
 export function activeClinic(state: GameState): Clinic | null {
   if (state.phase === 'employee') return state.employer;
@@ -33,7 +35,7 @@ export function forecast(state: GameState, clinicIndex: number): { demand: numbe
   const revenue = Math.round(served * (fee + addonShare));
   let costs = 0;
   if (c.ownedByPlayer) {
-    costs = c.staff.reduce((t, s) => t + salaryCost(state, s), 0) + OFFICES[c.tier].rent + marketingCost(c) + Math.round(served * 10);
+    costs = c.staff.reduce((t, s) => t + salaryCost(state, s), 0) + rentOf(state, c) + marketingCost(c) + Math.round(served * 10);
     if (clinicIndex === 0 && state.loan > 0) costs += Math.round(state.loan * (loanRate(state) + LOAN_DAILY_PAYMENT));
   }
   return { demand: Math.round(lambda * 10) / 10, capacity, revenue, costs: Math.round(costs) };
@@ -89,6 +91,8 @@ export function nextHint(state: GameState): string {
   const c = activeClinic(state);
   if (!c) return '';
   const idx = state.locations.indexOf(c);
+  if (galaStatus(state).ready) return 'The Golden Molar Gala is ready';
+  if ((state.distress ?? 0) >= 2) return 'Cash is below zero. The bank is watching';
   // staffing and demand first: the Skills badge already shows unspent points
   const openOp = c.ops.findIndex((o) => o.staffId == null);
   if (openOp >= 0) return `Hire a hygienist to staff operatory ${openOp + 1}`;

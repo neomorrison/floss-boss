@@ -8,14 +8,37 @@ import { OFFICES } from '../data/offices';
 import type { ClinicLayout, OpSlotLayout, Piece, Rect, V2 } from './layout';
 import {
   C, mat, glassMat, hitMat, tileTexture, woodTexture, concreteTexture, streetTexture, outlineTexture,
-  numberTexture, signTexture, roundRect,
+  numberTexture, signTexture, billboardTexture, roundRect, pickBy, hash01,
 } from './palette';
 import { box, cyl, ball, makeProp, doorLeaf, loadedModel } from './props';
 import { batchStatic } from './batch';
+import {
+  createPerson, disposePerson, applyPose, type Person, type PersonKind, type Tint,
+  SKINS, HAIRS, SHIRTS, PANTS,
+} from './people';
+
+/** Trophy wall summary passed by the UI (DESIGN 11.2): counts of framed plaques by kind, plus whether
+ * the Golden Molar trophy has been won. Up to `cols * rows` plaques actually show (see layout.ts). */
+export interface TrophySummary { plaques: number; gold: number; milestones: number; goldenMolar: boolean }
 
 export interface HitInfo { kind: 'op' | 'slot' | 'desk' | 'patient' | 'staff'; id: string; slot?: number }
 
 interface Popper { obj: THREE.Object3D; t: number; base: number }
+
+let confettiGeo: THREE.PlaneGeometry | null = null;
+
+/** A small framed plaque for the trophy wall (DESIGN 11.2): `plaque_frame` (the GLB once art ships, a
+ * procedural stand-in otherwise) with a color-coded gem accent, since a shared GLB's own material cannot
+ * be retinted per instance without cloning it away from every other plaque on the wall. Gold for case
+ * masteries, mint for city milestones, the frame's own color for everything else. */
+function plaqueMesh(kind: 'gold' | 'milestone' | 'other'): THREE.Object3D {
+  const g = grp(makeProp('plaque_frame'));
+  if (kind !== 'other') {
+    const c = kind === 'gold' ? C.sunshine : C.mint;
+    g.add(ball(0.026, mat(c, 0.3, kind === 'gold' ? 0.6 : 0, c, 0.4), 0.13, 0.09, 0.03, 0));
+  }
+  return g;
+}
 
 function rectW(r: Rect) { return r.x1 - r.x0; }
 function rectD(r: Rect) { return r.z1 - r.z0; }
@@ -94,6 +117,22 @@ function proxyBox(r: Rect, h: number, info: HitInfo): THREE.Mesh {
   m.userData.hit = info;
   m.userData.ownGeo = true;
   return m;
+}
+
+function grp(...kids: THREE.Object3D[]): THREE.Group {
+  const g = new THREE.Group();
+  for (const k of kids) g.add(k);
+  return g;
+}
+
+/** A small tint for the ambient sidewalk crowd (passers-by, the ribbon-cutting crowd): the same shared
+ * palette people.ts uses for patients, hashed off a local seed string rather than a real id. */
+function crowdTint(seed: string): Tint {
+  return {
+    skin: pickBy(SKINS, seed, 61), hair: pickBy(HAIRS, seed, 62), shirt: pickBy(SHIRTS, seed, 63),
+    pants: pickBy(PANTS, seed, 64), shoes: pickBy(['#3A4A52', '#FFFFFF', '#E8505B'], seed, 65),
+    scrubs: '#2BB3A3', hairStyle: Math.floor(hash01(seed, 66) * 3),
+  };
 }
 
 function disposeOwned(root: THREE.Object3D): void {
@@ -188,6 +227,16 @@ export class Office {
   private sign: THREE.Object3D | null = null;
   private signTurn = 0;
 
+  // ---------------------------------------------------------------- end game (DESIGN 11)
+  private trophyGroup = new THREE.Group();
+  private trophyData: TrophySummary = { plaques: 0, gold: 0, milestones: 0, goldenMolar: false };
+  private cityGroup = new THREE.Group();
+  private cityData = { district: 0, city: 0 };
+  private passers: { person: Person; x: number; dir: number; speed: number; phase: number; seed: string }[] = [];
+  private confettiGroup = new THREE.Group();
+  private confetti: { obj: THREE.Mesh; vx: number; vy: number; vz: number; spin: number; life: number }[] = [];
+  private ribbon: { group: THREE.Group; leafL: THREE.Group; leafR: THREE.Group; crowd: Person[]; phase: 'hold' | 'snap' | 'done'; t: number } | null = null;
+
   /** Turn the sidewalk sign toward the camera (portrait screens look at the office from the side). */
   setSignTurn(yaw: number): void {
     this.signTurn = yaw;
@@ -195,7 +244,10 @@ export class Office {
   }
 
   constructor() {
-    this.group.add(this.env, this.ops, this.equip, this.modProps);
+    this.trophyGroup.name = 'fbc-trophy-group';
+    this.cityGroup.name = 'fbc-city-group';
+    this.confettiGroup.name = 'fbc-confetti-group';
+    this.group.add(this.env, this.ops, this.equip, this.modProps, this.trophyGroup, this.cityGroup, this.confettiGroup);
     const selGeo = new THREE.PlaneGeometry(1, 1); selGeo.rotateX(-Math.PI / 2);
     this.selection = new THREE.Mesh(selGeo, new THREE.MeshBasicMaterial({ map: outlineTexture(C.bubblegum, false), transparent: true, depthWrite: false }));
     this.selection.visible = false;
@@ -256,6 +308,7 @@ export class Office {
   // ---------------------------------------------------------------- building shell
 
   private buildEnv(l: ClinicLayout, c: Clinic): void {
+    this.layout = l;
     disposeOwned(this.env);
     this.env.clear();
     this.envProxies.length = 0;
@@ -387,6 +440,9 @@ export class Office {
     E.add(dp);
     this.envProxies.push(dp);
     this.refreshProxies();
+    // end game dressing (DESIGN 11): rebuilt here too, so a move or a tier change repositions them
+    this.renderTrophyWall();
+    this.renderCityMood();
   }
 
   private addWall(E: THREE.Group, r: Rect, h: number, kind: 'solid' | 'low' | 'glass', l: ClinicLayout): void {
@@ -509,6 +565,164 @@ export class Office {
 
   openDoor(nowSec: number): void { this.doorOpenUntil = nowSec + 1.1; }
 
+  // ---------------------------------------------------------------- trophy wall (DESIGN 11.2)
+
+  /** Trophy wall summary from the UI: rebuilds the plaque grid and the Golden Molar pedestal now. */
+  setTrophies(data: TrophySummary): void {
+    this.trophyData = data;
+    this.renderTrophyWall();
+  }
+
+  private renderTrophyWall(): void {
+    const l = this.layout;
+    disposeOwned(this.trophyGroup);
+    this.trophyGroup.clear();
+    if (!l) return;
+    const tw = l.trophyWall;
+    const { plaques, gold, milestones, goldenMolar } = this.trophyData;
+    const cap = tw.cols * tw.rows;
+    // gold case masteries first, then city milestones, then everything else (achievements), capped at
+    // the grid's capacity so a long career still reads as "the wall is full", not an overflowing pile
+    const order: { n: number; kind: 'gold' | 'milestone' | 'other' }[] = [
+      { n: Math.max(0, gold), kind: 'gold' },
+      { n: Math.max(0, milestones), kind: 'milestone' },
+      { n: Math.max(0, plaques), kind: 'other' },
+    ];
+    let shown = 0;
+    outer: for (const group of order) {
+      for (let k = 0; k < group.n; k++) {
+        if (shown >= cap) break outer;
+        const col = shown % tw.cols, row = Math.floor(shown / tw.cols);
+        const x = tw.origin.x + col * tw.cellX;
+        const y = tw.origin.y - row * tw.cellY;
+        this.trophyGroup.add(place(plaqueMesh(group.kind), x, tw.origin.z, tw.origin.yaw, y));
+        shown++;
+      }
+    }
+    if (goldenMolar) {
+      this.trophyGroup.add(box(0.3, 0.14, 0.3, mat(C.woodDark, 0.7), tw.pedestal.x, 0, tw.pedestal.z, 0.02));
+      this.trophyGroup.add(place(makeProp('trophy_golden_molar'), tw.pedestal.x, tw.pedestal.z, tw.pedestal.yaw, 0.14));
+    }
+    this.trophyGroup.userData.noBatch = true;
+    this.trophyGroup.traverse((o) => { o.userData.noBatch = true; });
+  }
+
+  // ---------------------------------------------------------------- city mood (DESIGN 11.1, 11.2)
+
+  /** districtIndex: this location's own Smile Index (0..1); cityIndex: the city-wide index (0..1). More
+   * (and happier) passers-by as the district smiles; the street billboard reads the city percent from 50%. */
+  setCityMood(districtIndex: number, cityIndex: number): void {
+    this.cityData = { district: Math.max(0, Math.min(1, districtIndex)), city: Math.max(0, Math.min(1, cityIndex)) };
+    this.renderCityMood();
+  }
+
+  private renderCityMood(): void {
+    const l = this.layout;
+    disposeOwned(this.cityGroup);
+    for (const p of this.passers) disposePerson(p.person);
+    this.passers.length = 0;
+    this.cityGroup.clear();
+    if (!l) return;
+    const { district, city } = this.cityData;
+    if (city >= 0.5) {
+      const b = l.billboard;
+      const board = new THREE.Group();
+      board.add(cyl(0.05, 0.05, 1.9, mat(C.steel, 0.5), -0.55, 0, 0), cyl(0.05, 0.05, 1.9, mat(C.steel, 0.5), 0.55, 0, 0));
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.85), new THREE.MeshStandardMaterial({ map: billboardTexture(Math.round(city * 100)), roughness: 0.5 }));
+      face.position.set(0, 2.1, 0.03);
+      face.userData.ownGeo = true; face.userData.ownMat = true;
+      board.add(face);
+      board.add(box(1.76, 0.1, 0.1, mat(C.ink, 0.6), 0, 2.6, 0, 0.03));
+      place(board, b.x, b.z, b.yaw);
+      board.userData.noBatch = true;
+      this.cityGroup.add(board);
+    }
+    const n = Math.round(district * 5);
+    const sw = l.zones.sidewalk;
+    for (let i = 0; i < n; i++) {
+      const seed = 'passer' + i;
+      const kind: PersonKind = i % 3 === 0 ? 'kid' : 'adult';
+      const person = createPerson(kind, crowdTint(seed), false);
+      const z = sw.z0 + 0.4 + (i % 3) * 0.55;
+      const speed = (0.35 + hash01(seed, 50) * 0.35) * (0.7 + district * 0.6);
+      const dir = i % 2 === 0 ? 1 : -1;
+      const x = sw.x0 + 0.3 + hash01(seed, 51) * Math.max(0.1, sw.x1 - sw.x0 - 0.6);
+      person.root.position.set(x, 0, z);
+      person.root.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      this.cityGroup.add(person.root);
+      this.passers.push({ person, x, dir, speed, phase: hash01(seed, 52) * 6, seed });
+    }
+    this.cityGroup.userData.noBatch = true;
+    this.cityGroup.traverse((o) => { o.userData.noBatch = true; });
+  }
+
+  /** A few seconds of confetti after a milestone lands (DESIGN 11.2), near the trophy wall. */
+  celebrate(): void {
+    const l = this.layout;
+    if (!l) return;
+    confettiGeo ??= new THREE.PlaneGeometry(0.05, 0.08);
+    const colors = [C.bubblegum, C.sunshine, C.mint, C.sky];
+    const cx = l.trophyWall.origin.x + (l.trophyWall.cols - 1) * l.trophyWall.cellX * 0.5;
+    const cz = l.trophyWall.origin.z + 0.6;
+    for (let i = 0; i < 26; i++) {
+      const o = new THREE.Mesh(confettiGeo, mat(colors[i % colors.length], 0.5));
+      o.position.set(cx + (Math.random() - 0.5) * 2.6, 2.3 + Math.random() * 0.5, cz + (Math.random() - 0.5) * 1.6);
+      o.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      this.confettiGroup.add(o);
+      this.confetti.push({
+        obj: o, vx: (Math.random() - 0.5) * 0.4, vy: -0.5 - Math.random() * 0.35, vz: (Math.random() - 0.5) * 0.4,
+        spin: (Math.random() - 0.5) * 6, life: 2.2 + Math.random() * 0.6,
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- ribbon-cutting ceremony (DESIGN 11.2)
+
+  /** A short ribbon-cutting moment at the door: a ribbon that snaps in two, balloons and a small crowd,
+   * gone a couple of seconds later. The camera sweep is the caller's job (index.ts owns the rig). */
+  playRibbon(): void {
+    const l = this.layout;
+    this.clearRibbon();
+    if (!l) return;
+    const d = l.door;
+    const halfW = d.width / 2 + 0.18;
+    const g = new THREE.Group();
+    g.add(cyl(0.028, 0.028, 1.0, mat(C.sunshine, 0.4), d.x - halfW, 0, d.outside.z));
+    g.add(cyl(0.028, 0.028, 1.0, mat(C.sunshine, 0.4), d.x + halfW, 0, d.outside.z));
+    const leafL = new THREE.Group();
+    leafL.position.set(d.x, 0.86, d.outside.z);
+    leafL.add(box(halfW, 0.07, 0.022, mat(C.bubblegum, 0.4), -halfW, 0, 0, 0.01));
+    const leafR = new THREE.Group();
+    leafR.position.set(d.x, 0.86, d.outside.z);
+    leafR.add(box(halfW, 0.07, 0.022, mat(C.bubblegum, 0.4), 0, 0, 0, 0.01));
+    g.add(leafL, leafR);
+    g.add(place(makeProp('prop_balloons'), d.x - halfW - 0.15, d.outside.z, 0));
+    g.add(place(makeProp('prop_balloons'), d.x + halfW + 0.15, d.outside.z, 0));
+    g.userData.noBatch = true;
+    g.traverse((o) => { o.userData.noBatch = true; });
+    this.group.add(g);
+    const crowd: Person[] = [];
+    for (let i = 0; i < 6; i++) {
+      const seed = 'crowd' + i;
+      const p = createPerson(i % 4 === 0 ? 'kid' : 'adult', crowdTint(seed), false);
+      const row = Math.floor(i / 3), col = i % 3;
+      p.root.position.set(d.x - 0.7 + col * 0.7, 0, d.outside.z + 1.3 + row * 0.6);
+      p.root.rotation.y = Math.PI;
+      applyPose(p, { walk: 0, phase: 0, sit: 0, recline: 0, work: 0, angry: 0, t: 0, seed: hash01(seed, 1) });
+      this.group.add(p.root);
+      crowd.push(p);
+    }
+    this.ribbon = { group: g, leafL, leafR, crowd, phase: 'hold', t: 0 };
+  }
+
+  private clearRibbon(): void {
+    if (!this.ribbon) return;
+    disposeOwned(this.ribbon.group);
+    this.group.remove(this.ribbon.group);
+    for (const p of this.ribbon.crowd) { this.group.remove(p.root); disposePerson(p); }
+    this.ribbon = null;
+  }
+
   update(dt: number, nowSec: number): void {
     // door swings open fast and closes slowly
     const want = nowSec < this.doorOpenUntil ? 1 : 0;
@@ -541,9 +755,52 @@ export class Office {
       this.puppy.position.set(x, 0, z);
       this.puppy.rotation.y = Math.atan2(nx - x, nz - z);
     }
+    // confetti (celebrate()): fall and spin, then are dropped (geometry and materials are shared/cached,
+    // so removing from the scene is the whole cleanup)
+    for (let i = this.confetti.length - 1; i >= 0; i--) {
+      const p = this.confetti[i];
+      p.life -= dt;
+      p.obj.position.x += p.vx * dt; p.obj.position.y += p.vy * dt; p.obj.position.z += p.vz * dt;
+      p.vy -= 1.4 * dt;
+      p.obj.rotation.z += p.spin * dt;
+      if (p.life <= 0 || p.obj.position.y < 0) { this.confettiGroup.remove(p.obj); this.confetti.splice(i, 1); }
+    }
+    // passers-by (city mood): an easy loop up and down the sidewalk
+    if (this.passers.length && this.layout) {
+      const sw = this.layout.zones.sidewalk;
+      for (const p of this.passers) {
+        p.x += p.speed * p.dir * dt;
+        if (p.x > sw.x1 - 0.3) { p.dir = -1; p.x = sw.x1 - 0.3; }
+        else if (p.x < sw.x0 + 0.3) { p.dir = 1; p.x = sw.x0 + 0.3; }
+        p.person.root.position.x = p.x;
+        const wantYaw = p.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+        p.person.root.rotation.y = lerpAngleLocal(p.person.root.rotation.y, wantYaw, Math.min(1, dt * 6));
+        p.phase += p.speed * dt * 5.2;
+        applyPose(p.person, { walk: 1, phase: p.phase, sit: 0, recline: 0, work: 0, angry: 0, t: nowSec, seed: hash01(p.seed, 1) });
+      }
+    }
+    // ribbon-cutting ceremony: hold, snap the two halves apart and drop them, then clear
+    if (this.ribbon) {
+      const r = this.ribbon;
+      r.t += dt;
+      if (r.phase === 'hold' && r.t > 0.9) { r.phase = 'snap'; r.t = 0; }
+      if (r.phase === 'snap') {
+        const k = Math.min(1, r.t / 0.5);
+        r.leafL.rotation.y = -k * 1.4;
+        r.leafR.rotation.y = k * 1.4;
+        r.leafL.position.y = 0.86 - k * k * 0.5;
+        r.leafR.position.y = 0.86 - k * k * 0.5;
+        if (k >= 1) { r.phase = 'done'; r.t = 0; }
+      } else if (r.phase === 'done' && r.t > 2.2) {
+        this.clearRibbon();
+      }
+    }
   }
 
   dispose(): void {
+    this.clearRibbon();
+    for (const p of this.passers) disposePerson(p.person);
+    this.passers.length = 0;
     disposeOwned(this.group);
     if (this.signTex) this.signTex.dispose();
     this.group.traverse((o) => {
@@ -552,6 +809,13 @@ export class Office {
     });
     this.group.clear();
   }
+}
+
+function lerpAngleLocal(a: number, b: number, t: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
 }
 
 function mix(h: number, v: number): number { return Math.imul(h ^ v, 16777619) >>> 0; }

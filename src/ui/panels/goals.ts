@@ -1,4 +1,5 @@
-// Goals: daily goals with Claim and the achievements grid, plus the Cases tab (case mastery, DESIGN 5.9).
+// Goals: daily goals with Claim and the achievements grid, the Cases tab (case mastery, DESIGN 5.9) and the
+// Legacy tab (career stats, timeline, masteries, Smile City; Retire after the Golden Molar, DESIGN 11.2).
 import { money } from '../../core/format';
 import { store } from '../../core/store';
 import type { CaseType, GameState, Goal } from '../../core/types';
@@ -15,6 +16,8 @@ import { icon } from '../icons';
 import { masteryInfo, noDash } from '../logic';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import { bar, btn, chip, empty, sectionTitle, tabs } from '../widgets';
+import { retireFlow } from '../ceremony';
+import { legacyView } from '../legacy';
 
 // hands-on goals, then the owner's management goals (DESIGN 10.7): campaigns, zero walkouts, net, events, rating
 export const GOAL_ICON: Record<Goal['kind'], string> = {
@@ -24,7 +27,7 @@ export const GOAL_ICON: Record<Goal['kind'], string> = {
 /** Owner goal kinds get their own tint (panels.css .goal-icon.kind-*). */
 const OWNER_KINDS = new Set<Goal['kind']>(['campaign', 'noWalkouts', 'net', 'events', 'rating']);
 
-type GoalsTab = 'goals' | 'cases';
+type GoalsTab = 'goals' | 'cases' | 'legacy';
 let pendingTab: GoalsTab | null = null;
 /** Open the Goals panel on a tab next time it is built or shown. */
 export function goalsPanelTab(tab: GoalsTab): void {
@@ -39,14 +42,16 @@ export function goalsPanel(ctx: PanelCtx): PanelInst {
     icon: 'goals',
     key: () => {
       const s = store.state;
-      return JSON.stringify([tab, s.goals.map((g) => [g.id, g.progress, g.done, g.claimed]), s.achievements.length, s.player.mastery, s.player.level, s.phase, s.active]);
+      return JSON.stringify([tab, s.goals.map((g) => [g.id, g.progress, g.done, g.claimed]), s.achievements.length, s.player.mastery, s.player.level, s.phase, s.active,
+        tab === 'legacy' ? [s.day, (s.timeline ?? []).length, s.finale, (s.city ?? []).map((d) => Math.floor(d.index * 100))] : 0]);
     },
     render() {
       const s = store.state;
       if (pendingTab) { tab = pendingTab; pendingTab = null; }
       const unclaimed = s.goals.filter((g) => g.done && !g.claimed).length;
-      const head = tabs<GoalsTab>([{ value: 'goals', label: 'Goals', badge: unclaimed }, { value: 'cases', label: 'Cases' }], tab, (v) => { tab = v; ctx.rerender(); });
-      return h('div.goals-panel', h('div.goals-tabs', head), tab === 'cases' ? casesTab(s) : goalsTab(s));
+      const head = tabs<GoalsTab>([{ value: 'goals', label: 'Goals', badge: unclaimed }, { value: 'cases', label: 'Cases' }, { value: 'legacy', label: 'Legacy' }], tab, (v) => { tab = v; ctx.rerender(); });
+      const body = tab === 'cases' ? casesTab(s) : tab === 'legacy' ? legacyView(s, { onRetire: () => { ctx.close(); void retireFlow(); } }) : goalsTab(s);
+      return h('div.goals-panel', h('div.goals-tabs', head), body);
     },
   };
 }

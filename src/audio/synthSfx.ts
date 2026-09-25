@@ -352,6 +352,123 @@ function penClickShuffleBuilder(): Builder {
   };
 }
 
+// ---------------------------------------------------------------- grillz case and end game (DESIGN 11)
+
+/** A soft brass voice: two slightly detuned saws through a low-pass that swells open and settles. */
+function brass(ctx: OfflineAudioContext, out: GainNode, freq: number, start: number, dur: number, peak: number): void {
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.Q.value = 0.9;
+  lp.frequency.setValueAtTime(freq * 1.5, start);
+  lp.frequency.linearRampToValueAtTime(freq * 4.5, start + 0.06);
+  lp.frequency.linearRampToValueAtTime(freq * 3, start + dur);
+  const env = envGain(ctx, [[start, 0], [start + 0.04, peak], [start + dur * 0.7, peak * 0.75], [start + dur, 0]]);
+  for (const detune of [-6, 6]) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(freq, start);
+    osc.detune.value = detune;
+    osc.connect(lp);
+    osc.start(start);
+    osc.stop(start + dur + 0.05);
+  }
+  lp.connect(env);
+  env.connect(out);
+}
+
+function blingBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a smooth glassy glint (warm like the real take, around 800 Hz): a bell ping with one quiet
+    // inharmonic partial for the sparkle, then a softer ping an octave up
+    bell(noteFreq(7), 2.8, 0.4, 0.45)(ctx, out, rng);
+    tone(ctx, out, { type: 'sine', freq: noteFreq(19), duration: 0.28, start: 0.07, peak: 0.16, attack: 0.004, decay: 0.26 });
+  };
+}
+
+function ayyBuilder(): Builder {
+  return (ctx, out) => {
+    // a friendly rising-then-falling "ayy": a buzzy voice through two formants gliding from "eh" to "ee"
+    const dur = 0.5;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(150, 0);
+    osc.frequency.linearRampToValueAtTime(195, 0.12);
+    osc.frequency.linearRampToValueAtTime(140, dur);
+    const env = envGain(ctx, [[0, 0], [0.03, 1], [dur * 0.6, 0.7], [dur, 0]]);
+    for (const [f0, f1, q, g] of [[560, 330, 5, 0.9], [1750, 2250, 7, 0.5]] as const) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(f0, 0);
+      bp.frequency.linearRampToValueAtTime(f1, dur * 0.8);
+      bp.Q.value = q;
+      const gain = ctx.createGain();
+      gain.gain.value = g;
+      osc.connect(bp);
+      bp.connect(gain);
+      gain.connect(env);
+    }
+    env.connect(out);
+    osc.start(0);
+    osc.stop(dur + 0.02);
+  };
+}
+
+function grillPopBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a snug metallic click (a short bright tick, low-passed) over a round little pop
+    burst(ctx, out, { duration: 0.018, rng, filter: 'bandpass', freq: 3200, Q: 2.5, peak: 0.55, attack: 0.001, decay: 0.016 });
+    tone(ctx, out, { type: 'triangle', freq: 1400, freqEnd: 900, duration: 0.03, peak: 0.25, attack: 0.001, decay: 0.028 });
+    tone(ctx, out, { type: 'sine', freq: 480, freqEnd: 170, duration: 0.09, start: 0.008, peak: 0.6, attack: 0.002, decay: 0.08 });
+  };
+}
+
+function crowdCheerBuilder(): Builder {
+  return (ctx, out, rng) => {
+    const dur = 2.0;
+    // a warm bed of voices: band-passed noise swelling in and out, several overlapping "vowels"
+    for (let i = 0; i < 5; i++) {
+      const f = 500 + rng() * 700;
+      burst(ctx, out, { duration: dur, rng, filter: 'bandpass', freq: f, freqEnd: f * (0.85 + rng() * 0.3), Q: 1.6,
+        peak: 0.3, attack: 0.25 + rng() * 0.2, decay: dur - 0.5 });
+    }
+    // claps: short bright-ish taps scattered through it, fading with the cheer
+    for (let i = 0; i < 26; i++) {
+      const t = rng() * (dur - 0.3);
+      burst(ctx, out, { duration: 0.02, rng, start: t, filter: 'bandpass', freq: 1400 + rng() * 800, Q: 1.2,
+        peak: 0.45 * (1 - t / dur), attack: 0.001, decay: 0.018 });
+    }
+  };
+}
+
+function fanfareBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // brass pickup (G C E G), then a held C major chord, a marimba run sparkling over the top
+    const pickup = [-5, 0, 4, 7];
+    pickup.forEach((s, i) => brass(ctx, out, noteFreq(s - 12), i * 0.16, 0.15, 0.12));
+    for (const s of [0, 4, 7, 12]) brass(ctx, out, noteFreq(s - 12), 0.7, 2.2, 0.07);
+    marimbaRise([7, 12, 16, 19, 24], 0.07, 0.4, 0.18)(ctx, out, rng);
+    marimbaRise([12, 16, 19, 24], 0.06, 0.6, 0.14)(ctx, out, rng);
+  };
+}
+
+function ribbonSnipBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // two blades closing: a short sliding swish into one soft cut
+    burst(ctx, out, { duration: 0.06, rng, filter: 'bandpass', freq: 2200, freqEnd: 3600, Q: 2, peak: 0.25, attack: 0.02, decay: 0.04 });
+    burst(ctx, out, { duration: 0.025, rng, start: 0.06, filter: 'bandpass', freq: 2600, Q: 1.5, peak: 0.6, attack: 0.001, decay: 0.022 });
+    tone(ctx, out, { type: 'sine', freq: 900, freqEnd: 600, duration: 0.04, start: 0.06, peak: 0.2, attack: 0.001, decay: 0.035 });
+  };
+}
+
+function promotionBuilder(): Builder {
+  return (ctx, out, rng) => {
+    // a quick heroic rise (C E G) landing on a held C with brass underneath
+    marimbaRise([0, 4, 7], 0.11, 0.3, 0.28)(ctx, out, rng);
+    tone(ctx, out, { type: 'triangle', freq: noteFreq(12), duration: 0.9, start: 0.33, peak: 0.24, attack: 0.01, decay: 0.88 });
+    for (const s of [0, 4, 7]) brass(ctx, out, noteFreq(s - 12), 0.33, 1.0, 0.07);
+  };
+}
+
 // ---------------------------------------------------------------- key -> recipe table
 const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 | 2 }> = {
   scrape_1: { build: scrape(3200), duration: 0.5 },
@@ -403,6 +520,15 @@ const RECIPES: Record<SfxKey, { build: Builder; duration: number; channels?: 1 |
   perk_pick: { build: marimbaRise([-5, -1, 3], 0.055, 0.28, 0.45), duration: 0.5 },
   huddle: { build: clipboardHuddleBuilder(), duration: 0.5 },
   interview: { build: penClickShuffleBuilder(), duration: 0.3 },
+  // grillz case and end game (DESIGN 11)
+  bling: { build: blingBuilder(), duration: 0.45 },
+  ayy: { build: ayyBuilder(), duration: 0.55 },
+  grill_pop: { build: grillPopBuilder(), duration: 0.15 },
+  crowd_cheer: { build: crowdCheerBuilder(), duration: 2.1 },
+  fanfare_gala: { build: fanfareBuilder(), duration: 3.1 },
+  ribbon_snip: { build: ribbonSnipBuilder(), duration: 0.15 },
+  milestone: { build: marimbaRise([0, 4, 7, 12], 0.09, 0.55, 0.3), duration: 0.9 },
+  promotion: { build: promotionBuilder(), duration: 1.4 },
   door_chime: { build: doorChimeBuilder(), duration: 0.7 },
   cash: { build: cashBuilder(), duration: 0.6 },
   coins: { build: coinsBuilder(), duration: 0.45 },

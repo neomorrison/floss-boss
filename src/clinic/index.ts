@@ -14,7 +14,7 @@ import { OFFICES } from '../data/offices';
 import { PERKS } from '../data/manager';
 import { audio } from '../audio';
 import { layoutFor, type ClinicLayout } from './layout';
-import { Office, type HitInfo } from './office';
+import { Office, type HitInfo, type TrophySummary } from './office';
 import { Actors } from './actors';
 import { CameraRig, attachInput, type TapInfo } from './camera';
 import { OverlayLayer, type Mood } from './overlays';
@@ -30,6 +30,11 @@ export interface ClinicViewHandlers {
   onDeskClick(): void;
 }
 
+/** Trophy wall summary (DESIGN 11.2): counts of framed plaques by kind (gold case masteries, city
+ * milestones, everything else) plus whether the Golden Molar trophy has been won. Up to about 24 plaques
+ * actually show; the rest are just not drawn (the wall reads "full", never overflowing). */
+export type { TrophySummary };
+
 export interface ClinicView {
   frame(clinic: Clinic, minute: number, dt: number): void;
   events(events: SimEvent[]): void;
@@ -39,6 +44,20 @@ export interface ClinicView {
   select(opId: string | null): void;
   /** true while the view is hidden behind the clean scene (skip rendering, keep state). */
   setVisible(visible: boolean): void;
+  /** Trophy wall summary (DESIGN 11.2): rebuilds the plaque grid and the Golden Molar pedestal now. */
+  setTrophies(data: TrophySummary): void;
+  /** City mood (DESIGN 11.1): districtIndex is this location's own Smile Index (0..1, more and happier
+   * passers-by as it rises); cityIndex is the city-wide index (0..1, shown on the street billboard from
+   * 50%). Call again whenever either changes; a no-op call is cheap to skip on the caller's side. */
+  setCityMood(districtIndex: number, cityIndex: number): void;
+  /** A few seconds of confetti after a milestone lands, near the trophy wall. */
+  celebrate(): void;
+  /** A short one-shot ceremony in the diorama. 'ribbon': a camera sweep to the door, a ribbon that snaps
+   * in two, balloons and a small crowd, then back to normal. Skips the camera sweep (not the ribbon
+   * itself) when Settings has reduced motion on. */
+  ceremony(kind: 'ribbon'): void;
+  /** Player look (DESIGN 11.4, the Gold Scrubs legacy perk): true tints your own scrubs gold. */
+  setPlayerStyle(style: { gold: boolean }): void;
   dispose(): void;
 }
 
@@ -117,6 +136,7 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
   let modelsDirty = false;
   let modelsDone = false;
   let selectedOp: string | null = null;
+  let sweepBack: { x: number; z: number; dist: number; at: number } | null = null;
   let w = 1, h = 1;
   let needFit = true;
   let hover: { x: number; y: number } | null = null;
@@ -356,6 +376,8 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
     actors.setBlobs(!shadowsOn);
     prof.actors[prof.i] = performance.now() - tA;
     office.update(Math.min(dt, 0.1), now);
+    // ribbon ceremony (DESIGN 11.2): glide the camera back once its hold at the door has run its course
+    if (sweepBack && now > sweepBack.at) { rig.glideTo(sweepBack.x, sweepBack.z, sweepBack.dist, 0.9); sweepBack = null; }
     rig.update(Math.min(dt, 0.1));
     lightFor(l, minute);
     if (!visible) return;
@@ -469,6 +491,18 @@ export function createClinicView(container: HTMLElement, handlers: Partial<Clini
       overlays.root.style.display = v ? '' : 'none';
       if (!v) { detach?.(); detach = null; } else { attach(); lastMinute = NaN; framesLive = 0; }
     },
+    setTrophies(data) { office.setTrophies(data); },
+    setCityMood(districtIndex, cityIndex) { office.setCityMood(districtIndex, cityIndex); },
+    celebrate() { office.celebrate(); },
+    ceremony(kind) {
+      if (kind !== 'ribbon' || !layout) return;
+      office.playRibbon();
+      if (!loadSettings().reducedMotion) {
+        sweepBack = { x: rig.target.x, z: rig.target.z, dist: rig.distance, at: now + 2.6 };
+        rig.glideTo(layout.door.x, layout.door.outside.z + 0.4, 7.5, 0.8);
+      }
+    },
+    setPlayerStyle(style) { actors.setPlayerGold(style.gold); },
     dispose() {
       if (disposed) return;
       disposed = true;

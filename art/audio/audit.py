@@ -32,6 +32,7 @@ FREQUENCY = {
     'notify': 'frequent (every toast)', 'door_chime': 'frequent (every patient seated)',
     'tooth_ding': 'frequent (tooth contact)', 'shade_tick': 'frequent while curing (every 1.2 s)',
     'squish': 'frequent (every sugar bug squash)',
+    'bling': 'frequent (every diamond buffed, up to 12 a grill)',
 }
 
 

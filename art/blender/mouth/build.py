@@ -24,10 +24,12 @@ import gums  # noqa: E402
 import soft  # noqa: E402
 import tools  # noqa: E402
 import cases  # noqa: E402
+import grill  # noqa: E402
 
-# budgets (docs: teeth 800 to 2,500 tris and < 80 KB, gums/frame < 250 KB, tools < 120 KB, case props < 100 KB)
+# budgets (docs: teeth 800 to 2,500 tris and < 80 KB, gums/frame < 250 KB, tools < 120 KB, case props < 100 KB,
+# the grillz case's grill_diamond < 120 KB)
 BUDGET = {'tooth': (800, 2500, 80), 'gum': (0, 1e9, 250), 'frame': (0, 1e9, 250), 'tool': (0, 1e9, 120),
-          'soft': (0, 1e9, 120), 'case': (0, 1e9, 100)}
+          'soft': (0, 1e9, 120), 'case': (0, 1e9, 100), 'grill': (0, 1e9, 120)}
 
 
 def registry():
@@ -40,6 +42,8 @@ def registry():
         reg[k] = {'fn': fn, 'kind': 'frame' if k == 'mouth_frame' else 'soft', 'uv': False, 'colors': colors}
     for k, (fn, colors) in cases.builders().items():
         reg[k] = {'fn': fn, 'kind': 'case', 'uv': False, 'colors': colors}
+    for k, (fn, colors) in grill.builders().items():
+        reg[k] = {'fn': fn, 'kind': 'grill', 'uv': False, 'colors': colors}
     for k, fn in tools.builders().items():
         reg[k] = {'fn': fn, 'kind': 'tool', 'uv': False, 'colors': False, 'thumb': True}
     return reg
@@ -67,6 +71,7 @@ PREVIEW_VIEW = {
     'gum': (0.0, 1.2, 1.6),
     'frame': (0.25, 0.15, 1.6),
     'case': (0.7, 0.9, 1.1),
+    'grill': (0.35, -0.2, 1.3),
 }
 
 

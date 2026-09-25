@@ -106,6 +106,8 @@ function react(e: SimEvent): void {
       toast({ text: `${e.name} asks for a raise`, sub: `${money(e.ask)} a day`, kind: 'info', icon: 'trendUp', onClick: () => go('staff'), ms: 5000 });
       break;
     case 'toast':
+      // city milestones get their own celebration card (src/ui/ceremony.ts)
+      if (/^Smile City \d+%/.test(e.text)) break;
       toast({ text: noDash(e.text), kind: e.kind });
       break;
     default:

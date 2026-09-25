@@ -60,6 +60,7 @@ export function endingOn(mods: ClinicModifier[] | undefined, day: number): Clini
 
 const CASE_SHORT: Record<CaseType, string> = {
   routine: 'Routine', candy: 'Sugar bug', whitening: 'Whitening', braces: 'Braces', pirate: 'Pirate', deep: 'Deep cleaning',
+  grillz: 'Grill',
 };
 export function caseShort(ct: CaseType): string {
   return CASE_SHORT[ct] ?? ct;

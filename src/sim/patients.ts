@@ -10,12 +10,16 @@ import { pickBonus, pickCase, pickTwists } from './cases';
 import { addonFeeMult, addonMinutesMult, has, modAgg, patienceMult, perkMult } from './effects';
 
 /** Arrival weight of an archetype at a clinic: the tier mix, twice the kids with a Kids Corner, no
- * pirates before level 3 (DESIGN 5.5). */
+ * pirates before level 3 (DESIGN 5.5), the rap star only from level 4 (DESIGN 11.6). */
 export function archetypeWeight(state: GameState, c: Clinic, a: ArchetypeId): number {
   const kids = c.equipment.includes('kidsCorner') ? 2 : 1;
   const pirates = state.player.level >= CASES.pirate.minLevel ? 1 : 0;
-  return ARCHETYPES[a].weight[c.tier] * (a === 'kid' ? kids : 1) * (a === 'pirate' ? pirates : 1);
+  const star = state.player.level >= CASES.grillz.minLevel ? 1 : 0;
+  return ARCHETYPES[a].weight[c.tier] * (a === 'kid' ? kids : 1) * (a === 'pirate' ? pirates : 1) * (a === 'rapper' ? star : 1);
 }
+
+/** Archetypes that always arrive as VIPs (seated first, review weight 5): the rap star. */
+export const VIP_ARCHETYPES: ArchetypeId[] = ['rapper'];
 
 export function pickArchetype(state: GameState, c: Clinic, rng: Rng): ArchetypeId {
   return rng.weighted(PATIENT_ARCHETYPES, (a) => archetypeWeight(state, c, a));
@@ -26,7 +30,7 @@ export function pickArchetype(state: GameState, c: Clinic, rng: Rng): ArchetypeI
 export function caseFeeMult(c: Clinic, p: { caseType: CaseType; service: ServiceId }): number {
   if (!c.ownedByPlayer || p.service !== 'cleaning') return 1;
   const ct = p.caseType;
-  return ct === 'candy' || ct === 'braces' || ct === 'pirate' ? CASES[ct].payMult : 1;
+  return ct === 'candy' || ct === 'braces' || ct === 'pirate' || ct === 'grillz' ? CASES[ct].payMult : 1;
 }
 
 /** Service that goes with a case: a deep case is a deep cleaning, everything else a cleaning. */
@@ -36,7 +40,7 @@ export function serviceFor(ct: CaseType): ServiceId {
 
 export function patientName(arch: ArchetypeId, rng: Rng): string {
   const first = rng.pick(ARCHETYPES[arch].firstNames);
-  if (first.includes(' ')) return first;
+  if (ARCHETYPES[arch].stageName || first.includes(' ')) return first;   // stage names have no last name
   return `${first} ${rng.pick(LAST_NAMES)}`;
 }
 
@@ -81,10 +85,11 @@ export function makePatient(state: GameState, c: Clinic, rng: Rng, o: {
     caseType,
     twists,
     bonus: pickBonus(state, id, caseType),
-    vip: false,
+    vip: VIP_ARCHETYPES.includes(arch),
     mood: 'happy',
     arriveAt: o.arriveAt,
     pm: { [service]: c.prices[service] ?? 1 },
+    ...(VIP_ARCHETYPES.includes(arch) ? { vipWeight: ARCHETYPES[arch].reviewWeight } : {}),
   };
 }
 

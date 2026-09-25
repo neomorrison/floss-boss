@@ -3,7 +3,7 @@ import type { CleanModifiers, GameState, OfficeTierId, SimEvent } from '../core/
 import { FLOSS_BOSS_VALUATION } from '../core/constants';
 import { OFFICES, TIER_ORDER } from '../data/offices';
 import { CHAIRS, EQUIPMENT, OP_UPGRADES } from '../data/upgrades';
-import { S, SimReport, hasSkill, pushEvent } from './internal';
+import { S, SimReport, addTimeline, hasSkill, note, pushEvent } from './internal';
 
 /** XP to the next level while employed: 60, 100, 150 (a level-up every 2 to 5 cleans, DESIGN 10.8). */
 export const EARLY_XP = [60, 100, 150];
@@ -30,7 +30,7 @@ export function gainXp(state: GameState, xp: number, ev: SimEvent[] | null): num
   }
   if (ups) {
     S(state).dayLevelUps = (S(state).dayLevelUps ?? 0) + ups;
-    p.title = title(state);
+    setTitle(state);
   }
   return ups;
 }
@@ -39,16 +39,48 @@ export function tierIndex(t: OfficeTierId): number {
   return TIER_ORDER.indexOf(t);
 }
 
+/** Every title in career order (DESIGN 4.1). A title's index is its rank. */
+export const TITLES = [
+  'Hygiene Student', 'Staff Hygienist', 'Senior Hygienist', 'Lead Hygienist',
+  'Practice Owner', 'Clinic Director', 'Dental Mogul', 'Floss Boss',
+] as const;
+/** Owner titles (the owner phase never goes back down a title, even if a location closes). */
+export const OWNER_TITLES = ['Practice Owner', 'Clinic Director', 'Dental Mogul', 'Floss Boss'] as const;
+
+/** Rank of a title in TITLES (0 = Hygiene Student); unknown titles rank 0. */
+export function titleRank(t: string): number {
+  return Math.max(0, (TITLES as readonly string[]).indexOf(t));
+}
+
 export function title(state: GameState): string {
   if (state.phase === 'school') return 'Hygiene Student';
   const L = state.player.level;
   if (state.phase === 'employee') return L >= 7 ? 'Lead Hygienist' : L >= 4 ? 'Senior Hygienist' : 'Staff Hygienist';
   const locs = state.locations.length;
   const top = state.locations.reduce((m, c) => Math.max(m, tierIndex(c.tier)), 0);
-  if (locs >= 5 || valuation(state) >= FLOSS_BOSS_VALUATION) return 'Floss Boss';
-  if (top >= 2 || locs >= 3) return 'Dental Mogul';
-  if (top >= 1 || locs >= 2) return 'Clinic Director';
-  return 'Practice Owner';
+  let r = 0;
+  if (locs >= 5 || valuation(state) >= FLOSS_BOSS_VALUATION) r = 3;
+  else if (top >= 2 || locs >= 3) r = 2;
+  else if (top >= 1 || locs >= 2) r = 1;
+  return OWNER_TITLES[Math.max(r, Math.min(3, S(state).bestTitle ?? 0))];
+}
+
+/**
+ * Recompute the player's title. A promotion (a higher title than before) adds a timeline entry and a report
+ * note "Promoted: Senior Hygienist", so the UI can play the ceremony (it can also compare player.title before
+ * and after an action). Returns the new title when it was a promotion, else null.
+ */
+export function setTitle(state: GameState): string | null {
+  const p = state.player;
+  const t = title(state);
+  const oi = (OWNER_TITLES as readonly string[]).indexOf(t);
+  if (state.phase === 'owner' && oi >= 0) S(state).bestTitle = Math.max(S(state).bestTitle ?? 0, oi);
+  const was = p.title;
+  p.title = t;
+  if (t === was || titleRank(t) <= titleRank(was ?? '')) return null;
+  addTimeline(state, 'career', `Promoted to ${t}`);
+  note(state, `Promoted: ${t}`);
+  return t;
 }
 
 /** Employee hourly-ish rate per cleaning by title (DESIGN 3.2). */

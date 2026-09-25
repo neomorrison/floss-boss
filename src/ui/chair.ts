@@ -18,6 +18,9 @@ import { patientPortrait } from './portrait';
 import { attempt } from './safe';
 import { toast } from './toasts';
 import { bar, btn, chip, setBar } from './widgets';
+import { fiveStarRule, rulesFor, type CleanRules } from './endlogic';
+import { fiveStarNeeds } from './endgame';
+import { playerTitle } from './game';
 
 export interface ChairCardHandlers {
   /** clinicIndex: where the patient sits (-1 = the employer, else an index into state.locations). */
@@ -63,6 +66,26 @@ export function quickGate(s: GameState, p: Pick<DayPatient, 'id' | 'caseType'>):
   };
 }
 
+const previews = new Map<string, { rules: CleanRules; par: number } | null>();
+/** What 5 stars needs for a waiting patient ("5 stars: 94% and under 1:20"): sim.fiveStarNeeds, else the
+ * clean built on a copy of the save (beginHandsOn is deterministic from the seed; the copy keeps the gel
+ * and every other side effect out of the real game). */
+export function cleanPreview(s: GameState, patientId: string): { rules: CleanRules; par: number } | null {
+  const title = playerTitle(s);
+  const key = `${s.day}|${patientId}|${s.difficulty}|${title}`;
+  if (previews.has(key)) return previews.get(key)!;
+  let out: { rules: CleanRules; par: number } | null = fiveStarNeeds(s, patientId);
+  if (!out) {
+    try {
+      const setup = sim.beginHandsOn(structuredClone(s), patientId);
+      out = { rules: setup.rules ?? rulesFor(s.difficulty, title), par: setup.parSeconds };
+    } catch { out = null; }
+  }
+  if (previews.size > 40) previews.clear();
+  previews.set(key, out);
+  return out;
+}
+
 /** A case type the player has not cleaned by hand yet (the sim marks case_seen_<type> after a hands-on clean). */
 function isNewCase(s: GameState, ct: CaseType): boolean {
   // routine is what school teaches: never "new"
@@ -95,7 +118,7 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
     let k: string;
     if (w && p) {
       const gate = quickGate(s, p);
-      k = `p|${p.id}|${w.clinicIndex}|${waiting.length}|${p.service}|${p.mood}|${p.caseType}|${(p.twists ?? []).join(',')}|${gate.ok}|${gate.count}`;
+      k = `p|${p.id}|${w.clinicIndex}|${waiting.length}|${p.service}|${p.mood}|${p.caseType}|${(p.twists ?? []).join(',')}|${gate.ok}|${gate.count}|${p.vip}|${s.difficulty}`;
     } else if (owner && !playerOp) k = 'off';
     else if (owner && playerOp?.playerMode === 'auto') k = `auto|${playerOp.id}|${playerOp.patientId}`;
     else {
@@ -106,6 +129,7 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
     key = k;
     el.style.display = '';
     el.classList.toggle('is-ready', !!p);
+    if (!p) el.classList.remove('is-vip');
     el.classList.toggle('is-compact', !p);
     el.classList.remove(...Array.from(el.classList).filter((c) => c.startsWith('tone-')));
     patienceBar = null;
@@ -144,6 +168,10 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
     const elsewhere = w.clinic !== activeClinic(s);
     const bonus = bonusText(patientBonus(p));
     const tier = masteryInfo(s.player.mastery?.[ct] ?? 0).tier;
+    const vip = !!p.vip || p.archetype === 'rapper';
+    el.classList.toggle('is-vip', vip);
+    const preview = cleanPreview(s, p.id);
+    const rule = preview ? fiveStarRule(preview.rules, preview.par) : null;
     patienceBar = bar(1, '', 'sm');
 
     const cleanBtn = btn('Clean', { variant: 'primary', icon: 'hand', class: 'grow', onClick: () => { lock(); hd.clean(p.id, w.clinicIndex); } });
@@ -171,7 +199,7 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
       h('div.chair-case',
         caseTile(ct, 42),
         h('div.grow',
-          h('div.eyebrow', elsewhere ? `Your chair at ${w.clinic.name}` : 'Your chair'),
+          h('div.eyebrow', vip ? (elsewhere ? `VIP in your chair at ${w.clinic.name}` : 'VIP in your chair') : elsewhere ? `Your chair at ${w.clinic.name}` : 'Your chair'),
           h('div.chair-case-name', def.name, tier > 0 ? tierMedal(tier, 22, 'chair-tier') : null),
           h('div.chair-case-blurb', def.blurb),
         ),
@@ -180,7 +208,7 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
       h('div.chair-body',
         patientPortrait(p, moodFromPatient(p), 56, 'chair-portrait'),
         h('div.grow',
-          h('div.chair-name', p.name),
+          h('div.chair-name', p.name, vip ? h('span.vip-badge', { title: 'VIP: big fee, their review counts 5 times' }, icon(p.archetype === 'rapper' ? 'diamond' : 'crown'), 'VIP') : null),
           h('div.row.row-wrap.gap-6',
             chip(arch?.label ?? p.archetype, 'teal'),
             p.service === 'deep' && ct !== 'deep' ? chip(SERVICES.deep.name, 'grape') : null,
@@ -189,6 +217,7 @@ export function createChairCard(hd: ChairCardHandlers): ChairCard {
         ),
       ),
       bonus ? h('div.chair-bonus', icon('star'), h('span', h('b', 'Bonus'), ` ${bonus}`)) : null,
+      rule ? h('div.chair-rule', icon('target'), h('span', rule.text)) : null,
       h('div.chair-patience', h('span.tiny.bold.faint', 'Patience'), patienceBar),
       h('div.chair-actions', ...buttons),
     );

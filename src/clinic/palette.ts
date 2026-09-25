@@ -201,6 +201,26 @@ export function numberTexture(n: number): THREE.Texture {
   });
 }
 
+/** Street billboard showing the city-wide Smile Index (DESIGN 11.1), shown once it reaches 50%. */
+export function billboardTexture(pct: number): THREE.Texture {
+  return cachedTex(`billboard|${pct}`, () => {
+    const [c, g] = canvas(512, 256);
+    const gr = g.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, C.sunshine); gr.addColorStop(1, C.bubblegum);
+    g.fillStyle = gr; g.fillRect(0, 0, 512, 256);
+    g.fillStyle = 'rgba(255,255,255,0.94)';
+    roundRect(g, 20, 20, 472, 216, 28); g.fill();
+    g.fillStyle = C.ink;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `800 118px "Baloo 2", "Nunito", system-ui, sans-serif`;
+    g.fillText(`${pct}%`, 256, 118);
+    g.font = `800 34px "Baloo 2", "Nunito", system-ui, sans-serif`;
+    g.fillStyle = C.teal;
+    g.fillText('SMILE CITY', 256, 196);
+    return finish(c, false);
+  });
+}
+
 /** Storefront sign panel with the clinic name. Not cached (names change); caller disposes. */
 export function signTexture(name: string): THREE.CanvasTexture {
   const [c, g] = canvas(1024, 256);

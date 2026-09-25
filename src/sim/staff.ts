@@ -11,6 +11,7 @@ import { S, SimOp, SimStaff, addCash, clinicByIndex, hasSkill, isPresent, nextId
 import { checkAchievements } from './goals';
 import { chainHas, has, lateMinutes, perkAdd, perksOf } from './effects';
 import { focusMoraleAtClose } from './manager';
+import { askInflation, diff, inflationDay } from './difficulty';
 
 export function statAvg(role: StaffRole, s: { skill: number; speed: number; bedside: number }): number {
   return role === 'hygienist' ? (s.skill + s.speed + s.bedside) / 3 : s.skill;
@@ -20,6 +21,14 @@ export function askFor(role: StaffRole, s: { skill: number; speed: number; bedsi
   const r = ROLES[role];
   return Math.round((r.askBase + r.askPerStat * statAvg(role, s)) / 5) * 5;
 }
+
+/** The ask for these stats today: the role's formula times the difficulty's salary inflation (DESIGN 11.5). */
+export function askNow(state: GameState, role: StaffRole, s: { skill: number; speed: number; bedside: number }): number {
+  return Math.round(askFor(role, s) * askInflation(state) / 5) * 5;
+}
+
+/** Legacy perk Alumni Network: candidates bring +5 on every stat (their ask stays what the base stats ask). */
+export const ALUMNI_BONUS = 5;
 
 /** Salary actually charged per day (negotiator applies). */
 export function salaryCost(state: GameState, s: Staff): number {
@@ -187,6 +196,14 @@ export function makeCandidates(state: GameState, rng: Rng): void {
     let role = rng.weighted(roles, (r) => w[r] * (i < 3 && seen.has(r) ? 0.25 : 1));
     seen.add(role);
     const s = makeStaff(state, rng, role, tier.candidateQuality);
+    // salary asks inflate with time on harder settings; Alumni Network adds stats without raising the ask
+    const infl = askInflation(state);
+    if (infl !== 1) { s.ask = Math.round(s.ask * infl / 5) * 5; s.salary = s.ask; }
+    if (state.legacyPerks?.includes('alumniNetwork')) {
+      s.skill = Math.min(99, s.skill + ALUMNI_BONUS);
+      s.speed = Math.min(99, s.speed + ALUMNI_BONUS);
+      s.bedside = Math.min(99, s.bedside + ALUMNI_BONUS);
+    }
     const range = { skill: statRange(s.skill, rng), speed: statRange(s.speed, rng), bedside: statRange(s.bedside, rng) };
     out.push({ ...s, expiresDay: state.day + 1, interviewed: false, range });
   }
@@ -494,6 +511,9 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
   const leader = hasSkill(state, 'leader') ? 1 : 0;
   const floor = hasSkill(state, 'moraleOfficer') ? MORALE_OFFICER_FLOOR : 0;
   const team = focusMoraleAtClose(state);
+  // salary inflation (DESIGN 11.5): every 10 working days every ask rises a little
+  const infl = diff(state).salaryInflationPer10Days;
+  const inflate = inflationDay(state);
   for (const c of state.locations) {
     const manager = c.staff.some((s) => s.role === 'manager' && isPresent(state, s)) ? 2 : 0;
     const perks = (has(c, 'breakRoom') ? 3 : 0) + (has(c, 'staffLockers') ? 1 : 0) + (has(c, 'rooftopGarden') ? 3 : 0);
@@ -523,7 +543,7 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
       if (s.courseGain && s.offUntilDay <= state.day) {
         s.skill = Math.min(99, s.skill + s.courseGain);
         s.courseGain = 0;
-        const ask = askFor(s.role, s);
+        const ask = askNow(state, s.role, s);
         note(state, `${s.name} finished the course: skill ${s.skill}`);
         if (ask > s.ask) {
           s.ask = ask;
@@ -551,6 +571,10 @@ export function staffDaily(state: GameState, ev: SimEvent[] | null, rng: Rng): v
         if (wantsRaise(s)) s.raiseDue = true;
       } else if (s.traits.includes('ambitious') && !s.raiseDue && wantsRaise(s) && rng.chance(AMBITIOUS_ASK)) {
         s.raiseDue = true;
+      }
+      if (inflate && s.tempUntilDay == null) {
+        s.ask = Math.round(s.ask * (1 + infl));
+        if (wantsRaise(s)) s.raiseDue = true;
       }
       settleRaise(state, c, s, ev);
       // an unpicked perk choice is made for you after two days (the first offered)

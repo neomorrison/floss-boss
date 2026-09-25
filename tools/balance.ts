@@ -1,15 +1,20 @@
 // Headless economy simulation with bot strategies (npm run balance).
 // Converts game time to real time: 1 game minute = 0.2 s at 1x, hands-on cleans take the bot's
 // seconds plus hub overhead, and bots use 2x or 4x when idle like a player would.
-// Prints the milestone table against the DESIGN 10.8 pacing targets, manager-layer stats (demand fill,
-// waitlist, walkouts, events, campaigns, perks), plus degenerate-strategy checks.
+// Prints the milestone table against the DESIGN 10.8 / 11.5 pacing targets, Smile City pacing (DESIGN 11.1)
+// and the Golden Molar Gala, hands-on stars under the difficulty rules, bankruptcy warnings, manager-layer
+// stats (demand fill, waitlist, walkouts, events, campaigns, perks), plus degenerate-strategy checks.
+// Every bot plays Standard; the median bot also plays Relaxed and Veteran.
 //
 //   npm run balance              all bots, 5 seeds each
 //   npm run balance -- --seeds 9 --bot median --verbose
 //   npm run balance -- --no-checks
 //   npm run balance -- --raises ignore   every bot ignores raise requests (approve, ignore or auto)
+//   npm run balance -- --difficulty relaxed   every bot plays one difficulty
 import * as sim from '../src/sim/index';
-import type { CampaignId, CaseType, CleanResult, CleanSetup, Clinic, FocusId, GameState, OfficeTierId, PendingEvent, SimEvent, Staff } from '../src/core/types';
+import type { CampaignId, CaseType, CleanResult, CleanSetup, Clinic, Difficulty, DistrictId, FocusId, GameState, OfficeTierId, PendingEvent, SimEvent, Staff } from '../src/core/types';
+import { DIFFICULTIES } from '../src/data/difficulty';
+import { comfortDrainMult, starsWith } from '../src/sim/difficulty';
 import { makeStaff } from '../src/sim/staff';
 import { withRng } from '../src/sim/internal';
 import { makeRng } from '../src/core/rng';
@@ -35,15 +40,18 @@ interface Bot {
   manage: boolean;          // uses focus, campaigns, interviews and picks perks
   raises: 'approve' | 'ignore' | 'auto';   // raise requests: approve each at once, ignore, or settings.autoRaise
   maxHours: number;
+  difficulty: Difficulty;
 }
 
 const BOTS: Bot[] = [
-  { name: 'casual (q 0.70)', quality: 0.7, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: true, raises: 'approve', maxHours: 14 },
-  { name: 'median (q 0.85)', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
-  { name: 'expert (q 0.95)', quality: 0.95, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
-  { name: 'idle owner', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'auto', maxHours: 14 },
-  { name: 'greedy expander', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 14 },
-  { name: 'median, no manager', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'approve', maxHours: 14 },
+  { name: 'casual (q 0.70)', quality: 0.7, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: true, raises: 'approve', maxHours: 18, difficulty: 'standard' },
+  { name: 'median (q 0.85)', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 18, difficulty: 'standard' },
+  { name: 'expert (q 0.95)', quality: 0.95, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 18, difficulty: 'standard' },
+  { name: 'idle owner', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 0, idleOwner: true, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'auto', maxHours: 18, difficulty: 'standard' },
+  { name: 'greedy expander', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 2, idleOwner: false, greedy: true, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 18, difficulty: 'standard' },
+  { name: 'median, no manager', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'first', manage: false, raises: 'approve', maxHours: 18, difficulty: 'standard' },
+  { name: 'median relaxed', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 18, difficulty: 'relaxed' },
+  { name: 'median veteran', quality: 0.85, secs: 80, overhead: 15, handsPerDay: 3, idleOwner: false, greedy: false, priceMult: 1, events: 'smart', manage: true, raises: 'approve', maxHours: 18, difficulty: 'veteran' },
 ];
 
 // ------------------------------------------------------------------ run state
@@ -79,6 +87,15 @@ interface Run {
   reviews: number;
   raiseRequests: number;
   autoRaises: number;
+  // end game (DESIGN 11)
+  stars: number[];             // hands-on stars under the difficulty rules
+  ownerStars: number[];        // the owner phase only
+  warnings: number;            // bankruptcy warnings (DESIGN 11.5)
+  bankActs: number;            // the bank stepped in
+  recovered: boolean;          // cash back at or above zero after a warning
+  warnedOpen: boolean;
+  galaTries: number;
+  vans: number;
 }
 
 const M = (r: Run, key: string) => {
@@ -87,7 +104,8 @@ const M = (r: Run, key: string) => {
 
 function result(r: Run, q: number, secs: number, setup: CleanSetup | null): CleanResult {
   const qq = Math.max(0.3, Math.min(0.99, q + r.rng.normal(0, 0.04)));
-  const stars = qq >= 0.92 ? 5 : qq >= 0.8 ? 4 : qq >= 0.65 ? 3 : qq >= 0.45 ? 2 : 1;
+  // stars under the difficulty rules (DESIGN 11.5): shifted thresholds, 5 stars within fiveStarPar x par
+  const stars = starsWith(qq, setup?.rules, secs, setup?.parSeconds ?? 0);
   const tartar = setup ? setup.dirt.tartarCount + setup.special.barnacles + setup.special.pockets : 6;
   const bonusMet = !!setup?.bonus && r.rng.chance(Math.max(0, (qq - 0.6) * 1.6));
   return {
@@ -101,12 +119,27 @@ function result(r: Run, q: number, secs: number, setup: CleanSetup | null): Clea
   };
 }
 
-/** A case the bot has not cleaned much yet goes a little worse (learning curve up to Bronze). */
+/** A case the bot has not cleaned much yet goes a little worse (learning curve up to Bronze). Harder
+ * settings cost a little quality (more dirt, a later snap point, faster comfort drain past level 3); skills
+ * and tools add a little with the player level (up to +0.04 from level 4 to 24). */
 function caseQuality(r: Run, setup: CleanSetup): number {
   const n = r.s.player.mastery[setup.caseType] ?? 0;
-  return r.bot.quality - CASE_LEARNING * Math.max(0, 1 - n / 3);
+  return r.bot.quality - CASE_LEARNING * Math.max(0, 1 - n / 3) + difficultyQuality(r) + growth(r);
 }
 const CASE_LEARNING = 0.08;
+function difficultyQuality(r: Run): number {
+  const d = DIFFICULTIES[r.bot.difficulty];
+  const drain = comfortDrainMult(r.s, r.s.player.level);
+  return -(d.dirtScale - 1) * 0.1 - (d.snapAt - 0.8) * 0.3 - (drain - 1) * 0.05;
+}
+function growth(r: Run): number {
+  return Math.min(0.04, 0.002 * Math.max(0, r.s.player.level - 4));
+}
+/** Real seconds of a clean: more dirt and a later snap point take longer. */
+function cleanSecs(r: Run): number {
+  const d = DIFFICULTIES[r.bot.difficulty];
+  return r.bot.secs * Math.pow(d.dirtScale, 0.8) * (1 + 1.5 * (d.snapAt - 0.8)) * (0.9 + 0.2 * r.rng.next());
+}
 
 function levelMilestones(r: Run): void {
   const L = r.s.player.level;
@@ -115,9 +148,12 @@ function levelMilestones(r: Run): void {
 
 function handsOn(r: Run, pid: string): void {
   const setup = sim.beginHandsOn(r.s, pid);
-  const secs = r.bot.secs * (0.9 + 0.2 * r.rng.next());
+  const secs = cleanSecs(r);
   r.real += secs + r.bot.overhead;
-  const out = sim.completeHandsOn(r.s, pid, result(r, caseQuality(r, setup), secs, setup));
+  const res = result(r, caseQuality(r, setup), secs, setup);
+  r.stars.push(res.stars);
+  if (r.s.phase === 'owner') r.ownerStars.push(res.stars);
+  const out = sim.completeHandsOn(r.s, pid, res);
   r.treasure += out.payout.treasure;
   r.cases[setup.caseType] = (r.cases[setup.caseType] ?? 0) + 1;
   if (r.s.phase === 'employee') {
@@ -190,6 +226,12 @@ function playDay(r: Run): void {
     if (st && r.bot.raises !== 'ignore') { sim.setSalary(s, li, st.id, st.ask); r.real += 3; }
   }
   r.autoRaises += rep.notes.filter((n) => n.startsWith('Auto raise')).length;
+  // bankruptcy pressure (DESIGN 11.5)
+  if (rep.notes.some((n) => n.startsWith('Warning: cash'))) { r.warnings++; r.warnedOpen = true; }
+  if (rep.notes.some((n) => n.startsWith('The bank'))) r.bankActs++;
+  if (r.warnedOpen && s.cash >= 0) { r.recovered = true; r.warnedOpen = false; }
+  // Smile City milestones (DESIGN 11.1)
+  if (s.phase !== 'school') for (const pct of sim.cityStatus(s).reached) M(r, 'city' + pct);
   for (const e of rep.income) if (e.label === 'Events') r.eventCash.in += e.amount;
   for (const e of rep.expenses) if (e.label === 'Events') r.eventCash.out += e.amount;
   if (s.cash < r.minCash) r.minCash = s.cash;
@@ -209,10 +251,17 @@ function buy(r: Run, res: { ok: boolean }): boolean {
 
 function dailyCosts(s: GameState): number {
   let c = 0;
-  for (const l of s.locations) {
-    c += OFFICES[l.tier].rent + l.staff.reduce((t, x) => t + x.salary, 0) + 120;
-  }
+  s.locations.forEach((l, i) => {
+    c += sim.rent(s, i) + l.staff.reduce((t, x) => t + x.salary, 0) + 120;
+  });
   return c + s.loan * 0.0125;
+}
+
+/** The bot's district pick (DESIGN 11.1): the least-smiling district without a location. */
+function pickDistrict(s: GameState): DistrictId {
+  const d = sim.cityStatus(s).districts;
+  const free = d.filter((x) => x.locations === 0);
+  return [...(free.length ? free : d)].sort((a, b) => a.index - b.index)[0].id;
 }
 
 /** The bot's estimate of a candidate: exact once interviewed, the range midpoint before. */
@@ -240,7 +289,7 @@ function employeeShopping(r: Run): void {
   const s = r.s;
   const st = sim.practiceStatus(s);
   if (st.ok) {
-    sim.openPractice(s, { name: 'Bot Dental', loan: st.maxLoan });
+    sim.openPractice(s, { name: 'Bot Dental', loan: st.maxLoan, district: pickDistrict(s) });
     M(r, 'practice');
     return;
   }
@@ -425,7 +474,7 @@ function ownerShopping(r: Run): void {
   if (r.bot.idleOwner) s.settings.autoHuddle = true;
   s.settings.autoRaise = r.bot.raises === 'auto';
   const costs = dailyCosts(s);
-  const reserve = costs * (r.bot.greedy ? 0.5 : 1);
+  const reserve = costs * (r.bot.greedy ? 0.1 : 1);
   const goal = Math.max(0, savingsGoal(r));
   const spare = () => s.cash - goal - reserve * 2;   // money beyond the savings goal
   for (let li = 0; li < s.locations.length; li++) {
@@ -456,7 +505,7 @@ function ownerShopping(r: Run): void {
   const c0 = s.locations[0];
   const ti = TIER_ORDER.indexOf(c0.tier);
   const share = r.bot.greedy ? 1 : 0.8;
-  const cushion = reserve * (r.bot.greedy ? 1 : 3);
+  const cushion = r.bot.greedy ? 0 : reserve * 3;
   const wantLocation = s.locations.length < 5 && (r.bot.greedy ? ti >= 1 : ti >= 2);
   if (ti < 3 && !(wantLocation && s.locations.length < 2 && !r.bot.greedy)) {
     const next = TIER_ORDER[ti + 1] as OfficeTierId;
@@ -467,10 +516,19 @@ function ownerShopping(r: Run): void {
   if (wantLocation) {
     const q = sim.locationQuote(s, 't2');
     const loan = Math.round(q.maxLoan * share);
-    if (q.ok && s.cash + loan - q.price >= cushion + 4000 && buy(r, sim.openLocation(s, 't2', `Bot ${s.locations.length + 1}`, loan))) {
+    if (q.ok && s.cash + loan - q.price >= cushion + 4000 && buy(r, sim.openLocation(s, 't2', `Bot ${s.locations.length + 1}`, loan, pickDistrict(s)))) {
       M(r, 'loc' + s.locations.length);
       const li = s.locations.length - 1;
       buy(r, sim.buyOperatory(s, li));
+    }
+  }
+  // the Smile Van (from Smile City 50%): one per location, before luxuries, when the city is the goal
+  if (sim.cityStatus(s).vanUnlocked) {
+    for (let li = 0; li < s.locations.length; li++) {
+      const c = s.locations[li];
+      if (c.equipment.includes('smileVan') || TIER_ORDER.indexOf(c.tier) < 1) continue;
+      const price = sim.equipmentPrice(s, li, 'smileVan');
+      if (s.cash - reserve * 2 >= price && (spare() >= price || s.locations.length >= 5 || TIER_ORDER.indexOf(c0.tier) >= 3) && buy(r, sim.buyEquipment(s, li, 'smileVan'))) { r.vans++; break; }
     }
   }
   // luxuries only with money beyond the savings goal
@@ -479,7 +537,7 @@ function ownerShopping(r: Run): void {
     if (!r.bot.idleOwner) {
       for (const id of EQUIP_ORDER) {
         const e = EQUIPMENT[id];
-        if (c.equipment.includes(id) || TIER_ORDER.indexOf(c.tier) < TIER_ORDER.indexOf(e.minTier)) continue;
+        if (id === 'smileVan' || c.equipment.includes(id) || TIER_ORDER.indexOf(c.tier) < TIER_ORDER.indexOf(e.minTier)) continue;
         if (spare() >= sim.equipmentPrice(s, li, id)) { buy(r, sim.buyEquipment(s, li, id)); break; }
       }
       for (const op of c.ops) if (op.chair === 'basic' && spare() >= sim.chairPrice(s, 'comfort')) buy(r, sim.upgradeChair(s, li, op.id, 'comfort'));
@@ -503,13 +561,27 @@ function ownerShopping(r: Run): void {
 // ------------------------------------------------------------------ one game
 
 function newRun(bot: Bot, seed: number): Run {
-  const s = sim.newGame({ name: 'Bot', avatar: 0, seed, nowMs: 0 });
+  const s = sim.newGame({ name: 'Bot', avatar: 0, seed, nowMs: 0, difficulty: bot.difficulty });
   return {
     bot, s, real: 0, rng: makeRng(seed ^ 0x5eed), m: {}, mc: {}, md: {}, ownerDays: 0, log: [], handsToday: 0, maxLoanSeen: 0, minCash: 0, nets: [],
     treasure: 0, cases: {}, quicks: 0, lockedQuick: 0,
     tierDays: {}, eventCash: { in: 0, out: 0 }, eventsAnswered: 0, campaigns: {}, focus: {}, perks: 0, interviews: 0, twoStarWait: 0, oneStar: 0, reviews: 0,
     raiseRequests: 0, autoRaises: 0,
+    stars: [], ownerStars: [], warnings: 0, bankActs: 0, recovered: false, warnedOpen: false, galaTries: 0, vans: 0,
   };
+}
+
+/** The Golden Molar Gala (DESIGN 11.3): the showcase clean with the gala's twists; 4+ stars wins. */
+function gala(r: Run): boolean {
+  const s = r.s;
+  const setup = sim.galaSetup(s);
+  const secs = cleanSecs(r) * 1.4;
+  r.real += secs + r.bot.overhead + 60;   // the parade, the gala card, the credits
+  const q = caseQuality(r, setup) - 0.01 * Math.max(0, setup.twists.length - 1);
+  const res = result(r, q, secs, setup);
+  r.galaTries++;
+  const out = sim.completeGala(s, res);
+  return out.won;
 }
 
 function playGame(bot: Bot, seed: number, stop?: (r: Run) => boolean): Run {
@@ -536,7 +608,9 @@ function playGame(bot: Bot, seed: number, stop?: (r: Run) => boolean): Run {
       if (s.locations.some((c) => c.tier !== 't1')) M(r, 't2');
       if (s.locations.some((c) => c.tier === 't3' || c.tier === 't4')) M(r, 't3');
       if (s.locations.length >= 2) M(r, 'loc2');
-      if (sim.title(s) === 'Floss Boss') { M(r, 'flossBoss'); break; }
+      if (sim.title(s) === 'Floss Boss') M(r, 'flossBoss');
+      // the end game: the Golden Molar Gala once the city smiles (one try a day)
+      if (sim.galaStatus(s).ready && gala(r)) { M(r, 'gala'); break; }
     }
     r.maxLoanSeen = Math.max(r.maxLoanSeen, s.loan);
     playDay(r);
@@ -552,20 +626,31 @@ function playGame(bot: Bot, seed: number, stop?: (r: Run) => boolean): Run {
 
 const median = (xs: number[]) => { const a = xs.filter((x) => Number.isFinite(x)).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
 
-const ROWS: { key: string; label: string; target: string; lo: number; hi: number; unit: 'clean' | 'min' | 'h' | 'days' }[] = [
-  { key: 'school', label: 'Tutorial done', target: '< 5 min', lo: 0, hi: 5, unit: 'min' },
-  { key: 'firstTool', label: 'First tool affordable (cleaning #)', target: '<= 2', lo: 0, hi: 2, unit: 'clean' },
-  { key: 'level2', label: 'Level 2 (cleaning #)', target: '2', lo: 0, hi: 2, unit: 'clean' },
-  { key: 'level3', label: 'Level 3 (cleaning #)', target: '4 to 5', lo: 4, hi: 5, unit: 'clean' },
-  { key: 'level4', label: 'Level 4 (cleaning #)', target: '9 to 12', lo: 9, hi: 12, unit: 'clean' },
-  { key: 'practice', label: 'Practice opened (cleaning #)', target: '15 to 20', lo: 15, hi: 20, unit: 'clean' },
-  { key: 'practiceMin', label: 'Practice opened (time)', target: '25 to 35 min', lo: 25, hi: 35, unit: 'min' },
-  { key: 'firstHireDays', label: 'First hire (owner days)', target: '<= 2', lo: 0, hi: 2, unit: 'days' },
-  { key: 't2', label: 'Office T2', target: '1.25 to 2 h', lo: 1.25, hi: 2, unit: 'h' },
-  { key: 't3', label: 'Office T3', target: '2.5 to 3.5 h', lo: 2.5, hi: 3.5, unit: 'h' },
-  { key: 'loc2', label: 'Second location', target: '3.5 to 4.5 h', lo: 3.5, hi: 4.5, unit: 'h' },
-  { key: 'flossBoss', label: 'Floss Boss title', target: '7 to 10 h', lo: 7, hi: 10, unit: 'h' },
+type Range = [number, number];
+/** Targets: v3 (DESIGN 10.8) for Relaxed, about 20% longer owner milestones on Standard (DESIGN 11.5; Floss
+ * Boss against Relaxed as measured, which runs a little ahead of the old v3 table),
+ * Smile City 100% at 6 to 7 h (Relaxed), 8 to 10 h (Standard), 11 to 13 h (Veteran) (DESIGN 11.1). */
+const ROWS: { key: string; label: string; unit: 'clean' | 'min' | 'h' | 'days'; t: Partial<Record<Difficulty, Range>> & { all?: Range } }[] = [
+  { key: 'school', label: 'Tutorial done', unit: 'min', t: { all: [0, 5] } },
+  { key: 'firstTool', label: 'First tool affordable (cleaning #)', unit: 'clean', t: { all: [0, 2] } },
+  { key: 'level2', label: 'Level 2 (cleaning #)', unit: 'clean', t: { all: [0, 2] } },
+  { key: 'level3', label: 'Level 3 (cleaning #)', unit: 'clean', t: { all: [4, 5] } },
+  { key: 'level4', label: 'Level 4 (cleaning #)', unit: 'clean', t: { all: [9, 12] } },
+  { key: 'practice', label: 'Practice opened (cleaning #)', unit: 'clean', t: { all: [15, 20] } },
+  { key: 'practiceMin', label: 'Practice opened (time)', unit: 'min', t: { relaxed: [25, 35], standard: [25, 40], veteran: [25, 45] } },
+  { key: 'firstHireDays', label: 'First hire (owner days)', unit: 'days', t: { all: [0, 2] } },
+  { key: 't2', label: 'Office T2', unit: 'h', t: { relaxed: [1.25, 2], standard: [2, 2.5] } },
+  { key: 't3', label: 'Office T3', unit: 'h', t: { relaxed: [2.5, 3.5], standard: [3, 4.2] } },
+  { key: 'loc2', label: 'Second location', unit: 'h', t: { relaxed: [3.5, 4.5], standard: [4.2, 5.4] } },
+  { key: 'flossBoss', label: 'Floss Boss title', unit: 'h', t: { relaxed: [6.5, 10], standard: [7.5, 12] } },
+  { key: 'city30', label: 'Smile City 30%', unit: 'h', t: {} },
+  { key: 'city50', label: 'Smile City 50% (Smile Van)', unit: 'h', t: {} },
+  { key: 'city70', label: 'Smile City 70% (nomination)', unit: 'h', t: {} },
+  { key: 'city90', label: 'Smile City 90%', unit: 'h', t: {} },
+  { key: 'city100', label: 'Smile City 100%', unit: 'h', t: { relaxed: [6, 7], standard: [8, 10], veteran: [11, 13] } },
+  { key: 'gala', label: 'Golden Molar won', unit: 'h', t: {} },
 ];
+const targetOf = (row: typeof ROWS[number], d: Difficulty): Range | null => row.t[d] ?? row.t.all ?? null;
 
 function value(r: Run, key: string): number {
   switch (key) {
@@ -585,7 +670,10 @@ function main() {
   const only = args.includes('--bot') ? args[args.indexOf('--bot') + 1] : null;
   const verbose = args.includes('--verbose');
   const raisePolicy = args.includes('--raises') ? args[args.indexOf('--raises') + 1] as Bot['raises'] : null;
-  const bots = (only ? BOTS.filter((b) => b.name.includes(only)) : BOTS).map((b) => (raisePolicy ? { ...b, raises: raisePolicy } : b));
+  const forced = args.includes('--difficulty') ? args[args.indexOf('--difficulty') + 1] as Difficulty : null;
+  const bots = (only ? BOTS.filter((b) => b.name.includes(only)) : BOTS).map((b) => (raisePolicy ? { ...b, raises: raisePolicy } : b))
+    .map((b) => (forced ? { ...b, difficulty: forced, name: b.name.includes(forced) ? b.name : `${b.name} ${forced.slice(0, 3)}` } : b))
+    .filter((b, i, a) => a.findIndex((x) => x.name === b.name) === i);
   const all: Record<string, Run[]> = {};
   for (const bot of bots) {
     const runs: Run[] = [];
@@ -602,19 +690,33 @@ function main() {
     }
     all[bot.name] = runs;
   }
-  console.log('\nFloss Boss balance: median of ' + seedsN + ' seeds per bot (80 s cleans + 15 s hub, DESIGN 10.8)\n');
-  const header = ['Milestone'.padEnd(36), 'Target'.padEnd(14), ...bots.map((b) => b.name.padEnd(20))].join('');
+  console.log('\nFloss Boss balance: median of ' + seedsN + ' seeds per bot (80 s cleans + 15 s hub; DESIGN 10.8, 11.1, 11.5)\n');
+  const fmtT = (t: Range | null, unit: string) => (t ? `${t[0]}-${t[1]}${unit === 'h' ? ' h' : unit === 'min' ? ' min' : ''}` : '');
+  const header = ['Milestone'.padEnd(34), 'Relaxed'.padEnd(12), 'Standard'.padEnd(12), 'Veteran'.padEnd(12), ...bots.map((b) => b.name.padEnd(20))].join('');
   console.log(header);
   console.log('-'.repeat(header.length));
   for (const row of ROWS) {
     const cells = bots.map((b) => {
       const v = median(all[b.name].map((r) => value(r, row.key)));
       if (!Number.isFinite(v)) return '-'.padEnd(20);
-      const ok = v >= row.lo && v <= row.hi;
+      const t = targetOf(row, b.difficulty);
+      const ok = !t ? '' : v >= t[0] && v <= t[1] ? '  ok' : '  !!';
       const txt = row.unit === 'h' ? `${v.toFixed(2)} h` : row.unit === 'min' ? `${v.toFixed(1)} min` : `${v.toFixed(0)}`;
-      return (txt + (ok ? '  ok' : '  !!')).padEnd(20);
+      return (txt + ok).padEnd(20);
     });
-    console.log([row.label.padEnd(36), row.target.padEnd(14), ...cells].join(''));
+    console.log([row.label.padEnd(34), fmtT(targetOf(row, 'relaxed'), row.unit).padEnd(12), fmtT(targetOf(row, 'standard'), row.unit).padEnd(12), fmtT(targetOf(row, 'veteran'), row.unit).padEnd(12), ...cells].join(''));
+  }
+  console.log('\nEnd game (median per run): hands-on stars (all / owner phase, share of 5-star cleans), gala tries, Smile Vans, bankruptcy warnings and bank actions (runs with a warning / recovered)');
+  for (const b of bots) {
+    const runs = all[b.name];
+    const avg = (xs: number[]) => (xs.length ? xs.reduce((p, q) => p + q, 0) / xs.length : NaN);
+    const st = median(runs.map((r) => avg(r.stars)));
+    const ost = median(runs.map((r) => avg(r.ownerStars)));
+    const five = median(runs.map((r) => r.stars.filter((x) => x === 5).length / Math.max(1, r.stars.length)));
+    const warned = runs.filter((r) => r.warnings > 0).length;
+    const rec = runs.filter((r) => r.warnings > 0 && r.recovered).length;
+    const city = median(runs.map((r) => sim.cityStatus(r.s).pct));
+    console.log(`  ${b.name.padEnd(20)} ${b.difficulty.padEnd(9)} stars ${st.toFixed(2)} / owner ${ost.toFixed(2)} (5-star ${(five * 100).toFixed(0)}%)  gala tries ${median(runs.map((r) => r.galaTries))}  vans ${median(runs.map((r) => r.vans))}  city at end ${city.toFixed(1)}%  warnings ${median(runs.map((r) => r.warnings))} bank ${median(runs.map((r) => r.bankActs))} (${warned}/${runs.length} warned, ${rec} recovered)`);
   }
   console.log('\nOwner days at each milestone (median) and operating net per owner day (median over windows):');
   for (const b of bots) {
@@ -657,7 +759,7 @@ function main() {
   for (const b of bots) {
     const runs = all[b.name];
     const c = (ct: CaseType) => median(runs.map((r) => r.cases[ct] ?? 0));
-    console.log(`  ${b.name.padEnd(20)} routine ${c('routine')} candy ${c('candy')} whitening ${c('whitening')} braces ${c('braces')} pirate ${c('pirate')} deep ${c('deep')}  treasure $${median(runs.map((r) => r.treasure))}  quick ${median(runs.map((r) => r.quicks))}  locked ${median(runs.map((r) => r.lockedQuick))}  bronze ${median(runs.map((r) => Object.values(r.s.player.mastery).filter((n) => (n ?? 0) >= 3).length))}/6`);
+    console.log(`  ${b.name.padEnd(20)} routine ${c('routine')} candy ${c('candy')} whitening ${c('whitening')} braces ${c('braces')} pirate ${c('pirate')} deep ${c('deep')} grillz ${c('grillz')}  treasure $${median(runs.map((r) => r.treasure))}  quick ${median(runs.map((r) => r.quicks))}  locked ${median(runs.map((r) => r.lockedQuick))}  bronze ${median(runs.map((r) => Object.values(r.s.player.mastery).filter((n) => (n ?? 0) >= 3).length))}/7`);
   }
   console.log('\nEnd state after the run (median):');
   for (const b of bots) {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { layoutFor } from '../src/clinic/layout';
 import { Actors } from '../src/clinic/actors';
-import type { Clinic, DayPatient, PatientState } from '../src/core/types';
+import { C } from '../src/clinic/palette';
+import { PLAYER_ID } from '../src/core/constants';
+import type { Clinic, DayPatient, Operatory, PatientState } from '../src/core/types';
 
 // vitest runs this suite in a DOM-less 'node' environment (vitest.config.ts), but Actors.sync() builds
 // real Person rigs (src/clinic/people.ts), which lazily bake a few canvas textures (src/clinic/palette.ts:
@@ -34,7 +36,7 @@ function clinic(id: string, patients: DayPatient[]): Clinic {
     prices: { cleaning: 1, deep: 1, fluoride: 1, sealant: 1, xray: 1, whitening: 1, exam: 1, filling: 1 },
     marketing: 0, rating: 4, reviews: [], served: 0, patients,
     day: { booked: 0, demand: 0, turnedAway: 0, noShows: 0, walkIns: 0, served: 0, walkouts: 0, revenue: 0, tips: 0, supplies: 0, addonsSold: 0, fiveStars: 0, handsOn: 0 },
-    checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
+    checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0, district: 'downtown',
   };
 }
 
@@ -87,5 +89,70 @@ describe('Actors: multi-location switch', () => {
     expect(actors.patients.has('p1')).toBe(false);
     expect(actors.effects.length).toBe(1);
     expect(actors.effects[0].paid).toBe(120);
+  });
+});
+
+// DESIGN 11.6: the rap star VIP gets dreadlocks and a gold chain in the diorama (sunglasses come for
+// free from the existing VIP accessory, since a rapper visit is always vip).
+describe('Actors: rapper look (DESIGN 11.6)', () => {
+  it('gives a rapper patient dreadlocks and a gold chain, and drops them for anyone else', () => {
+    const actors = new Actors();
+    const rapper = patient('r1', 'waiting', { archetype: 'rapper', vip: true });
+    const regular = patient('n1', 'waiting');
+    actors.sync(clinic('c1', [rapper, regular]), L, 540, 0.1, false, 5);
+
+    const ra = actors.patients.get('r1')!;
+    expect(ra.dreads).not.toBeNull();
+    expect(ra.chain).not.toBeNull();
+    expect(ra.glasses).not.toBeNull();   // vip: true, the existing VIP accessory
+
+    const na = actors.patients.get('n1')!;
+    expect(na.dreads).toBeNull();
+    expect(na.chain).toBeNull();
+  });
+
+  it('ties dreadlocks and the chain to the archetype, not to vip status', () => {
+    const actors = new Actors();
+    const rapper = patient('r1', 'waiting', { archetype: 'rapper', vip: false });
+    actors.sync(clinic('c1', [rapper]), L, 540, 0.1, false, 5);
+    const ra = actors.patients.get('r1')!;
+    expect(ra.dreads).not.toBeNull();
+    expect(ra.chain).not.toBeNull();
+    expect(ra.glasses).toBeNull();   // vip: false here, so no sunglasses even though dreads/chain show
+  });
+});
+
+// DESIGN 11.4: the Gold Scrubs legacy perk tints the player's own scrubs.
+describe('Actors: player gold scrubs (DESIGN 11.4)', () => {
+  function op(staffId: string | null): Operatory {
+    return { id: 'op0', slot: 0, chair: 'basic', upgrades: [], staffId, assistantId: null, patientId: null, playerMode: 'hands' };
+  }
+  function withPlayerOp(): Clinic {
+    const c = clinic('c1', []);
+    c.ops = [op(PLAYER_ID)];
+    return c;
+  }
+
+  it('creates the player with the default scrubs color by default', () => {
+    const actors = new Actors();
+    actors.sync(withPlayerOp(), L, 540, 0.1, false, 5);
+    const player = actors.staff.get(PLAYER_ID)!;
+    expect(player.tint.scrubs).toBe('#FF7AA8');
+  });
+
+  it('retints the player live when the flag turns on after the actor already exists', () => {
+    const actors = new Actors();
+    actors.sync(withPlayerOp(), L, 540, 0.1, false, 5);
+    actors.setPlayerGold(true);
+    const player = actors.staff.get(PLAYER_ID)!;
+    expect(player.tint.scrubs).toBe(C.sunshine);
+  });
+
+  it('creates the player already gold when the flag was set before the actor existed', () => {
+    const actors = new Actors();
+    actors.setPlayerGold(true);
+    actors.sync(withPlayerOp(), L, 540, 0.1, false, 5);
+    const player = actors.staff.get(PLAYER_ID)!;
+    expect(player.tint.scrubs).toBe(C.sunshine);
   });
 });

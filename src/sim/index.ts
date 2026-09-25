@@ -12,9 +12,9 @@
 //   there (employees delegate with Quick clean, which needs Bronze mastery of the case).
 // - Every DayPatient has caseType and twists (DESIGN 5.5, 5.6), NPC patients too.
 import type {
-  ActionResult, AddonId, CampaignId, CaseType, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, EquipId, ExtraId,
-  FocusId, GameState, HandsOnPayout, OfficeTierId, OfflineReport, OpUpgradeId, PendingEvent, PerkId, PriceKey, SimEvent, SkillId,
-  ToolSlot,
+  ActionResult, AddonId, CampaignId, CaseType, ChairTier, CleanResult, CleanSetup, Clinic, DayPatient, DayReport, Difficulty, DistrictId,
+  EquipId, ExtraId, FocusId, GameState, HandsOnPayout, LegacyPerkId, OfficeTierId, OfflineReport, OpUpgradeId, PendingEvent, PerkId,
+  PriceKey, SimEvent, SkillId, ToolSlot,
 } from '../core/types';
 import * as manager from './manager';
 import * as career from './career';
@@ -25,10 +25,17 @@ import * as prog from './progress';
 import * as cases from './cases';
 import { tickWorld } from './clinic';
 import { claimGoal as claim } from './goals';
+import * as city from './city';
+import * as finale from './finale';
+import * as difficulty from './difficulty';
 
 // ------------------------------------------------------------------ lifecycle
-/** A fresh game in the school phase at day 1, 8:00. */
-export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number }): GameState { return career.newGame(opts); }
+/** A fresh game in the school phase at day 1, 8:00. `difficulty` (DESIGN 11.5) defaults to 'standard'.
+ * `legacyPerks` (DESIGN 11.4) are the owned perks the player brings into this run; the sim applies them
+ * (Head Start: $500 and Floss Picks; Trained Hands: Gracey Curette and Cordless Polisher; Prodigy: a skill
+ * point; Famous Name: demand +10%; Alumni Network: candidates +5 on every stat; Gold Scrubs: cosmetic, the
+ * UI reads state.legacyPerks). The UI checks ownership in core/legacy before passing them. */
+export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number; difficulty?: Difficulty; legacyPerks?: LegacyPerkId[] }): GameState { return career.newGame(opts); }
 /** Fill in fields missing from older saves. */
 export function migrate(state: GameState): GameState { return career.migrate(state); }
 
@@ -83,8 +90,9 @@ export function skillStatus(state: GameState, id: SkillId): 'learned' | 'availab
 
 // ------------------------------------------------------------------ practice
 export function practiceStatus(state: GameState): { ok: boolean; price: number; maxLoan: number; cashNeeded: number; reasons: string[] } { return economy.practiceStatus(state); }
-/** Open the first practice (T1). `loan` is borrowed from the bank (<= maxLoan). Phase becomes 'owner'. */
-export function openPractice(state: GameState, opts: { name: string; loan: number }): ActionResult { return economy.openPractice(state, opts); }
+/** Open the first practice (T1). `loan` is borrowed from the bank (<= maxLoan). Phase becomes 'owner'.
+ * `district` (DESIGN 11.1): where it serves; by default the least-smiling district (cityStatus lists them). */
+export function openPractice(state: GameState, opts: { name: string; loan: number; district?: DistrictId }): ActionResult { return economy.openPractice(state, opts); }
 
 // ------------------------------------------------------------------ staff (clinicIndex = index into state.locations)
 export function hire(state: GameState, candidateId: string, clinicIndex: number): ActionResult { return staff.hire(state, candidateId, clinicIndex); }
@@ -119,7 +127,11 @@ export function buyEquipment(state: GameState, clinicIndex: number, id: EquipId)
 export function moveQuote(state: GameState, clinicIndex: number, tier: OfficeTierId): { price: number; tradeIn: number; net: number; maxLoan: number; ok: boolean; reason?: string } { return economy.moveQuote(state, clinicIndex, tier); }
 export function moveOffice(state: GameState, clinicIndex: number, tier: OfficeTierId, loan: number): ActionResult { return economy.moveOffice(state, clinicIndex, tier, loan); }
 export function locationQuote(state: GameState, tier: OfficeTierId): { price: number; maxLoan: number; ok: boolean; reason?: string } { return economy.locationQuote(state, tier); }
-export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number): ActionResult { return economy.openLocation(state, tier, name, loan); }
+/** Open another location. `district` (DESIGN 11.1): by default the least-smiling district without a location;
+ * a second location in the same district adds only half as much to its Smile Index. */
+export function openLocation(state: GameState, tier: OfficeTierId, name: string, loan: number, district?: DistrictId): ActionResult { return economy.openLocation(state, tier, name, loan, district); }
+/** Rent a location pays today: the office rent plus the difficulty's growth with reputation (DESIGN 11.5). */
+export function rent(state: GameState, clinicIndex: number): number { const c = state.locations[clinicIndex]; return c ? difficulty.rentOf(state, c) : 0; }
 export function setPrice(state: GameState, clinicIndex: number, key: PriceKey, mult: number): void { economy.setPrice(state, clinicIndex, key, mult); }
 export function setMarketing(state: GameState, clinicIndex: number, level: 0 | 1 | 2 | 3): void { economy.setMarketing(state, clinicIndex, level); }
 /** Which clinic the UI shows: -1 = the employer (employee phase), else an index into state.locations. */
@@ -177,6 +189,45 @@ export function equipmentPrice(state: GameState, clinicIndex: number, id: EquipI
 export function chairPrice(state: GameState, tier: ChairTier): number { return economy.chairPrice(state, tier); }
 /** Price of an operatory upgrade (Bulk Buyer applies). */
 export function opUpgradePrice(state: GameState, id: OpUpgradeId): number { return economy.opUpgradePrice(state, id); }
+
+// ------------------------------------------------------------------ end game (DESIGN 11)
+/**
+ * Smile City for the map and the hub: the city index (0..1) and pct (one decimal), each district (index 0..1,
+ * start, patients served, how many of your locations, colour, blurb), the next milestone, the milestones
+ * reached, whether the gala is scheduled and whether the Smile Van is for sale (from 50%).
+ * Milestones: when the city passes one (tick, a hands-on clean, closeDay) the sim emits a 'toast' SimEvent
+ * ("Smile City 50%: Halfway There", "Smile City 30%"), pays the city grant (ledger 'City grant'), adds a 'city'
+ * timeline entry and a DayReport note starting "Smile City <pct>%". Compare cityStatus(state).reached before
+ * and after an action (or closeDay) to play the celebration card with CITY_MILESTONES' title and text.
+ */
+export function cityStatus(state: GameState): ReturnType<typeof city.cityStatus> { return city.cityStatus(state); }
+/** Whether the Golden Molar Gala can be played now (the city reached 100%, not won yet, one try a day). */
+export function galaStatus(state: GameState): { unlocked: boolean; ready: boolean; won: boolean; attempts: number; reason?: string } { return finale.galaStatus(state); }
+/** The gala showcase clean (DESIGN 11.3): grillz case, special.showcase true, 12 gems, the rap star Lil Molar,
+ * chatty plus more twists, the difficulty rules. Deterministic per attempt; check galaStatus first. */
+export function galaSetup(state: GameState): CleanSetup { return finale.galaSetup(state); }
+/** Score the gala: 4+ stars wins the Golden Molar (finale.won, prize 'Gala prize', timeline, the Legacy store
+ * records the win). Fewer: try again tomorrow (finale.attempts). `legacy` is what retiring now would pay.
+ * `events` carries toasts, level-ups and achievements. Does not tick the clinic clock. */
+export function completeGala(state: GameState, result: CleanResult): { won: boolean; payout: HandsOnPayout; lines: string[]; legacy: number; events: SimEvent[] } { return finale.completeGala(state, result); }
+/** Legacy points retiring now would earn, line by line (5 Golden Molar, 1 per 5 achievements, 1 per gold
+ * mastery, 1 per $1M valuation up to 10). */
+export function legacyPoints(state: GameState): { goldenMolar: number; achievements: number; gold: number; valuation: number; total: number } { return finale.legacyPoints(state); }
+/** Retire into New Game+: adds the points to core/legacy (loadLegacy/saveLegacy), marks finale.retired and
+ * returns the points earned (0 the second time). The UI then starts a new game. */
+export function retire(state: GameState): number { return finale.retire(state); }
+/** Trophy wall summary for ClinicView.setTrophies. */
+export function trophies(state: GameState): { plaques: number; gold: number; milestones: number; goldenMolar: boolean } { return finale.trophies(state); }
+/** The difficulty rules a clean would use now (snap point, star shift, 5-star time factor). */
+export function cleanRules(state: GameState): CleanSetup['rules'] { return difficulty.cleanRules(state); }
+/** What 5 stars needs for a waiting patient ("5 stars: 94% and under 1:20"): quality 0..1 and seconds (null
+ * when the difficulty has no time limit), plus the par and rules. Null when the patient is not found.
+ * Changes nothing (no gel is used). */
+export function fiveStarNeeds(state: GameState, patientId: string): { quality: number; seconds: number | null; par: number; rules: CleanSetup['rules'] } | null {
+  const setup = career.cleanPreview(state, patientId);
+  if (!setup) return null;
+  return { ...difficulty.fiveStarNeeds(setup.rules, setup.parSeconds), par: setup.parSeconds, rules: setup.rules };
+}
 
 // ------------------------------------------------------------------ selectors (read-only)
 export function activeClinic(state: GameState): Clinic | null { return sel.activeClinic(state); }

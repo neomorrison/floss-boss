@@ -87,9 +87,11 @@ export function schoolScreen(): Screen {
 }
 
 export function showGraduation(): void {
+  // the first promotion (DESIGN 11.2): the title ribbon on the graduation card
   const hero = h('div.grad-hero',
     h('div.grad-cap', icon('graduation')),
     bossPortrait(132, 'grad-boss ring'),
+    h('div.promo-ribbon.grad-ribbon', h('span', 'Staff Hygienist')),
   );
   const take = btn('Take the job', { variant: 'primary', size: 'lg', block: true, iconRight: 'arrowRight' });
   const m = openModal({
@@ -113,7 +115,7 @@ export function showGraduation(): void {
     dismissable: false,
     cls: 'modal-grad',
   });
-  sfx('level_up');
+  sfx('promotion');
   requestAnimationFrame(() => confetti(hero, 110));
   take.addEventListener('click', () => { sfx('ui_click'); m.close(); go('hub'); });
 }

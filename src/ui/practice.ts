@@ -6,7 +6,7 @@ import { store } from '../core/store';
 import { OFFICES } from '../data/offices';
 import * as sim from '../sim';
 import { h } from './dom';
-import { confetti, sfx } from './fx';
+import { sfx } from './fx';
 import { act } from './game';
 import { icon } from './icons';
 import { openModal } from './modal';
@@ -14,6 +14,11 @@ import { attempt } from './safe';
 import { officeArt } from './art';
 import { toast } from './toasts';
 import { btn, priceTag, slider } from './widgets';
+import { ribbonCutting } from './ceremony';
+import { districtPicker } from './city';
+import { openPracticeIn } from './endgame';
+import { defaultDistrict } from './endlogic';
+import type { DistrictId } from '../core/types';
 
 type Status = { ok: boolean; price: number; maxLoan: number; cashNeeded: number; reasons: string[] };
 
@@ -64,6 +69,7 @@ export function openPracticeFlow(): void {
   const minLoan = Math.max(0, Math.ceil((price - s.cash) / 100) * 100);
   const maxLoan = Math.max(minLoan, Math.floor(st.maxLoan / 100) * 100);
   let loan = minLoan;
+  let district: DistrictId = defaultDistrict(s.city, []);
   const nameInput = h('input.input', { type: 'text', maxLength: 28, value: `${s.player.name} Family Dental`, 'aria-label': 'Practice name', 'data-focus-key': 'practice-name' }) as HTMLInputElement;
   const loanVal = h('span.num');
   const cashAfter = h('span.num');
@@ -92,6 +98,7 @@ export function openPracticeFlow(): void {
           h('span.chip', icon('receipt'), `Rent ${money(office.rent)}/day`),
         ),
       ),
+      h('div.field', h('span.label', 'District'), districtPicker(s, { selected: district, onPick: (d) => { district = d; } })),
       h('div.field',
         h('div.row.row-between', h('span.label', 'Bank loan'), loanVal),
         range,
@@ -107,13 +114,13 @@ export function openPracticeFlow(): void {
   });
   open.addEventListener('click', () => {
     const name = nameInput.value.trim().replace(/\s+/g, ' ') || `${s.player.name} Family Dental`;
-    const ok = act(() => sim.openPractice(store.state, { name, loan }), { sound: 'purchase', success: '' });
+    const ok = act(() => openPracticeIn(store.state, name, loan, district), { sound: 'purchase', success: '' });
     if (!ok) return;
     attempt(() => sim.setActive(store.state, 0), undefined);
     store.commit({ saveNow: true });
     m.close();
-    sfx('level_up');
-    confetti(undefined, 120);
-    toast({ text: `Welcome to ${name}`, sub: 'Hire a hygienist on the Staff screen', kind: 'gold', icon: 'sparkle', ms: 5000 });
+    void ribbonCutting({ kind: 'practice', name, tier: 't1', district }).then(() => {
+      toast({ text: `Welcome to ${name}`, sub: 'Hire a hygienist on the Staff screen', kind: 'gold', icon: 'sparkle', ms: 5000 });
+    });
   });
 }

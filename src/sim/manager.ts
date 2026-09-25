@@ -2,7 +2,7 @@
 // Modifier ids follow the shared convention '<source>:<key>:<n>' ('event:puppy:12', 'campaign:kidsWeek:7',
 // 'focus:speed:9'); the clinic view maps event and campaign keys to diorama props, the UI groups by source.
 import type {
-  ActionResult, CampaignId, Clinic, ClinicModifier, EquipId, FocusId, GameState, OfficeTierId, PendingEvent, SimEvent, Staff,
+  ActionResult, ArchetypeId, CampaignId, CaseType, Clinic, ClinicModifier, EquipId, FocusId, GameState, OfficeTierId, PendingEvent, SimEvent, Staff,
   StaffRole,
 } from '../core/types';
 import type { Rng } from '../core/rng';
@@ -20,8 +20,10 @@ import { computeRating } from './clinic';
 import { bookClinic, capacityOf, demandLambda, makeVip, weekdayOf } from './booking';
 import { lastAppt } from './effects';
 import { gainXp, tierIndex } from './progress';
-import { askFor, makeStaff, removeStaff, wantsRaise } from './staff';
+import { askNow, makeStaff, removeStaff, wantsRaise } from './staff';
 import { progressGoal } from './goals';
+import { creditEvent, VAN_UNLOCK_PCT } from './city';
+import { eventWeightMult } from './difficulty';
 
 const fail = (reason: string): ActionResult => ({ ok: false, reason });
 
@@ -151,9 +153,10 @@ export function eventById(id: string): EventDef | null {
   return EVENTS.find((e) => e.id === id) ?? null;
 }
 
-function eligibleEquip(c: Clinic): EquipId[] {
+function eligibleEquip(state: GameState, c: Clinic): EquipId[] {
   return EQUIP_ORDER.filter((id) => !c.equipment.includes(id) && tierIndex(c.tier) >= tierIndex(EQUIPMENT[id].minTier)
-    && !(id === 'digitalXray' && !c.equipment.includes('xray')));
+    && !(id === 'digitalXray' && !c.equipment.includes('xray'))
+    && !(id === 'smileVan' && !state.finale?.milestones.includes(VAN_UNLOCK_PCT)));
 }
 
 function realStaff(c: Clinic): Staff[] {
@@ -165,7 +168,7 @@ function meetsNeeds(state: GameState, c: Clinic, e: EventDef): boolean {
     case 'hygienist': return realStaff(c).some((s) => s.role === 'hygienist');
     case 'staff': return realStaff(c).length > 0;
     case 'twoLocations': return state.locations.length >= 2;
-    case 'unownedEquip': return eligibleEquip(c).length > 0;
+    case 'unownedEquip': return eligibleEquip(state, c).length > 0;
     case 'twoOps': return c.ops.length >= 2;
     case 'dentist': return c.staff.some((s) => s.role === 'dentist');
     default: return true;
@@ -194,7 +197,7 @@ function eventVars(state: GameState, c: Clinic, e: EventDef, rng: Rng): Record<s
     vars.op = `Operatory ${i + 1}`;
     vars.opId = c.ops[i].id;
   }
-  const eq = eligibleEquip(c);
+  const eq = eligibleEquip(state, c);
   if (eq.length) {
     const id = rng.pick(eq);
     vars.equip = EQUIPMENT[id].name;
@@ -214,7 +217,8 @@ export function drawEvents(state: GameState, rng: Rng): void {
     const pool = EVENTS.filter((e) => tierIndex(c.tier) >= tierIndex(e.minTier) && meetsNeeds(state, c, e)
       && !(recent[e.id] != null && state.day - recent[e.id] < EVENT_REPEAT_DAYS) && !hasPermanent(c, e.id));
     if (!pool.length) continue;
-    const e = rng.weighted(pool, (x) => x.weight);
+    // harder settings make costly events likelier at big offices (DESIGN 11.5)
+    const e = rng.weighted(pool, (x) => x.weight * eventWeightMult(state, c, x.id));
     recent[e.id] = state.day;
     for (const k of Object.keys(recent)) if (state.day - recent[k] >= EVENT_REPEAT_DAYS * 4) delete recent[k];
     state.pendingEvents.push({ eventId: e.id, clinicId: c.id, day: state.day, vars: eventVars(state, c, e, rng) });
@@ -339,7 +343,7 @@ function applyEffect(a: ApplyCtx, ef: EventEffect): boolean {
         : eventStaff(a);
       if (!s) return true;
       s.skill = clamp(s.skill + ef.delta, 0, 99);
-      const ask = askFor(s.role, s);
+      const ask = askNow(state, s.role, s);
       if (ask > s.ask) {
         s.ask = ask;
         // the request (or an auto raise) is settled at the day close with the quiet period (DESIGN 8.5)
@@ -367,9 +371,10 @@ function applyEffect(a: ApplyCtx, ef: EventEffect): boolean {
       return true;
     }
     case 'vip': {
-      (sc.vips ??= []).push({ fee: ef.fee, weight: ef.reviewWeight, day: state.day });
+      // the effect decides who comes: the Celebrity Walk-in is the rap star with his grill (DESIGN 11.6)
+      (sc.vips ??= []).push({ fee: ef.fee, weight: ef.reviewWeight, day: state.day, ...(ef.archetype ? { archetype: ef.archetype } : {}), ...(ef.caseType ? { caseType: ef.caseType } : {}) });
       sc.vips = sc.vips.filter((v) => v.day >= state.day);
-      if (!isMorning(state, c)) addVipNow(state, c, ef.fee, ef.reviewWeight, a.rng);
+      if (!isMorning(state, c)) addVipNow(state, c, ef.fee, ef.reviewWeight, a.rng, ef.archetype, ef.caseType);
       a.touchedBooking = true;
       return true;
     }
@@ -442,9 +447,9 @@ function applyEffect(a: ApplyCtx, ef: EventEffect): boolean {
 }
 
 /** A VIP booked after the doors opened: arrives within the hour. */
-function addVipNow(state: GameState, c: Clinic, fee: number, weight: number, rng: Rng): void {
+function addVipNow(state: GameState, c: Clinic, fee: number, weight: number, rng: Rng, archetype?: ArchetypeId, caseType?: CaseType): void {
   const t = Math.round(Math.min(Math.max(state.minute + 30, OPEN_MIN + 30), lastAppt(state, c) - 30));
-  c.patients.push(makeVip(state, c, rng, t, fee, weight));
+  c.patients.push(makeVip(state, c, rng, t, fee, weight, archetype, caseType));
   c.patients.sort((x, y) => x.apptMin - y.apptMin);
 }
 
@@ -478,8 +483,11 @@ export function resolveEvent(state: GameState, pendingIndex: number, choice: num
     c.modifiers.push({ id: modId(c, 'event', e.id, state.day), label: `${e.title}: ${fillVars(ch.label, pe.vars)}`, source: 'event', untilDay: state.day });
   }
   if (a.touchedBooking) rebook(state, c);
+  // charity, school day and tooth fairy: smile points for the location's district (DESIGN 11.1)
+  const pts = creditEvent(state, c, e.id, ci);
   const head = fillVars(ch.label, pe.vars);
-  const text = a.texts.length ? a.texts.join(' ') : `${head}. ${scaledHint(ch, tierScale(c), pe.vars)}.`.replace(/\.\./g, '.');
+  let text = a.texts.length ? a.texts.join(' ') : `${head}. ${scaledHint(ch, tierScale(c), pe.vars)}.`.replace(/\.\./g, '.');
+  if (pts > 0) text = `${text} Smile City +${Math.round(pts)} smile points.`;
   state.eventLog = [...(state.eventLog ?? []), { day: state.day, eventId: e.id, clinicId: c.id, choice: ci, text }].slice(-LOG_MAX);
   note(state, `${c.name}: ${e.title}. ${text}`);
   if (!auto) progressGoal(state, 'events', 1, ev);
@@ -580,7 +588,7 @@ export function startCampaign(state: GameState, clinicIndex: number, id: Campaig
   return { ok: true, message: morning ? `${def.name} runs until day ${untilDay}` : `${def.name} starts tomorrow and runs until day ${untilDay}` };
 }
 
-const CASE_LABEL: Record<string, string> = { candy: 'sugar bug cases', whitening: 'whitening', deep: 'deep cleanings', braces: 'braces checks', pirate: 'pirates', routine: 'routine' };
+const CASE_LABEL: Record<string, string> = { candy: 'sugar bug cases', whitening: 'whitening', deep: 'deep cleanings', braces: 'braces checks', pirate: 'pirates', routine: 'routine', grillz: 'grill glow-ups' };
 
 // ------------------------------------------------------------------ previews for the huddle
 

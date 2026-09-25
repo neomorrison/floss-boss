@@ -16,8 +16,8 @@ import { createPerson, type PersonKind } from '../src/clinic/people';
 import { attachRenderer, getRenderer } from '../src/core/renderer';
 import { CLINIC_MODELS, PEOPLE_MODELS } from '../src/data/assets';
 import type {
-  ArchetypeId, CaseType, ChairTier, Clinic, ClinicModifier, DayPatient, EquipId, OfficeTierId, Operatory,
-  OpUpgradeId, PerkId, SimEvent, Staff, StaffRole, TwistId,
+  ArchetypeId, CaseType, ChairTier, Clinic, ClinicModifier, DayPatient, DistrictId, EquipId, OfficeTierId,
+  Operatory, OpUpgradeId, PerkId, SimEvent, Staff, StaffRole, TwistId,
 } from '../src/core/types';
 import { OFFICES } from '../src/data/offices';
 import { EQUIP_ORDER } from '../src/data/upgrades';
@@ -59,13 +59,18 @@ if (q.get('clean') === '1') document.body.classList.add('clean');
 const rng = makeRng(seed);
 const forceCase = q.get('case') as CaseType | null;
 const TWIST_IDS = Object.keys(TWISTS) as TwistId[];
+const district = (q.get('district') ?? 'downtown') as DistrictId;
+// 'archetype=rapper' forces every patient to be the rap star VIP (DESIGN 11.6), so dreadlocks, the gold
+// chain and the grillz badge can be checked without waiting on the random mix; the panel also toggles it.
+let forceArchetype = (q.get('archetype') ?? null) as ArchetypeId | null;
 
 /** A plausible case for this archetype (or the forced one from ?case=), for exercising the case badge
  * and pirate hat. The real mix and any equipment fallback are the sim's job, not this test bed's. */
 function pickCase(archetype: ArchetypeId): CaseType {
   if (forceCase && (CASE_ORDER as string[]).includes(forceCase)) return forceCase;
   if (archetype === 'pirate') return 'pirate';
-  const pool = CASE_ORDER.filter((c) => c !== 'pirate');
+  if (archetype === 'rapper') return 'grillz';
+  const pool = CASE_ORDER.filter((c) => c !== 'pirate' && c !== 'grillz');
   return rng.weighted(pool, (c) => Math.max(0.15, CASES[c].weight[archetype] ?? 0.15));
 }
 function pickTwists(): TwistId[] {
@@ -132,7 +137,7 @@ function runHarness(): void {
       tier, ownedByPlayer: owned, ops, equipment: tier === 't1' ? equipment.filter((e) => e !== 'breakRoom') : equipment, staff,
       prices: defaultPrices(), marketing: 1, rating: 4.3, reviews: [], served: 120, patients: [],
       day: { booked: 0, demand: 0, turnedAway: 0, noShows: 0, walkIns: 0, served: 0, walkouts: 0, revenue: 0, tips: 0, supplies: 0, addonsSold: 0, fiveStars: 0, handsOn: 0 },
-      checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
+      checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0, district,
     };
   }
 
@@ -171,9 +176,10 @@ function runHarness(): void {
   // 10.2) show up without needing the button.
   let forceVip = false;
   function spawn(evts: SimEvent[]): void {
-    const archetype = rng.weighted(PATIENT_ARCHETYPES, mix);
+    const archetype = forceArchetype ?? rng.weighted(PATIENT_ARCHETYPES, mix);
     const A = ARCHETYPES[archetype];
-    const vip = forceVip || rng.chance(0.06);
+    // the rap star is always a VIP (DESIGN 11.6)
+    const vip = forceVip || archetype === 'rapper' || rng.chance(0.06);
     forceVip = false;
     const p: DayPatient = {
       id: uid('p'), name: `${rng.pick(A.firstNames)} ${rng.pick(LAST_NAMES)}`, archetype, portrait: archetype,
@@ -320,7 +326,43 @@ function runHarness(): void {
     const miss = EQUIP_ORDER.filter((e) => !clinic.equipment.includes(e) && (tier !== 't1' || e !== 'breakRoom'));
     if (miss.length) clinic.equipment.push(miss[0]);
   }
+  function buyVan(): void {
+    if (!clinic.equipment.includes('smileVan')) clinic.equipment.push('smileVan');
+    say('Smile Van parked');
+  }
   function say(t: string): void { log = t; }
+
+  // ------------------------------------------------------------------ end game (DESIGN 11) test rig
+  const TROPHY_PRESETS: { plaques: number; gold: number; milestones: number; goldenMolar: boolean }[] = [
+    { plaques: 0, gold: 0, milestones: 0, goldenMolar: false },
+    { plaques: 6, gold: 1, milestones: 1, goldenMolar: false },
+    { plaques: 14, gold: 4, milestones: 3, goldenMolar: false },
+    { plaques: 30, gold: 10, milestones: 8, goldenMolar: true },
+  ];
+  let trophyIdx = 0;
+  function nextTrophies(): void {
+    trophyIdx = (trophyIdx + 1) % TROPHY_PRESETS.length;
+    view.setTrophies(TROPHY_PRESETS[trophyIdx]);
+    say(`Trophies: ${JSON.stringify(TROPHY_PRESETS[trophyIdx])}`);
+  }
+  const CITY_PRESETS: [number, number][] = [[0, 0.2], [0.4, 0.45], [0.7, 0.55], [1, 1]];
+  let cityIdx = 0;
+  function nextCityMood(): void {
+    cityIdx = (cityIdx + 1) % CITY_PRESETS.length;
+    const [district2, city] = CITY_PRESETS[cityIdx];
+    view.setCityMood(district2, city);
+    say(`City mood: district ${Math.round(district2 * 100)}%, city ${Math.round(city * 100)}%`);
+  }
+  let playerGold = false;
+  function toggleGoldScrubs(): void {
+    playerGold = !playerGold;
+    view.setPlayerStyle({ gold: playerGold });
+    say(playerGold ? 'Gold scrubs on' : 'Gold scrubs off');
+  }
+  function toggleRapperMode(): void {
+    forceArchetype = forceArchetype === 'rapper' ? null : 'rapper';
+    say(forceArchetype ? 'Rapper mode on' : 'Rapper mode off');
+  }
 
   // ------------------------------------------------------------------ panel
 
@@ -349,6 +391,14 @@ function runHarness(): void {
   for (const key of Object.keys(MOD_PRESETS)) btn(MOD_PRESETS[key].label, () => addMod(key));
   btn('Close op0', () => addMod('closeOp0'));
   btn('Clear props', () => clearMods());
+  // end game (DESIGN 11): trophy wall, city mood, the ribbon ceremony, rapper look, gold scrubs, the van
+  btn('Rapper mode', () => toggleRapperMode());
+  btn('Trophies', () => nextTrophies());
+  btn('City mood', () => nextCityMood());
+  btn('Ribbon', () => view.ceremony('ribbon'));
+  btn('Gold scrubs', () => toggleGoldScrubs());
+  btn('Add Smile Van', () => buyVan());
+  btn('Celebrate', () => view.celebrate());
 
   function jump(mins: number): SimEvent[] { const e: SimEvent[] = []; tick(minute + mins, e); return e; }
 
@@ -382,6 +432,10 @@ function runHarness(): void {
     select: (slot: number | null) => view.select(slot === null ? null : 'op' + slot),
     log: () => log,
     addMod, clearMods, vipNext: () => { forceVip = true; },
+    buyVan, nextTrophies, nextCityMood, toggleGoldScrubs, toggleRapperMode,
+    setTrophies: (data: { plaques: number; gold: number; milestones: number; goldenMolar: boolean }) => view.setTrophies(data),
+    setCityMood: (d: number, c: number) => view.setCityMood(d, c),
+    ceremony: (k: 'ribbon') => view.ceremony(k),
   };
 }
 

@@ -1,7 +1,7 @@
 // Career: new game, migration, school, the hands-on and quick-clean flows. DESIGN 3, 4 and 5.9.
 import type {
-  AddonId, BonusId, CampaignId, CaseType, CleanResult, CleanSetup, Clinic, ClinicModifier, DayPatient, FocusId, GameState,
-  HandsOnPayout, Operatory, PendingEvent, PerkId, SimEvent, Staff, TwistId,
+  AddonId, BonusId, CampaignId, CaseType, CleanResult, CleanSetup, Clinic, ClinicModifier, DayPatient, Difficulty, DistrictId, FocusId,
+  GameState, HandsOnPayout, LegacyPerkId, Operatory, PendingEvent, PerkId, SimEvent, Staff, TimelineEntry, TwistId,
 } from '../core/types';
 import { hashSeed, clamp } from '../core/rng';
 import {
@@ -15,10 +15,15 @@ import { OFFICES } from '../data/offices';
 import { SERVICES, defaultPrices } from '../data/services';
 import { SKILLS } from '../data/skills';
 import { CHAIRS } from '../data/upgrades';
+import { DIFFICULTIES } from '../data/difficulty';
+import { LEGACY_PERKS } from '../data/legacy';
+import { DISTRICTS, EMPLOYER_DISTRICT } from '../data/city';
 import {
-  S, SimClinic, SimPatient, SimStaff, addCash, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, priceOf, withRng,
+  S, SimClinic, SimPatient, SimStaff, addCash, addTimeline, clinicsOf, q3, q64, emptyDayStats, findPatient, hasSkill, nextId, opById, priceOf, withRng,
 } from './internal';
-import { autoQuality, employeeRate, gainXp, starsFor, title } from './progress';
+import { OWNER_TITLES, autoQuality, employeeRate, gainXp, setTitle, title } from './progress';
+import { cleanRules, starsWith } from './difficulty';
+import { fixCity, initCity, leastSmilingFree } from './city';
 import { addonMinutes, downgradeCase, handsFee } from './patients';
 import { buildCaseSetup, caseLevel, masteryCount, masteryTier } from './cases';
 import { addReview, computeRating, reviewStars, shiftBonusCheck, tickWorld, walkoutFromChair } from './clinic';
@@ -28,7 +33,35 @@ import { checkAchievements, makeGoals, progressGoal } from './goals';
 
 // ------------------------------------------------------------------ lifecycle
 
-export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number }): GameState {
+const isDifficulty = (v: unknown): v is Difficulty => typeof v === 'string' && v in DIFFICULTIES;
+const legacyList = (v: unknown): LegacyPerkId[] => Array.from(new Set(arr<string>(v).filter((x) => typeof x === 'string' && x in LEGACY_PERKS))) as LegacyPerkId[];
+
+/** A fresh game. `difficulty` (DESIGN 11.5) defaults to Standard; `legacyPerks` are the New Game+ perks the
+ * player brings into this run (DESIGN 11.4): Head Start, Trained Hands and Prodigy apply here, Famous Name
+ * and Alumni Network during the run, Gold Scrubs is cosmetic (the UI reads state.legacyPerks). */
+export function newGame(opts: { name: string; avatar: number; seed?: number; nowMs: number; difficulty?: Difficulty; legacyPerks?: LegacyPerkId[] }): GameState {
+  const s = baseGame(opts);
+  applyLegacyPerks(s);
+  return s;
+}
+
+/** Head Start: $500 and Floss Picks. Trained Hands: the Gracey Curette and the Cordless Polisher.
+ * Prodigy: one skill point. */
+export const HEAD_START_CASH = 500;
+function applyLegacyPerks(s: GameState): void {
+  const has = (id: LegacyPerkId) => s.legacyPerks.includes(id);
+  if (has('headStart')) {
+    addCash(s, HEAD_START_CASH, 'Head Start');
+    s.player.tools.floss = Math.max(s.player.tools.floss, 2);
+  }
+  if (has('trainedHands')) {
+    s.player.tools.scaler = Math.max(s.player.tools.scaler, 2);
+    s.player.tools.polisher = Math.max(s.player.tools.polisher, 2);
+  }
+  if (has('prodigy')) s.player.skillPoints += 1;
+}
+
+function baseGame(opts: { name: string; avatar: number; seed?: number; nowMs: number; difficulty?: Difficulty; legacyPerks?: LegacyPerkId[] }): GameState {
   const seed = (opts.seed ?? hashSeed('floss', opts.nowMs, opts.name)) >>> 0;
   return {
     version: SAVE_VERSION,
@@ -76,13 +109,19 @@ export function newGame(opts: { name: string; avatar: number; seed?: number; now
     huddleDay: 1,
     pendingEvents: [],
     eventLog: [],
+    difficulty: isDifficulty(opts.difficulty) ? opts.difficulty : 'standard',
+    city: initCity(),
+    timeline: [],
+    finale: { milestones: [], galaUnlocked: false, attempts: 0, won: false, wonDay: null, retired: false },
+    legacyPerks: legacyList(opts.legacyPerks),
+    distress: 0,
     settings: { autoHuddle: false, autoRaise: false },
   };
 }
 
 
-const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+function num(v: unknown, d: number): number { return typeof v === 'number' && Number.isFinite(v) ? v : d; }
+function arr<T>(v: unknown): T[] { return Array.isArray(v) ? (v as T[]) : []; }
 const obj = <T extends object>(v: unknown): Partial<T> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Partial<T>) : {});
 const isCase = (v: unknown): v is CaseType => typeof v === 'string' && (CASE_ORDER as string[]).includes(v);
 
@@ -161,7 +200,9 @@ function fixClinic(c: Clinic): void {
 export function migrate(state: GameState): GameState {
   const s = (state && typeof state === 'object' ? state : {}) as GameState;
   const hadHuddle = typeof s.huddleDay === 'number' && Number.isFinite(s.huddleDay);
-  const fresh = newGame({ name: obj<GameState['player']>(s.player).name ?? 'Hygienist', avatar: 0, seed: num(s.seed, 1), nowMs: num(s.createdAt, 0) });
+  const hadTimeline = Array.isArray(s.timeline);
+  // old saves predate difficulty modes: they play on Standard (no legacy perks are applied here)
+  const fresh = baseGame({ name: obj<GameState['player']>(s.player).name ?? 'Hygienist', avatar: 0, seed: num(s.seed, 1), nowMs: num(s.createdAt, 0) });
   for (const k of Object.keys(fresh) as (keyof GameState)[]) {
     if ((s as any)[k] === undefined || (s as any)[k] === null && (fresh as any)[k] !== null) (s as any)[k] = (fresh as any)[k];
   }
@@ -235,9 +276,67 @@ export function migrate(state: GameState): GameState {
   // autoRaise is off unless chosen; autoPause stays undefined (= on) until the player sets it
   s.settings = { autoHuddle: st.autoHuddle === true, autoRaise: st.autoRaise === true };
   if (typeof st.autoPause === 'boolean') s.settings.autoPause = st.autoPause;
+  migrateEndGame(s, hadTimeline);
   s.version = SAVE_VERSION;
   s.player.title = title(s);
+  const oi = (OWNER_TITLES as readonly string[]).indexOf(s.player.title);
+  if (s.phase === 'owner' && oi >= 0) S(s).bestTitle = Math.max(num(S(s).bestTitle, 0), oi);
   return s;
+}
+
+/** End-game fields (DESIGN 11) for older saves: Standard difficulty, the city from its start values,
+ * districts for every clinic (the employer Downtown, your locations in distinct districts), a timeline
+ * rebuilt from achievements and masteries, the finale, no legacy perks, no distress. */
+function migrateEndGame(s: GameState, hadTimeline: boolean): void {
+  if (!isDifficulty(s.difficulty)) s.difficulty = 'standard';
+  s.city = fixCity(s.city);
+  s.legacyPerks = legacyList(s.legacyPerks);
+  s.distress = Math.max(0, Math.round(num(s.distress, 0)));
+  const f = obj<GameState['finale']>(s.finale);
+  s.finale = {
+    milestones: Array.from(new Set(arr<number>(f.milestones).filter((x) => typeof x === 'number' && Number.isFinite(x)))).sort((a, b) => a - b),
+    galaUnlocked: f.galaUnlocked === true,
+    attempts: Math.max(0, Math.round(num(f.attempts, 0))),
+    won: f.won === true,
+    wonDay: typeof f.wonDay === 'number' && Number.isFinite(f.wonDay) ? f.wonDay : null,
+    retired: f.retired === true,
+  };
+  if (s.employer) s.employer.district = EMPLOYER_DISTRICT;
+  const used: DistrictId[] = [];
+  for (const c of s.locations) {
+    const sc = c as SimClinic;
+    if (!(typeof c.district === 'string' && c.district in DISTRICTS)) {
+      // distinct districts for saves from before Smile City: the least-smiling one still free
+      const free = leastSmilingFree({ ...s, locations: [] } as GameState, used);
+      c.district = free;
+    }
+    used.push(c.district);
+    if (typeof sc.tierDay !== 'number' || !Number.isFinite(sc.tierDay)) sc.tierDay = s.day;
+  }
+  if (!hadTimeline) s.timeline = rebuildTimeline(s);
+  else s.timeline = arr<TimelineEntry>(s.timeline).filter((e) => e && typeof e === 'object' && typeof e.text === 'string')
+    .map((e) => ({ day: Math.max(1, Math.round(num(e.day, 1))), text: e.text, kind: (['career', 'office', 'city', 'award', 'mastery'] as const).includes(e.kind) ? e.kind : 'career' }));
+}
+
+/** What an older save can tell about its past: the achievements that mark career steps and the gold masteries. */
+function rebuildTimeline(s: GameState): TimelineEntry[] {
+  const out: TimelineEntry[] = [];
+  const day = Math.max(1, s.day);
+  const a = new Set(s.achievements);
+  const steps: [string, TimelineEntry['kind'], string][] = [
+    ['graduate', 'career', 'Graduated from hygiene school'],
+    ['senior', 'career', 'Promoted to Senior Hygienist'],
+    ['lead', 'career', 'Promoted to Lead Hygienist'],
+    ['owner', 'office', 'Opened your own practice'],
+    ['t2', 'office', 'Moved into a Main Street Office'],
+    ['t3', 'office', 'Moved into a Medical Plaza'],
+    ['t4', 'office', 'Moved into Smile Tower'],
+    ['chain2', 'office', 'Opened a second location'],
+    ['chain5', 'office', 'Five locations'],
+  ];
+  for (const [id, kind, text] of steps) if (a.has(id)) out.push({ day, kind, text });
+  for (const ct of CASE_ORDER) if (masteryTier(masteryCount(s, ct)) >= 3) out.push({ day, kind: 'mastery', text: `Gold mastery: ${CASES[ct].name}` });
+  return out;
 }
 
 
@@ -271,6 +370,7 @@ function makeEmployer(state: GameState): Clinic {
     equipment: ['deepCert', 'sterilizer', 'espresso', 'fishTank'],
     staff, prices: defaultPrices(), marketing: 2, rating: 4.2, reviews: [], served: 600,
     patients: [], day: emptyDayStats(), checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
+    district: EMPLOYER_DISTRICT,
   };
   c.rating = computeRating(c);
   c.rating = 4.2;
@@ -296,11 +396,11 @@ export function schoolSetup(state: GameState, step: 1 | 2): CleanSetup {
   return setup;
 }
 
-function emptyPayout(): HandsOnPayout {
+export function emptyPayout(): HandsOnPayout {
   return { pay: 0, tip: 0, bonus: 0, xp: 0, stars: 0, quality: 0, levelUps: 0, addons: [], lines: [], treasure: 0, mastery: null };
 }
 
-function recordClean(state: GameState, r: CleanResult, ev: SimEvent[], archetype: string | null): void {
+export function recordClean(state: GameState, r: CleanResult, ev: SimEvent[], archetype: string | null): void {
   const st = state.stats;
   const done = r.quit === 'done';
   if (done) st.cleanings += 1;
@@ -357,7 +457,8 @@ function graduate(state: GameState): void {
     bookDay(state, rng);
     makeGoals(state, rng);
   });
-  state.player.title = title(state);
+  addTimeline(state, 'career', `Graduated from hygiene school. Hired at ${EMPLOYER_NAME}`);
+  setTitle(state);
 }
 
 // ------------------------------------------------------------------ hands-on
@@ -394,12 +495,12 @@ function setupFor(state: GameState, c: Clinic, p: SimPatient, consumeGel: boolea
 
 /** Laughing gas: a nervous patient never walks out of that chair (DESIGN 10.5). The clean is scored as
  * finished with the comfort floored, so they stay (and pay) even if the scene ran out of comfort. */
-function gasHolds(c: Clinic, p: SimPatient, r: CleanResult): CleanResult {
+function gasHolds(state: GameState, c: Clinic, p: SimPatient, r: CleanResult): CleanResult {
   if (r.quit !== 'walkout' || p.archetype !== 'nervous' || !c.ownedByPlayer || !hasNitrous(c, opById(c, p.opId))) return r;
   const clean = clamp(num(r.clean, 0), 0, 1);
   const comfort = Math.max(20, num(r.comfort, 0));
   const quality = clamp(0.8 * clean + 0.2 * comfort / 100, 0, 1);
-  return { ...r, quit: 'done', comfort, quality, stars: starsFor(quality) };
+  return { ...r, quit: 'done', comfort, quality, stars: starsWith(quality, cleanRules(state)) };
 }
 
 /** Review comfort of a hands-on clean at an owned clinic: the scene's comfort, Aromatherapy, laughing gas
@@ -498,6 +599,7 @@ function settle(state: GameState, c: Clinic, p: SimPatient, o: {
   p.preQ = p.quality;
   p.preC = p.comfort;
   p.hands = true;
+  if (!o.quick) p.own = true;   // a hands-on clean counts double for the Smile Index (DESIGN 11.1)
   p.awaitingPlayer = false;
   p.staffId = PLAYER_ID;
   p.stage = 'clean';
@@ -522,7 +624,7 @@ export function completeHandsOn(state: GameState, patientId: string, result0: Cl
   const f = findPatient(state, patientId);
   if (!f || !ready(f.p)) return { payout: emptyPayout(), events: ev };
   const { clinic: c, p } = f;
-  const result = gasHolds(c, p, result0);
+  const result = gasHolds(state, c, p, result0);
   if (result.quit === 'abort') {
     // back to waiting in the chair; no pay, no fast-forward
     p.awaitingPlayer = true;
@@ -549,7 +651,7 @@ export function completeHandsOn(state: GameState, patientId: string, result0: Cl
   }
   const q = clamp(num(result.quality, 0), 0, 1);
   const comfort = handsComfort(state, c, p, clamp(num(result.comfort, 60) / 100, 0, 1));
-  const stars = clamp(Math.round(num(result.stars, starsFor(q))), 1, 5);
+  const stars = clamp(Math.round(num(result.stars, starsWith(q, cleanRules(state)))), 1, 5);
   const a = ARCHETYPES[p.archetype];
   const count0 = masteryCount(state, ct);
   const tier0 = masteryTier(count0);
@@ -576,6 +678,7 @@ export function completeHandsOn(state: GameState, patientId: string, result0: Cl
   const tier = masteryTier(count);
   payout.mastery = { caseType: ct, count, tier, tierUp: tier > tier0 };
   if (tier > tier0) payout.lines.push(`${MASTERY_NAMES[tier]} mastery: ${CASES[ct].name}.`);
+  if (tier >= 3 && tier0 < 3) addTimeline(state, 'mastery', `Gold mastery: ${CASES[ct].name}`);
   if (bonusMet) payout.lines.push('Bonus met. Tips up 25%.');
   if (!employee && c.ownedByPlayer) (c as SimClinic).bossCleans = ((c as SimClinic).bossCleans ?? 0) + 1;
   if (result.perfect) payout.lines.push('Sparkling smile.');
@@ -613,7 +716,7 @@ export function quickClean(state: GameState, patientId: string): { payout: Hands
   const op = opById(c, p.opId);
   const chair = op ? CHAIRS[op.chair] : CHAIRS.basic;
   const comfort = clamp((0.4 + 0.45 * 0.6 + chair.comfort + (op?.upgrades.includes('tv') ? 0.08 : 0)) * (c.ownedByPlayer ? modAgg(state, c).comfort : 1), 0, 1);
-  const stars = starsFor(q);
+  const stars = starsWith(q, cleanRules(state));
   state.stats.quickCleans += 1;
   const payout = settle(state, c, p, {
     quality: q, comfort, stars, tip: 0, quick: true, ffMinutes: QUICK_CLEAN_MINUTES, ev, payMult: state.phase === 'employee' ? 0.5 : 1,
@@ -625,3 +728,11 @@ export function quickClean(state: GameState, patientId: string): { payout: Hands
 
 export type { AddonId };
 export { clinicsOf, S };
+
+/** The clean a waiting patient would get, without using numbing gel or changing anything: the difficulty
+ * rules and par for the chair card ("5 stars: 94% and under 1:20", DESIGN 11.5). Null when not found. */
+export function cleanPreview(state: GameState, patientId: string): CleanSetup | null {
+  const f = findPatient(state, patientId);
+  if (!f) return null;
+  return setupFor(state, f.clinic, f.p, false);
+}

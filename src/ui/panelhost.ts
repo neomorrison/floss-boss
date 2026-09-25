@@ -1,4 +1,4 @@
-// Panel host: the sheet that holds Tools, Skills, Staff, Office, Finance, Goals and Settings over the
+// Panel host: the sheet that holds Tools, Skills, Staff, Office, Finance, Smile City, Goals and Settings over the
 // clinic. Re-renders on state changes (throttled, and never mid-drag or while typing).
 import { store } from '../core/store';
 import type { PanelName } from './app';
@@ -6,6 +6,7 @@ import { h } from './dom';
 import { sfx } from './fx';
 import { isOwner } from './game';
 import { icon } from './icons';
+import { cityPanel } from './city';
 import { financePanel } from './panels/finance';
 import { goalsPanel } from './panels/goals';
 import { officePanel } from './panels/office';
@@ -37,6 +38,7 @@ const BUILDERS: Record<PanelName, PanelBuilder> = {
   staff: staffPanel,
   office: officePanel,
   finance: financePanel,
+  city: cityPanel,
   goals: goalsPanel,
   settings: settingsPanel,
 };

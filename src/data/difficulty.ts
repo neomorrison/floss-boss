@@ -26,18 +26,18 @@ export interface DifficultyDef {
 export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   relaxed: {
     id: 'relaxed', name: 'Relaxed', text: 'Gentle patients, forgiving stars, no bankruptcy.',
-    snapAt: 0.7, starShiftPerTitle: 0, starShiftCap: 0, fiveStarPar: 99, dirtScale: 0.85, comfortDrainPerLevel: 0, comfortDrainCap: 1,
-    maxTwists: 1, rentGrowthPerWeek: 0, rentGrowthCap: 0, badEventWeight: 0.7, salaryInflationPer10Days: 0, bankruptcyDays: 999, cityGainMult: 1.3,
+    snapAt: 0.8, starShiftPerTitle: 0, starShiftCap: 0, fiveStarPar: 99, dirtScale: 1, comfortDrainPerLevel: 0, comfortDrainCap: 1,
+    maxTwists: 2, rentGrowthPerWeek: 0, rentGrowthCap: 0, badEventWeight: 1, salaryInflationPer10Days: 0, bankruptcyDays: 999, cityGainMult: 1.3,
   },
   standard: {
     id: 'standard', name: 'Standard', text: 'The intended game. Standards rise as your title does.',
-    snapAt: 0.8, starShiftPerTitle: 0.02, starShiftCap: 0.08, fiveStarPar: 1.15, dirtScale: 1.1, comfortDrainPerLevel: 0.05, comfortDrainCap: 1.4,
-    maxTwists: 3, rentGrowthPerWeek: 0.02, rentGrowthCap: 0.4, badEventWeight: 1.5, salaryInflationPer10Days: 0.01, bankruptcyDays: 5, cityGainMult: 1,
+    snapAt: 0.8, starShiftPerTitle: 0.01, starShiftCap: 0.03, fiveStarPar: 1.15, dirtScale: 1.1, comfortDrainPerLevel: 0.05, comfortDrainCap: 1.4,
+    maxTwists: 3, rentGrowthPerWeek: 0.08, rentGrowthCap: 0.5, badEventWeight: 1.5, salaryInflationPer10Days: 0.015, bankruptcyDays: 5, cityGainMult: 0.9,
   },
   veteran: {
     id: 'veteran', name: 'Veteran', text: 'Tough mouths, picky patients, thin margins.',
-    snapAt: 0.88, starShiftPerTitle: 0.03, starShiftCap: 0.12, fiveStarPar: 1.0, dirtScale: 1.3, comfortDrainPerLevel: 0.08, comfortDrainCap: 1.6,
-    maxTwists: 3, rentGrowthPerWeek: 0.03, rentGrowthCap: 0.6, badEventWeight: 2, salaryInflationPer10Days: 0.015, bankruptcyDays: 4, cityGainMult: 0.85,
+    snapAt: 0.88, starShiftPerTitle: 0.015, starShiftCap: 0.05, fiveStarPar: 1.0, dirtScale: 1.3, comfortDrainPerLevel: 0.08, comfortDrainCap: 1.6,
+    maxTwists: 3, rentGrowthPerWeek: 0.1, rentGrowthCap: 0.8, badEventWeight: 2, salaryInflationPer10Days: 0.025, bankruptcyDays: 4, cityGainMult: 0.85,
   },
 };
 export const DIFFICULTY_ORDER: Difficulty[] = ['relaxed', 'standard', 'veteran'];

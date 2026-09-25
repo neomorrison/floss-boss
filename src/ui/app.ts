@@ -6,8 +6,8 @@ import { initModals, modals } from './modal';
 import { initToasts } from './toasts';
 
 export type ScreenName = 'title' | 'newgame' | 'school' | 'hub';
-export type PanelName = 'tools' | 'skills' | 'staff' | 'office' | 'finance' | 'goals' | 'settings';
-export const PANELS: PanelName[] = ['tools', 'skills', 'staff', 'office', 'finance', 'goals', 'settings'];
+export type PanelName = 'tools' | 'skills' | 'staff' | 'office' | 'finance' | 'city' | 'goals' | 'settings';
+export const PANELS: PanelName[] = ['tools', 'skills', 'staff', 'office', 'finance', 'city', 'goals', 'settings'];
 
 export interface Screen {
   name: ScreenName;

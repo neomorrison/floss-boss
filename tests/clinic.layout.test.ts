@@ -125,4 +125,29 @@ describe.each(TIER_ORDER as OfficeTierId[])('clinic layout %s', (tier) => {
     l.receptionists.forEach((_, i) => checkRoute(l, 'idle0', 'recep' + i, a));
     checkRoute(l, 'idle0', 'manager', a);
   });
+
+  // DESIGN 11.2: the trophy wall grid and the Golden Molar pedestal.
+  it('keeps the trophy wall grid on the lobby back wall, clear of the pedestal corner', () => {
+    const tw = l.trophyWall;
+    expect(tw.cols * tw.rows).toBeGreaterThanOrEqual(20);
+    const lastX = tw.origin.x + (tw.cols - 1) * tw.cellX;
+    expect(lastX, 'last column stays left of the operatory wing').toBeLessThan(l.ops[0].rect.x0 - 0.4);
+    expect(tw.origin.x, 'first column stays right of the left wall').toBeGreaterThan(l.floor.x0);
+    expect(inside(l.floor, { x: tw.pedestal.x, z: tw.pedestal.z }), 'pedestal on the floor').toBe(true);
+    expect(blockedBy(l, { x: tw.pedestal.x, z: tw.pedestal.z }), 'pedestal clear of furniture').toBeNull();
+    // the pedestal sits past the last plaque column, not under it
+    expect(tw.pedestal.x, 'pedestal past the last plaque column').toBeGreaterThan(lastX);
+  });
+
+  it('places the street billboard outside the building, in front of the storefront', () => {
+    const b = l.billboard;
+    expect(inside(l.floor, { x: b.x, z: b.z }), 'billboard is not inside the building').toBe(false);
+    expect(b.z).toBeGreaterThan(l.floor.z1);
+  });
+
+  it('parks the Smile Van on the street with no floor footprint (DESIGN 11.1)', () => {
+    const van = l.equipment.smileVan;
+    expect(van.foot, 'no collidable footprint (it never needs to be routed around)').toBeNull();
+    expect(van.z).toBeGreaterThan(l.zones.sidewalk.z1);
+  });
 });

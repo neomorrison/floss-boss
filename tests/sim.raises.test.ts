@@ -17,6 +17,7 @@ import { demandLambda } from '../src/sim/booking';
 
 function ownerT2(seed: number, crew: Staff['role'][] = ['receptionist', 'assistant']): GameState {
   const s = graduated(seed);
+  s.difficulty = 'relaxed';   // the raise rules without Standard's salary inflation (DESIGN 11.5)
   grant(s, 3_000_000);
   s.player.level = 8;
   expect(sim.openPractice(s, { name: 'Raise Dental', loan: 0 }).ok).toBe(true);

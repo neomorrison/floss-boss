@@ -10,6 +10,7 @@ import { treasureBonus } from '../src/sim/career';
 import { employeeRate } from '../src/sim/progress';
 import { caseFeeMult } from '../src/sim/patients';
 import { NON_OPERATING_LABELS } from '../src/sim/economy';
+import { DIFFICULTIES } from '../src/data/difficulty';
 import { graduated, grant, ledgerSum, playDay, result } from './sim.helpers';
 
 function owner(seed = 3, cash = 20000, level = 5): GameState {
@@ -226,9 +227,11 @@ describe('setups follow the spawn contract (DESIGN 5.5)', () => {
     const p = waitForChair(s);
     force(p, 'routine');
     const a = sim.beginHandsOn(s, p.id);
+    // the v2 spawn contract, then Standard's dirtScale on top (DESIGN 11.5)
+    const ds = DIFFICULTIES.standard.dirtScale;
     expect(a.problemTeeth.length).toBe(4);
-    expect(a.dirt.tartarCount).toBe(4);
-    expect(a.dirt.plaque).toBeCloseTo(0.5, 5);
+    expect(a.dirt.tartarCount).toBe(Math.round(4 * ds));
+    expect(a.dirt.plaque).toBeCloseTo(Math.round(0.5 * ds * 100) / 100, 5);
     expect(a.twists.length).toBeLessThanOrEqual(1);
   });
 

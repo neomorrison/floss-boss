@@ -30,6 +30,9 @@ import { myDay, type MyDay } from './mgrlogic';
 import { locationTally } from './events';
 import { clearNotices, noticeOpen, notify, pumpNotices } from './notices';
 import { autoPauseOn, holdReason, tallyView } from './pause';
+import { checkCeremonies, createGalaCard } from './ceremony';
+import { cityStatus, trophySummary } from './endgame';
+import { distressInfo } from './endlogic';
 
 interface NavItem { id: PanelName | 'clinic'; label: string; icon: string; ownerOnly?: boolean }
 const NAV: NavItem[] = [
@@ -39,6 +42,7 @@ const NAV: NavItem[] = [
   { id: 'staff', label: 'Staff', icon: 'staff', ownerOnly: true },
   { id: 'office', label: 'Office', icon: 'office', ownerOnly: true },
   { id: 'finance', label: 'Finance', icon: 'finance', ownerOnly: true },
+  { id: 'city', label: 'City', icon: 'city' },
   { id: 'goals', label: 'Goals', icon: 'goals' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
@@ -58,6 +62,7 @@ export function hubScreen(): Screen {
   let view: ClinicView | null = null;
 
   const bridge: HubBridge = {
+    view: () => view,
     setClinicVisible(v) { if (view) attempt(() => view!.setVisible(v), undefined); el.classList.toggle('is-hidden-for-clean', !v); },
     clinicEvents(events) { if (view && events.length) attempt(() => view!.events(events), undefined); },
     focusOp(opId) { if (view) attempt(() => view!.focusOp(opId), undefined); },
@@ -121,6 +126,10 @@ export function hubScreen(): Screen {
     }
   }
   const practice = createPracticeCard();
+  const gala = createGalaCard();
+  // bank warning (DESIGN 11.5): cash below zero at 2 closes in a row, before the bank acts
+  const distressText = h('span');
+  const distress = h('div.distress-banner', { role: 'status', style: { display: 'none' } }, icon('alert'), distressText);
   const panels = createPanelHost({ openOp: (id) => openOpPanel(id), openStaff: (id) => openStaffCard(id) });
 
   const navBtns = new Map<string, HTMLButtonElement>();
@@ -145,8 +154,8 @@ export function hubScreen(): Screen {
   const el = h('div.hub',
     stage,
     board.el,
-    h('div.hub-top', hud.el, h('div.hub-sub', locTabs, hintEl)),
-    h('div.hub-bottom', chair.el, practice.el),
+    h('div.hub-top', hud.el, h('div.hub-sub', locTabs, hintEl), distress),
+    h('div.hub-bottom', chair.el, practice.el, gala.el),
     panels.el,
     nav,
   );
@@ -170,6 +179,8 @@ export function hubScreen(): Screen {
       view = r.value;
       board.el.style.display = 'none';
       el.classList.add('has-view');
+      viewKey = '';
+      syncViewExtras();
     } else {
       console.info('[ui] clinic view unavailable, using the board', r.error);
       view = null;
@@ -272,6 +283,37 @@ export function hubScreen(): Screen {
     }));
   }
 
+  // ---------------------------------------------------------------- city mood and the trophy wall (DESIGN 11.2)
+  let viewKey = '';
+  function syncViewExtras(): void {
+    if (!view || !store.loaded) return;
+    const s = store.state;
+    const v = cityStatus(s);
+    const c = activeClinic(s);
+    const d = (c?.district ?? 'downtown');
+    const di = v.districts.find((x) => x.id === d)?.index ?? 0;
+    const trophies = trophySummary(s);
+    const gold = (s.legacyPerks ?? []).includes('goldScrubs');
+    const key = `${c?.id}|${d}|${di.toFixed(3)}|${v.index.toFixed(3)}|${JSON.stringify(trophies)}|${gold}`;
+    if (key === viewKey) return;
+    viewKey = key;
+    const ext = view as Partial<Pick<ClinicView, 'setCityMood' | 'setTrophies' | 'setPlayerStyle'>>;
+    if (typeof ext.setCityMood === 'function') attempt(() => ext.setCityMood!(di, v.index), undefined, 'setCityMood');
+    if (typeof ext.setTrophies === 'function') attempt(() => ext.setTrophies!(trophies), undefined, 'setTrophies');
+    if (typeof ext.setPlayerStyle === 'function') attempt(() => ext.setPlayerStyle!({ gold }), undefined, 'setPlayerStyle');
+  }
+
+  let distressKey = '';
+  function syncDistress(): void {
+    const info = distressInfo(store.state);
+    const key = info.show ? `${info.closes}|${info.limit}` : '';
+    if (key === distressKey) return;
+    distressKey = key;
+    distress.style.display = info.show ? '' : 'none';
+    if (!info.show) return;
+    distressText.replaceChildren(h('b', 'Bank warning:'), ` cash was below zero at ${info.closes} closes in a row. ${info.left <= 1 ? 'One more and the bank acts.' : `At ${info.limit}, the bank acts.`}`);
+  }
+
   function onState(): void {
     if (!store.loaded) return;
     hintT = Math.min(hintT, 0.1);
@@ -279,6 +321,9 @@ export function hubScreen(): Screen {
     syncNav();
     syncLocTabs();
     practice.sync();
+    gala.sync();
+    syncDistress();
+    syncViewExtras();
     panels.onState();
     board.sync();
     syncPerks();
@@ -316,6 +361,7 @@ export function hubScreen(): Screen {
   let hintT = 0;
   let attnT = 0;
   let huddleT = 0.4;
+  let ceremonyT = 1;
   let waitingMine = false;
   function frame(dt: number): void {
     if (!store.loaded) return;
@@ -333,6 +379,9 @@ export function hubScreen(): Screen {
     if (huddleHold && !modals.count && !huddleOpen()) { huddleT -= dt; if (huddleT <= 0) { huddleT = 0.6; queueHuddle(); } }
     // a notice that waited for a panel to close shows once the clinic is in view again
     if (!cleaning && !panels.current && !modals.count) pumpNotices();
+    // promotions, milestones and the gala the save has earned (DESIGN 11.2)
+    ceremonyT -= dt;
+    if (ceremonyT <= 0) { ceremonyT = 0.5; if (!cleaning && !modals.count && !noticeOpen()) checkCeremonies(); }
     // any panel, menu, modal or key event notice holds the clock in every phase; closing it resumes at the
     // chosen speed (s.speed is never touched here)
     const hold = holdReason({ cleaning, hidden: document.hidden, notice: noticeOpen(), huddle: huddleHold, modals: modals.count, panel: !!panels.current });

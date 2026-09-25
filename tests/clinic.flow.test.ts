@@ -33,7 +33,7 @@ function clinic(patients: DayPatient[], ops: Operatory[] = [], team: Staff[] = [
     prices: { cleaning: 1, deep: 1, fluoride: 1, sealant: 1, xray: 1, whitening: 1, exam: 1, filling: 1 },
     marketing: 0, rating: 4, reviews: [], served: 0, patients,
     day: { booked: 0, demand: 0, turnedAway: 0, noShows: 0, walkIns: 0, served: 0, walkouts: 0, revenue: 0, tips: 0, supplies: 0, addonsSold: 0, fiveStars: 0, handsOn: 0 },
-    checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0,
+    checkinBusyUntil: 0, modifiers: [], campaign: null, campaignCooldownUntil: 0, district: 'downtown',
   };
 }
 

@@ -2,12 +2,11 @@
 import { EXTRA_OP_PRICE, LOAN_DAILY_PAYMENT, LOAN_DAILY_RATE, MAX_LOCATIONS, PLAYER_ID } from '../../core/constants';
 import { money } from '../../core/format';
 import { store } from '../../core/store';
-import type { EquipId, OfficeTierId } from '../../core/types';
+import type { DistrictId, EquipId, OfficeTierId } from '../../core/types';
 import { OFFICES, TIER_ORDER } from '../../data/offices';
 import { CHAIRS, EQUIPMENT, EQUIP_ORDER, OP_UPGRADES } from '../../data/upgrades';
 import * as sim from '../../sim';
 import { h } from '../dom';
-import { confetti } from '../fx';
 import { act, activeIndex, canAfford } from '../game';
 import { icon } from '../icons';
 import { select } from '../live';
@@ -17,6 +16,11 @@ import { officeArt } from '../art';
 import * as mgr from '../mgr';
 import { equipmentByTier } from '../mgrlogic';
 import { btn, chip, priceTag, sectionTitle, seg, slider, thumb } from '../widgets';
+import { ribbonCutting } from '../ceremony';
+import { districtPicker } from '../city';
+import { cityStatus, openLocationIn, rentOf } from '../endgame';
+import { defaultDistrict } from '../endlogic';
+import { DISTRICTS } from '../../data/city';
 
 /** Icons for equipment without a rendered thumbnail yet. */
 export const EQUIP_ICON: Record<EquipId, string> = {
@@ -25,6 +29,7 @@ export const EQUIP_ICON: Record<EquipId, string> = {
   breakRoom: 'heart', soundMasking: 'volume', digitalXray: 'eye', patientApp: 'bell', nitrousSystem: 'smile',
   rooftopGarden: 'sun', laserWhitening: 'caseWhitening', spaLounge: 'heart', cadcam: 'box',
   aiScheduler: 'calendar', researchWing: 'graduation', smileStudio: 'star', helipad: 'flag',
+  smileVan: 'bus',
 };
 const CHAIN_WIDE: EquipId[] = ['researchWing', 'helipad'];
 
@@ -62,6 +67,7 @@ export function officePanel(ctx: PanelCtx): PanelInst {
   let newTier: OfficeTierId = 't1';
   let newLoan = -1;
   let newName = '';
+  let newDistrict: DistrictId | null = null;
   return {
     title: 'Office',
     icon: 'office',
@@ -69,7 +75,7 @@ export function officePanel(ctx: PanelCtx): PanelInst {
       const s = store.state;
       const c = s.locations[activeIndex(s)];
       if (!c) return 'none';
-      return JSON.stringify([s.active, s.day, s.loan, Math.floor(s.cash / 100), s.locations.length, c.tier, c.name, c.equipment, c.ops.map((o) => [o.id, o.chair, o.upgrades, o.staffId]), c.staff.map((x) => x.id), s.player.skills.length, EQUIP_ORDER.map((id) => mgr.equipmentPrice(s, activeIndex(s), id).price)]);
+      return JSON.stringify([s.active, s.day, s.loan, Math.floor(s.cash / 100), s.locations.length, c.tier, c.name, c.district, c.equipment, (s.finale?.milestones ?? []).length, c.ops.map((o) => [o.id, o.chair, o.upgrades, o.staffId]), c.staff.map((x) => x.id), s.player.skills.length, EQUIP_ORDER.map((id) => mgr.equipmentPrice(s, activeIndex(s), id).price)]);
     },
     render() {
       const s = store.state;
@@ -89,11 +95,13 @@ export function officePanel(ctx: PanelCtx): PanelInst {
           h('div.row.row-wrap.gap-6', { style: 'margin-top:8px' },
             chip(`${c.ops.length} of ${slots} operatories`, 'teal', 'chair'),
             chip(`${tier.seats} seats`, '', 'user'),
-            chip(`Rent ${money(tier.rent)}/day`, '', 'receipt'),
+            chip(`Rent ${money(rentOf(s, idx, tier.rent))}/day`, '', 'receipt'),
+            DISTRICTS[c.district as DistrictId] ? chip(DISTRICTS[c.district as DistrictId].name, '', 'pin') : null,
           ),
         ),
         locationPicker(),
       );
+      const city = cityStatus(s);
 
       // ---- operatories
       const opCards: HTMLElement[] = c.ops.slice().sort((a, b) => a.slot - b.slot).map((op) => {
@@ -124,7 +132,9 @@ export function officePanel(ctx: PanelCtx): PanelInst {
       const equipCard = (id: EquipId) => {
         const e = EQUIPMENT[id];
         const owned = c.equipment.includes(id);
-        const locked = tierRank(c.tier) < tierRank(e.minTier);
+        // the Smile Van also waits for Smile City 50% (DESIGN 11.1)
+        const cityLock = id === 'smileVan' && !owned && !city.vanUnlocked;
+        const locked = tierRank(c.tier) < tierRank(e.minTier) || cityLock;
         const p = mgr.equipmentPrice(s, idx, id);
         const afford = canAfford(p.price);
         const chain = CHAIN_WIDE.includes(id);
@@ -136,6 +146,7 @@ export function officePanel(ctx: PanelCtx): PanelInst {
           chain ? h('div.equip-chain.tiny.bold', icon('building2'), 'Every location') : null,
           h('div.equip-action',
             owned ? chip('Installed', 'mint', 'check')
+              : cityLock && tierRank(c.tier) >= tierRank(e.minTier) ? h('div.tool-lock.small.van-lock', icon('lock'), h('span', 'Unlocks at Smile City 50%', h('span.faint', ` (now ${city.pct}%)`)))
               : locked ? h('div.tool-lock.small', icon('lock'), `Needs ${OFFICES[e.minTier].name}`)
                 : btn('Buy', {
                   variant: 'sun', size: 'sm', sub: p.sale > 0 ? `${money(p.price)}, was ${money(Math.round(p.base))}` : money(p.price), disabled: !afford, title: afford ? '' : 'Not enough cash',
@@ -188,7 +199,12 @@ export function officePanel(ctx: PanelCtx): PanelInst {
           q && !q.ok && q.reason ? h('div.small.bad.bold', q.reason) : null,
           btn(`Move to ${nt.name}`, {
             variant: 'primary', icon: 'arrowUp', block: true, disabled: !canMove, title: canMove ? '' : q?.reason ?? 'Not enough cash',
-            onClick: () => { if (act(() => sim.moveOffice(store.state, idx, nextTier, moveLoan), { success: `Welcome to your ${nt.name}` })) { moveLoan = -1; confetti(undefined, 100); } },
+            onClick: () => {
+              if (!act(() => sim.moveOffice(store.state, idx, nextTier, moveLoan), { success: '' })) return;
+              moveLoan = -1;
+              const moved = store.state.locations[idx];
+              void ribbonCutting({ kind: 'move', name: moved?.name ?? c.name, tier: nextTier, district: moved?.district ?? null });
+            },
           }),
         );
       }
@@ -202,6 +218,8 @@ export function officePanel(ctx: PanelCtx): PanelInst {
       const nameIn = h('input.input', { type: 'text', maxLength: 28, value: newName, 'aria-label': 'Location name', 'data-focus-key': 'loc-name' }) as HTMLInputElement;
       nameIn.addEventListener('input', () => { newName = nameIn.value; });
       const full = s.locations.length >= MAX_LOCATIONS;
+      if (!newDistrict) newDistrict = defaultDistrict(s.city, s.locations);
+      const picker = full ? null : districtPicker(s, { selected: newDistrict, onPick: (d) => { newDistrict = d; }, compact: true });
       const canOpen = !!lq && lq.ok && !full && s.cash + newLoan >= lq.price;
       const nt2 = OFFICES[newTier];
       const newBlock = h('div.move-card',
@@ -209,13 +227,21 @@ export function officePanel(ctx: PanelCtx): PanelInst {
           seg(TIER_ORDER.map((t) => ({ value: t, label: t.toUpperCase(), title: OFFICES[t].name })), newTier, (v) => { newTier = v; newLoan = -1; ctx.rerender(); })),
         h('div.move-to', officeArt(newTier, 104), h('div.grow', h('div.bold', nt2.name), h('div.small.muted', nt2.blurb), h('div.row.row-wrap.gap-6', { style: 'margin-top:6px' }, chip(`${nt2.opSlots} operatories`, 'teal', 'chair'), chip(`Rent ${money(nt2.rent)}/day`, '', 'receipt'))), lq ? priceTag(lq.price) : null),
         h('div.field', h('label', 'Name'), nameIn),
+        picker ? h('div.field', h('span.label', 'District'), picker) : null,
         lq ? loanField(lMin, lMax, newLoan, (v) => { newLoan = v; }) : null,
         full ? h('div.small.bad.bold', 'You own the maximum number of locations') : lq && !lq.ok && lq.reason ? h('div.small.bad.bold', lq.reason) : null,
         btn('Open location', {
           variant: 'primary', icon: 'pin', block: true, disabled: !canOpen, title: canOpen ? '' : full ? 'You own the maximum number of locations' : lq?.reason ?? 'Not enough cash',
           onClick: () => {
             const name = nameIn.value.trim() || newName;
-            if (act(() => sim.openLocation(store.state, newTier, name, newLoan), { success: `${name} is open` })) { newName = ''; newLoan = -1; confetti(undefined, 110); }
+            const district = newDistrict ?? defaultDistrict(store.state.city, store.state.locations);
+            const tierNow = newTier;
+            if (act(() => openLocationIn(store.state, tierNow, name, newLoan, district), { success: '' })) {
+              newName = ''; newLoan = -1; newDistrict = null;
+              attempt(() => sim.setActive(store.state, store.state.locations.length - 1), undefined, 'setActive');
+              store.commit();
+              void ribbonCutting({ kind: 'location', name, tier: tierNow, district });
+            }
           },
         }),
       );

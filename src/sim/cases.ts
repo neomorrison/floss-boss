@@ -10,6 +10,7 @@ import { TOOLS } from '../data/tools';
 import type { ToolLoadout } from '../core/types';
 import { opStaffed } from './internal';
 import { cleanMods, tierIndex } from './progress';
+import { cleanRules, comfortDrainMult, diff, maxTwists } from './difficulty';
 
 // ------------------------------------------------------------------ mastery (5.9)
 
@@ -82,7 +83,7 @@ export function pickBonus(state: GameState, patientId: string, ct: CaseType): Bo
   const r = makeRng(hashSeed(state.seed, patientId, state.day, 'bonus'));
   if (ct === 'pirate' && r.chance(0.7)) return 'treasure';
   const opts: BonusId[] = ['noSlips', 'fast', 'spotless'];
-  if (ct === 'routine' || ct === 'pirate' || ct === 'deep') opts.push('combo');
+  if (ct === 'routine' || ct === 'pirate' || ct === 'deep' || ct === 'grillz') opts.push('combo');
   return opts[r.int(0, opts.length - 1)];
 }
 
@@ -96,7 +97,7 @@ export function archetypeForCase(ct: CaseType, rng: Rng): ArchetypeId {
 /** Archetype traits map to twists (chatty, gag reflex, fidget); more twists unlock with level (TWISTS). */
 export function pickTwists(state: GameState, arch: ArchetypeId, rng: Rng): TwistId[] {
   const L = Math.max(1, state.player.level);
-  const max = L >= 4 ? 2 : 1;
+  const max = maxTwists(state, L);
   const a = ARCHETYPES[arch].traits;
   const out: TwistId[] = [];
   if (a.chatty) out.push('chatty');
@@ -117,18 +118,25 @@ export function pickTwists(state: GameState, arch: ArchetypeId, rng: Rng): Twist
 // ------------------------------------------------------------------ setup
 
 export function emptySpecial(): CaseSpecial {
-  return { goldTooth: null, braces: false, startShade: 0, targetShade: 0, sugarBugs: 0, sealants: 0, pockets: 0, treasure: false, barnacles: 0, seaweed: 0 };
+  return { goldTooth: null, braces: false, startShade: 0, targetShade: 0, sugarBugs: 0, sealants: 0, pockets: 0, treasure: false, barnacles: 0, seaweed: 0, grillGems: 0, showcase: false };
 }
 
 /** Case extra par seconds (DESIGN 5.8). */
-const PAR_EXTRA: Record<CaseType, number> = { routine: 0, whitening: 25, candy: 10, braces: 15, pirate: 20, deep: 25 };
+const PAR_EXTRA: Record<CaseType, number> = { routine: 0, whitening: 25, candy: 10, braces: 15, pirate: 20, deep: 25, grillz: 20 };
+/** Grill Glow-Up: seconds of par per diamond to buff (DESIGN 11.6). */
+export const PAR_PER_GEM = 2.5;
+/** Grill gems: 6 to 10 on a normal visit, 12 at the Golden Molar Gala showcase. */
+export const GRILL_GEMS: [number, number] = [6, 10];
+export const SHOWCASE_GEMS = 12;
+/** The grill covers the upper front six (arch positions 4 to 9 of the upper arch). */
+export const GRILL_TEETH = [4, 5, 6, 7, 8, 9];
 
 /** par = (20 + 2.6 tartarHp + 5 problemTeeth + 4 debris + case extra) * parMult (DESIGN 5.8). */
 export function parSeconds(d: DirtProfile, problemTeeth: number, sp: CaseSpecial, ct: CaseType, parMult: number): number {
   const hidden = sp.pockets * 1.5 * d.tartarSize;
   const tartarHp = d.tartarCount * d.tartarSize + sp.barnacles * 2 + hidden;
   const debris = d.debrisCount + sp.seaweed + (sp.treasure ? 1 : 0);
-  return Math.round((20 + 2.6 * tartarHp + 5 * problemTeeth + 4 * debris + PAR_EXTRA[ct]) * parMult);
+  return Math.round((20 + 2.6 * tartarHp + 5 * problemTeeth + 4 * debris + (PAR_EXTRA[ct] ?? 0) + PAR_PER_GEM * (sp.grillGems ?? 0)) * parMult);
 }
 
 export function loadout(state: GameState, useGel: boolean): ToolLoadout {
@@ -195,6 +203,8 @@ export interface SetupInput {
   bonus?: BonusId | null;
   /** Laughing gas at this chair: calmer start, slower comfort drain. */
   gas?: boolean;
+  /** The Golden Molar Gala showcase (DESIGN 11.3): the most gems, on stage. */
+  showcase?: boolean;
 }
 
 /** The v2 CleanSetup per the spawn contract (DESIGN 5.5 table). Deterministic from the seed. */
@@ -214,7 +224,15 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
   }
   const pool = present.filter((i) => i !== sp.goldTooth && (ct === 'whitening' ? FRONT(i) : ct === 'braces' ? BRACE(i) : true));
   const count = Math.min(pool.length, ct === 'whitening' ? r.int(4, 6) : problemToothCount(L));
-  const problemTeeth = spreadPick(pool, count, r);
+  let problemTeeth: number[];
+  if (ct === 'grillz') {
+    // the upper front six sit under the grill; the rest of the count spreads over the other teeth
+    const grill = GRILL_TEETH.filter((i) => present.includes(i));
+    const rest = spreadPick(pool.filter((i) => !grill.includes(i)), Math.max(0, count - grill.length), r);
+    problemTeeth = [...grill, ...rest].sort((a, b) => a - b);
+  } else {
+    problemTeeth = spreadPick(pool, count, r);
+  }
   const n = problemTeeth.length;
   const lv = L - 1;
   let dirt: DirtProfile;
@@ -246,6 +264,12 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
       dirt = { tartarCount: r.int(3, 5), tartarSize: 1.2, plaque: 0.6, stain: 0.3, debrisCount: 1 };
       sp.pockets = Math.min(n, r.int(2, 4));
       break;
+    case 'grillz':
+      // plaque hides under the grill; a little tartar elsewhere
+      dirt = { tartarCount: r.int(2, 4), tartarSize: 1.1, plaque: 0.8, stain: 0.3, debrisCount: 1 };
+      sp.grillGems = o.showcase ? SHOWCASE_GEMS : r.int(GRILL_GEMS[0], GRILL_GEMS[1]);
+      sp.showcase = !!o.showcase;
+      break;
     default: {
       const tartar = Math.min(2 * n, Math.round(n * (1 + 0.1 * lv)));
       dirt = {
@@ -259,6 +283,19 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
   }
   if (o.school === 1) dirt = { tartarCount: 3, tartarSize: 1, plaque: 0.4, stain: 0.25, debrisCount: 1 };
   else if (o.school === 2) dirt = { tartarCount: 5, tartarSize: 1, plaque: 0.5, stain: 0.3, debrisCount: 1 };
+  else {
+    // difficulty (DESIGN 11.5): dirt amounts x dirtScale on top of the level scaling
+    const ds = diff(state).dirtScale;
+    if (ds !== 1) {
+      dirt = {
+        tartarCount: Math.max(1, Math.round(dirt.tartarCount * ds)),
+        tartarSize: dirt.tartarSize,
+        plaque: Math.round(clamp(dirt.plaque * ds, 0, 0.95) * 100) / 100,
+        stain: Math.round(clamp(dirt.stain * ds, 0, 1) * 100) / 100,
+        debrisCount: Math.round(dirt.debrisCount * ds),
+      };
+    }
+  }
   const mods = cleanMods(state);
   let gel = false;
   if (o.consumeGel && state.player.useGel && state.player.numbingGel > 0) {
@@ -273,6 +310,8 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
     fidget: tw.includes('fidget') ? Math.max(0.5, a.traits.fidget) : 0,
     gumSensitivity: a.traits.gumSensitivity * (tw.includes('sensitive') ? 2 : 1),
   };
+  // difficulty: passive comfort drain grows past level 3 (DESIGN 11.5)
+  if (!o.school) traits.comfortDrain = Math.round(traits.comfortDrain * comfortDrainMult(state, L) * 100) / 100;
   if (o.gas) {
     traits.comfortStart = Math.min(100, traits.comfortStart + 15);
     traits.comfortDrain = Math.round(traits.comfortDrain * 0.7 * 100) / 100;
@@ -308,6 +347,7 @@ export function buildCaseSetup(state: GameState, o: SetupInput): CleanSetup {
     tutorial: o.tutorial,
     parSeconds: parSeconds(dirt, n, sp, ct, mods.parMult),
     lines: [...a.lines],
+    rules: cleanRules(state),
   };
 }
 

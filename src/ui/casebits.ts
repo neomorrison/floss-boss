@@ -7,13 +7,14 @@ import { sfx } from './fx';
 import { icon } from './icons';
 import { toast } from './toasts';
 
-export type CaseTone = 'mint' | 'gum' | 'sky' | 'grape' | 'sun' | 'coral';
+export type CaseTone = 'mint' | 'gum' | 'sky' | 'grape' | 'sun' | 'coral' | 'gold';
 
 export const CASE_ICON: Record<CaseType, string> = {
   routine: 'caseRoutine', candy: 'caseCandy', whitening: 'caseWhitening', braces: 'caseBraces', pirate: 'casePirate', deep: 'caseDeep',
+  grillz: 'caseGrillz',
 };
 export const CASE_TONE: Record<CaseType, CaseTone> = {
-  routine: 'mint', candy: 'gum', whitening: 'sky', braces: 'grape', pirate: 'sun', deep: 'coral',
+  routine: 'mint', candy: 'gum', whitening: 'sky', braces: 'grape', pirate: 'sun', deep: 'coral', grillz: 'gold',
 };
 
 /** Safe case lookup (old saves and unknown ids fall back to routine). */
@@ -34,7 +35,8 @@ export function caseTile(t: CaseType | undefined | null, size = 44, cls = ''): H
 /** Chip with the case icon and name. */
 export function caseChip(t: CaseType | undefined | null): HTMLElement {
   const c = caseOf(t);
-  return h('span.chip.case-chip', { class: `chip-${CASE_TONE[c] === 'sun' ? 'sun' : CASE_TONE[c]}` }, icon(CASE_ICON[c]), CASES[c].name);
+  const tone = CASE_TONE[c] === 'gold' ? 'sun' : CASE_TONE[c];
+  return h('span.chip.case-chip', { class: [`chip-${tone}`, { 'chip-gold': CASE_TONE[c] === 'gold' }] }, icon(CASE_ICON[c]), CASES[c].name);
 }
 
 /** Twist chips; a tap explains the twist (touch has no hover). */

@@ -514,6 +514,37 @@ const BUILDERS: Record<string, () => THREE.Object3D> = {
     cyl(0.03, 0.04, 0.5, C.sunshine, -0.46, 0, -0.7), cyl(0.03, 0.04, 0.5, C.sunshine, 0.46, 0, -0.7),
     cyl(0.03, 0.04, 0.5, C.sunshine, -0.46, 0, 0.7), cyl(0.03, 0.04, 0.5, C.sunshine, 0.46, 0, 0.7),
   ),
+
+  // ---------------------------------------------------------------- end game (DESIGN 11)
+  smile_van: () => group(
+    box(1.9, 0.7, 0.95, mat(C.mint, 0.55), 0, 0.35, 0, 0.08),
+    box(1.9, 0.42, 0.95, mat(C.white, 0.5), 0, 0.78, 0, 0.06),
+    box(0.05, 0.34, 0.88, mat(C.teal, 0.5), 0.955, 0.6, 0, 0.02),
+    box(0.28, 0.28, 0.06, mat(C.dark, 0.3), -0.62, 0.05, 0.485, 0.04), box(0.28, 0.28, 0.06, mat(C.dark, 0.3), 0.62, 0.05, 0.485, 0.04),
+    box(0.28, 0.28, 0.06, mat(C.dark, 0.3), -0.62, 0.05, -0.485, 0.04), box(0.28, 0.28, 0.06, mat(C.dark, 0.3), 0.62, 0.05, -0.485, 0.04),
+    ball(0.05, mat(C.sunshine, 0.3, 0, C.sunshine, 0.8), -0.9, 0.42, 0.4, 0), ball(0.05, mat(C.sunshine, 0.3, 0, C.sunshine, 0.8), -0.9, 0.42, -0.4, 0),
+  ),
+  trophy_golden_molar: () => {
+    const gold = mat(C.sunshine, 0.25, 0.75, C.sunshine, 0.35);
+    return group(
+      cyl(0.14, 0.16, 0.06, gold, 0, 0, 0, 20),
+      cyl(0.04, 0.05, 0.22, gold, 0, 0.06, 0),
+      cyl(0.16, 0.1, 0.05, gold, 0, 0.28, 0, 20),
+      ball(0.16, gold, 0, 0.42, 0, 1),
+      ball(0.05, gold, -0.09, 0.3, 0.1, 0), ball(0.05, gold, 0.09, 0.3, 0.1, 0),
+      ball(0.05, gold, -0.09, 0.3, -0.1, 0), ball(0.05, gold, 0.09, 0.3, -0.1, 0),
+    );
+  },
+  plaque_frame: () => group(
+    box(0.34, 0.26, 0.025, C.woodDark, 0, 0, 0, 0.015),
+    box(0.28, 0.2, 0.006, '#FFF8E6', 0, 0.005, 0.02, 0.01),
+    ball(0.02, mat(C.sunshine, 0.35, 0, C.sunshine, 0.4), 0, 0.09, 0.026, 0),
+  ),
+  prop_ribbon: () => group(
+    cyl(0.025, 0.025, 0.9, mat(C.sunshine, 0.4), -0.9, 0, 0),
+    cyl(0.025, 0.025, 0.9, mat(C.sunshine, 0.4), 0.9, 0, 0),
+    box(1.8, 0.07, 0.02, mat(C.bubblegum, 0.4), 0, 0.86, 0, 0.01),
+  ),
 };
 
 /** The glass door leaf (hinge at the origin, the leaf extends toward +X). */
