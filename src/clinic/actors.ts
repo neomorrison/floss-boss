@@ -174,6 +174,7 @@ export class Actors {
   private frameNo = 0;
   private layout: ClinicLayout | null = null;
   private clinicId = '';
+  private lastMinute = -1;
   private t = 0;
   private roleCount = { hygienist: 0, receptionist: 0, assistant: 0, dentist: 0, manager: 0 };
   private rate = 1;
@@ -283,6 +284,10 @@ export class Actors {
     // overlay bug) or the old location's actors fall into the "sim dropped this patient" branch below and
     // flushPay() pops their coins/stars at the new location's checkout instead of being dropped.
     if (l !== this.layout || c.id !== this.clinicId) { this.clear(); this.layout = l; this.clinicId = c.id; live = false; }
+    // A new day (the clock jumps back to the morning) must not pay out yesterday's lingering patients at
+    // the desk either: drop them the same way as a location switch.
+    else if (this.lastMinute >= 0 && minute < this.lastMinute - 60) { this.clear(); live = false; }
+    this.lastMinute = minute;
     this.t += dt;
     this.frameNo++;
     const fn = this.frameNo;
