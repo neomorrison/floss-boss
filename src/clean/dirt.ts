@@ -7,7 +7,7 @@
 //
 // Scope (5.2): only the case's problem teeth carry real dirt, and only on cells a view can see (the outward
 // face and the biting surface of back teeth). Other teeth get faint cosmetic plaque that is not scored.
-// A problem tooth snaps clean once its tartar is gone and at most 15% of its plaque and stain is left.
+// A problem tooth snaps clean once its tartar is gone and 80% of its plaque and stain is (at most 20% left).
 //
 // Tools act through an elliptical brush on an idealized crown (an elliptic cylinder with a domed top,
 // sized by TOOTH_DIMS), so the brush keeps its size in mouth units on every tooth.
@@ -18,6 +18,7 @@ import type { BonusId, CaseType, CleanObjective, CleanResult, CleanSetup, ToolSl
 import { layoutTeeth, reachable, TEETH_PER_ARCH, TOOTH_COUNT, type ToothPlacement } from '../core/mouth';
 import { clamp, hashSeed, makeRng, type Rng } from '../core/rng';
 import { toolTier, type ToolTier } from '../data/tools';
+import { pressable } from './reach';
 
 export const CELLS = DIRT_GU * DIRT_GV;
 export { TOOTH_COUNT };
@@ -27,13 +28,13 @@ export const RATES = {
   brushScaler: 0.17,        // hand scaler / ultrasonic brush radius (mouth units, x tool radius)
   brushPolisher: 0.3,
   brushGel: 0.42,
-  tartarStroke: 0.75,       // tartar hp per unit of stroke per tartar power
+  tartarStroke: 1.0,        // tartar hp per unit of stroke per tartar power (a lump pops in ~0.8 s of hand-speed scraping)
   plaqueStroke: 3.0,        // plaque per unit of stroke per plaque power
   strokeCap: 2.6,           // counted stroke speed cap (units per second): frantic scrubbing does not help
-  ultrasonicTartar: 1.3,    // hp per second per tartar power while touching (always faster than a hand scaler)
+  ultrasonicTartar: 1.65,   // hp per second per tartar power while touching (always faster than a hand scaler)
   ultrasonicPlaque: 1.6,
-  polishPlaque: 1.4,        // per second per plaque power under the cup centre
-  polishStain: 1.3,
+  polishPlaque: 1.8,        // per second per plaque power under the cup centre
+  polishStain: 1.7,
   polishGain: 1.3,          // polish per second per polish power (cells with plaque and stain < 0.15 only)
   polishClean: 0.15,
   wrapBase: 0.4,            // polisher / gel wrap assist: rate around the crown at the hit height
@@ -47,17 +48,21 @@ export const RATES = {
   flossPlaque: 0.6,         // interproximal plaque removed per floss stroke
   flossStrip: 0.14,         // half-width in u of the interproximal strip a stroke cleans
   tartarReach: 0.19,        // deposit radius in mouth units at size 1
-  bitSuckRadius: 1.25,      // suction pickup radius for floating bits (x tool radius, xz plane)
-  bitPull: 2.6,             // floating bits drift toward the suction tip within this radius
-  rinseRadius: 1.7,         // rinse cone radius on the teeth (paste and gel wash off)
-  rinseWash: 6.5,           // paste / gel removed per second at the cone centre
-  bitWashRadius: 2.2,       // resting bits within this xz radius of the spray float up
-  washTime: 0.22,           // seconds of spray to float a resting bit
+  bitSuckRadius: 1.5,       // suction pickup radius for floating bits (x tool radius, xz plane)
+  bitPull: 3.2,             // floating bits drift toward the suction tip within this radius
+  suctionDrain: 1.6,        // x the suction tier's drain rate (the finish is a flourish, not a chore)
+  rinseRadius: 3.0,         // rinse cone radius on the teeth (paste and gel wash off): one sweep of a view clears it
+  rinseWash: 9,             // paste / gel removed per second at the cone centre
+  rinseWater: 0.55,         // share of the syringe's water rate that stays in the mouth (the rest runs off)
+  bitWashRadius: 3.4,       // resting bits within this xz radius of the spray float up
+  washTime: 0.15,           // seconds of spray to float a resting bit
   hitChunk: 0.14,           // tartar damage per "hit" (crunch + flakes)
   cleanEps: 0.02,
   comboWindow: 2.6,         // seconds between pops to keep a combo
-  snapLeft: 0.15,           // a problem tooth snaps with at most this share of its plaque and stain left
-  areaDone: 0.85,           // area objectives: removing 85% of a tooth's layer counts as all of it
+  snapLeft: 0.2,            // a problem tooth snaps once 80% of its plaque and stain is gone (and its tartar)
+  areaDone: 0.8,            // area objectives: removing 80% of a tooth's layer counts as all of it
+  lastBits: 0.7,            // from 70% done the specks left on a problem tooth pulse ("last bits" glow)
+  bandFloor: 0.05,          // dirt starts just above the gum (the first cell row, v ~0.02, stays clean)
   bugSpeed: 0.14,           // sugar bug crawl, surface units per second
   bugFlee: 0.5,             // sidle speed when a tool comes near
   bugFleeRadius: 0.6,
@@ -291,7 +296,15 @@ const isBack = (k: ToothKind) => k === 'molar' || k === 'premolar';
 /** Can a view see this cell? The outward face (u 0.3..0.7) and the biting surface of back teeth (5.2). */
 export function visibleCell(kind: ToothKind, u: number, v: number): boolean {
   if (v >= OCCLUSAL_V) return isBack(kind) || (u >= 0.3 && u <= 0.7);
-  return u >= 0.3 && u <= 0.7 && v >= 0.02;
+  return u >= 0.3 && u <= 0.7 && v >= RATES.bandFloor;
+}
+
+/**
+ * Dirt may spawn on this cell of tooth `index`: a view can see it (visibleCell) and the reachability audit
+ * found a view from which a pointer presses it (REACH_CELLS, out/cleanfu/reach.mjs). Pure.
+ */
+export function spawnCell(index: number, kind: ToothKind, cell: number): boolean {
+  return visibleCell(kind, cellU[cell], cellV[cell]) && pressable(index, cell);
 }
 
 /** Cells under a bracket (braces case): not reachable by any tool. */
@@ -433,7 +446,7 @@ export function createModel(setup: CleanSetup): CleanModel {
       const u = cellU[i], v = cellV[i];
       if (!reachable(p.kind, u, v) || (bracket && underBracket(u, v))) continue;
       reach[i] = 1; rc++;
-      if (visibleCell(p.kind, u, v)) { vis[i] = 1; vc++; }
+      if (spawnCell(p.index, p.kind, i)) { vis[i] = 1; vc++; }
     }
     return {
       index: p.index, kind: p.kind, arch: p.arch, present, problem: problemSet.has(p.index),
@@ -467,7 +480,9 @@ export function createModel(setup: CleanSetup): CleanModel {
   for (let k = 0; k < nBugs && problem.length; k++) {
     const tooth = problem[k % problem.length];
     const a = srng.range(0, Math.PI * 2);
-    bugs.push({ id: nextId.v++, tooth, u: srng.range(0.36, 0.64), v: srng.range(0.28, 0.7), du: Math.cos(a), dv: Math.sin(a), spread: RATES.bugSpread * srng.range(0.7, 1.2), fleeing: 0, alive: true, lastSpread: -99 });
+    // on a cell a tool can reach
+    const [u, v] = nearestSpawn(teeth[tooth], srng.range(0.36, 0.64), srng.range(0.28, 0.7), 0.2);
+    bugs.push({ id: nextId.v++, tooth, u, v, du: Math.cos(a), dv: Math.sin(a), spread: RATES.bugSpread * srng.range(0.7, 1.2), fleeing: 0, alive: true, lastSpread: -99 });
   }
   if (caseType === 'candy' && (sp?.sealants ?? 0) > 0) {
     const want = Math.round(sp!.sealants);
@@ -596,14 +611,30 @@ function shuffle<T>(a: T[], rng: Rng) {
   for (let i = a.length - 1; i > 0; i--) { const j = rng.int(0, i); const t = a[i]; a[i] = a[j]; a[j] = t; }
 }
 
-function placeDeposit(out: TartarDeposit[], tooth: number, rng: Rng, size: number, kind: DepositKind, id: { v: number }, u0?: number, v0?: number): TartarDeposit {
+export const cellAt = (u: number, v: number) => clamp(Math.floor(v * DIRT_GV), 0, DIRT_GV - 1) * DIRT_GU + clamp(Math.floor((((u % 1) + 1) % 1) * DIRT_GU), 0, DIRT_GU - 1);
+
+/** The spawn cell nearest (u, v) (v within vMin .. vMax, u within the face), or (u, v) itself when it already is one. */
+function nearestSpawn(t: ToothDirt | undefined, u: number, v: number, vMin = 0.06, vMax = Math.max(0.3, v + 0.1)): [number, number] {
+  if (!t || t.vis[cellAt(u, v)]) return [u, v];
+  let best: [number, number] = [u, v], bd = Infinity;
+  for (let i = 0; i < CELLS; i++) {
+    if (!t.vis[i] || cellV[i] < vMin || cellV[i] > vMax || cellU[i] < 0.34 || cellU[i] > 0.66) continue;
+    const d = (cellU[i] - u) ** 2 + ((cellV[i] - v) * 0.5) ** 2;
+    if (d < bd) { bd = d; best = [cellU[i], cellV[i]]; }
+  }
+  return best;
+}
+
+function placeDeposit(out: TartarDeposit[], tooth: number, rng: Rng, size: number, kind: DepositKind, id: { v: number }, u0?: number, v0?: number, t?: ToothDirt): TartarDeposit {
   let u = u0 ?? clamp(0.5 + rng.normal(0, 0.07), 0.36, 0.64);
-  const v = v0 ?? rng.range(0.07, 0.2);
+  let v = v0 ?? rng.range(0.07, 0.2);
   // keep lumps on one tooth apart
   for (let k = 0; k < 6; k++) {
     if (!out.some((d) => d.tooth === tooth && Math.abs(d.u - u) < 0.09 && Math.abs(d.v - v) < 0.12)) break;
     u = clamp(u + (k % 2 ? -1 : 1) * 0.1 * (k + 1) * 0.5, 0.34, 0.66);
   }
+  // only where a pointer can press it (DESIGN 5.2 reachability)
+  [u, v] = nearestSpawn(t, u, v, kind === 'hidden' ? 0.05 : 0.06);
   const hpMult = kind === 'barnacle' ? 2 : 1;
   const d: TartarDeposit = {
     id: id.v++, tooth, u, v, size, hp: size * TARTAR_HP * hpMult, hp0: size * TARTAR_HP * hpMult,
@@ -628,12 +659,12 @@ function spawnTartar(out: TartarDeposit[], teeth: ToothDirt[], placements: Tooth
   for (let k = 0; k < count; k++) {
     const tooth = order[k % order.length];
     const size = Math.max(0.35, setup.dirt.tartarSize * rng.range(0.8, 1.2));
-    placeDeposit(out, tooth, rng, size, 'tartar', id, setup.tutorial && k === 0 ? 0.5 : undefined, setup.tutorial && k === 0 ? 0.14 : undefined);
+    placeDeposit(out, tooth, rng, size, 'tartar', id, setup.tutorial && k === 0 ? 0.5 : undefined, setup.tutorial && k === 0 ? 0.14 : undefined, teeth[tooth]);
   }
   const nb = setup.caseType === 'pirate' ? Math.max(0, Math.round(setup.special?.barnacles ?? 0)) : 0;
   const border = problem.slice();
   shuffle(border, rng);
-  for (let k = 0; k < nb; k++) placeDeposit(out, border[k % border.length], rng, rng.range(0.9, 1.15), 'barnacle', id);
+  for (let k = 0; k < nb; k++) placeDeposit(out, border[k % border.length], rng, rng.range(0.9, 1.15), 'barnacle', id, undefined, undefined, teeth[border[k % border.length]]);
   void placements;
 }
 
@@ -647,16 +678,15 @@ function spawnPockets(out: TartarDeposit[], pockets: Pocket[], teeth: ToothDirt[
     const pk: Pocket = { id: id.v++, tooth, u, open: 0, opened: false, healed: false, held: -1, deps: [] };
     const nd = rng.int(1, 2);
     for (let j = 0; j < nd; j++) {
-      const d = placeDeposit(out, tooth, rng, Math.max(0.5, setup.dirt.tartarSize * rng.range(0.85, 1.1)), 'hidden', id, clamp(u + (j ? 0.1 : -0.02) * (rng.chance(0.5) ? 1 : -1), 0.36, 0.64), 0.06);
+      const d = placeDeposit(out, tooth, rng, Math.max(0.5, setup.dirt.tartarSize * rng.range(0.85, 1.1)), 'hidden', id, clamp(u + (j ? 0.1 : -0.02) * (rng.chance(0.5) ? 1 : -1), 0.36, 0.64), 0.07, teeth[tooth]);
       d.pocket = pk.id;
       pk.deps.push(d.id);
     }
     pockets.push(pk);
   }
-  void teeth;
 }
 
-const DEBRIS_HP: Record<DebrisKind, number> = { popcorn: 3, spinach: 2, seed: 1, candy: 2, seaweed: 2, doubloon: 2 };
+const DEBRIS_HP: Record<DebrisKind, number> = { popcorn: 2, spinach: 2, seed: 1, candy: 2, seaweed: 2, doubloon: 2 };
 
 function spawnDebris(teeth: ToothDirt[], rng: Rng, setup: CleanSetup, problem: number[], id: { v: number }): Debris[] {
   const out: Debris[] = [];
@@ -796,7 +826,8 @@ function damageTartar(m: CleanModel, d: TartarDeposit, dmg: number) {
     d.popped = true;
     m.chunks++;
     const combo = registerPop(m);
-    const bits = spawnBits(m, d.tooth, d.kind === 'barnacle' ? 3 : d.size >= 1.2 ? 3 : d.size >= 0.8 ? 2 : 1, d.kind === 'barnacle' ? 0xE9E4D6 : 0xD2A945);
+    // one or two crumbs per lump: enough to show where it went, few enough that the rinse is one sweep
+    const bits = spawnBits(m, d.tooth, d.kind === 'barnacle' || d.size >= 1.2 ? 2 : 1, d.kind === 'barnacle' ? 0xE9E4D6 : 0xD2A945);
     m.events.push({ type: 'tartarPop', dep: d, combo, bits });
     if (d.pocket >= 0) {
       const pk = m.pockets.find((p) => p.id === d.pocket);
@@ -1159,7 +1190,7 @@ export function applyWaterFloss(m: CleanModel, a: number, b: number, dt: number)
 export function applySuction(m: CleanModel, x: number, y: number, z: number, dt: number): number {
   if (m.walkout) return 0;
   const tool = activeTool(m.setup, 'suction');
-  m.water = Math.max(0, m.water - tool.drain * dt);
+  m.water = Math.max(0, m.water - tool.drain * RATES.suctionDrain * dt);
   const R = RATES.bitSuckRadius * tool.radius;
   const pull = RATES.bitPull * tool.radius;
   let resting = 0;
@@ -1188,7 +1219,7 @@ export function applySuction(m: CleanModel, x: number, y: number, z: number, dt:
 export function applyRinse(m: CleanModel, x: number, y: number, z: number, dt: number): void {
   if (m.walkout) return;
   const tool = activeTool(m.setup, 'rinse');
-  addWater(m, tool.water * dt);
+  addWater(m, tool.water * RATES.rinseWater * dt);
   m.messEver = true;
   const R = RATES.rinseRadius;
   const c = tmpA;
@@ -1230,7 +1261,7 @@ function layerSums(t: ToothDirt): { p: number; s: number } {
   return { p, s };
 }
 
-/** Is a problem tooth finished: no tartar (visible or hidden) and at most 15% of its plaque and stain left? */
+/** Is a problem tooth finished: no tartar (visible or hidden) and at most 20% of its plaque and stain left? */
 export function toothDone(m: CleanModel, tooth: number): boolean {
   const t = m.teeth[tooth];
   if (!t.present) return true;
@@ -1240,16 +1271,50 @@ export function toothDone(m: CleanModel, tooth: number): boolean {
   return p + s <= start * RATES.snapLeft + 1e-6;
 }
 
-/** Remaining work on one tooth, 0 (done) .. 1 (untouched). Non-problem teeth report 0. */
+/**
+ * How much of a problem tooth's dirt is gone, 0 .. 1 (raw removal, not scaled to the snap): plaque and stain
+ * removed (weight 1) and tartar hp removed (0.5 per deposit). Snapped and non-problem teeth report 1.
+ */
+export function toothRemoval(m: CleanModel, tooth: number): number {
+  const t = m.teeth[tooth];
+  if (!t.present || !t.problem || t.snapped) return 1;
+  const { p, s } = layerSums(t);
+  const start = t.plaque0 + t.plaqueAdded + t.stain0;
+  let th = 0, th0 = 0, nd = 0;
+  for (const d of m.tartar) if (d.tooth === tooth) { th += d.hp; th0 += d.hp0; nd++; }
+  const wA = start > 0.5 ? 1 : 0, wT = th0 > 0 ? 0.5 * nd : 0;
+  if (wA + wT <= 0) return 1;
+  const area = wA ? clamp(1 - (p + s) / start, 0, 1) : 1;
+  const tart = th0 > 0 ? clamp(1 - th / th0, 0, 1) : 1;
+  return (wA * area + wT * tart) / (wA + wT);
+}
+
+/** Progress toward the snap, 0 .. 1 (plaque and stain scaled so the snap threshold reads as 1). */
+export function toothProgress(m: CleanModel, tooth: number): number {
+  const t = m.teeth[tooth];
+  if (!t.present || !t.problem || t.snapped) return 1;
+  const { p, s } = layerSums(t);
+  const start = t.plaque0 + t.plaqueAdded + t.stain0;
+  let th = 0, th0 = 0, nd = 0;
+  for (const d of m.tartar) if (d.tooth === tooth) { th += d.hp; th0 += d.hp0; nd++; }
+  const wA = start > 0.5 ? 1 : 0, wT = th0 > 0 ? 0.5 * nd : 0;
+  if (wA + wT <= 0) return 1;
+  const area = wA ? clamp((1 - (p + s) / start) / (1 - RATES.snapLeft), 0, 1) : 1;
+  const tart = th0 > 0 ? clamp(1 - th / th0, 0, 1) : 1;
+  return (wA * area + wT * tart) / (wA + wT);
+}
+
+/** Remaining work on one tooth, 0 (done) .. 1 (untouched), for the mini-map. Non-problem teeth report 0. */
 export function toothDirtLeft(m: CleanModel, tooth: number): number {
   const t = m.teeth[tooth];
   if (!t.present || !t.problem || t.snapped) return 0;
-  const { p, s } = layerSums(t);
-  let th = 0, th0 = 0;
-  for (const d of m.tartar) if (d.tooth === tooth) { th += d.hp; th0 += d.hp0; }
-  const total0 = (t.plaque0 + t.plaqueAdded + t.stain0) * 0.02 + th0 * 1.5;
-  if (total0 <= 0) return 0;
-  return clamp(((p + s) * 0.02 + th * 1.5) / total0, 0, 1);
+  return 1 - toothProgress(m, tooth);
+}
+
+/** "Last bits": a problem tooth at 70% or more whose remaining specks pulse so the player sees what is left. */
+export function lastBits(m: CleanModel, tooth: number): boolean {
+  const t = m.teeth[tooth];
+  return t.present && t.problem && !t.snapped && toothRemoval(m, tooth) >= RATES.lastBits;
 }
 
 export function isToothSpotless(m: CleanModel, tooth: number): boolean {
@@ -1301,8 +1366,13 @@ function tickBugs(m: CleanModel, dt: number, tool: { tooth: number; u: number; v
     if (b.fleeing > 0) { b.fleeing -= dt; speed = RATES.bugFlee; }
     else if (m.rng.chance(dt * 0.8)) { const a = m.rng.range(0, Math.PI * 2); b.du = Math.cos(a); b.dv = Math.sin(a); }
     const circ = Math.PI * (p.width + p.depth) / 2;
+    const pu = b.u, pv = b.v;
     b.u += (b.du * speed * dt) / circ;
     b.v += (b.dv * speed * dt) / p.height;
+    // bugs stay where a tool can reach them
+    if (b.u >= 0.33 && b.u <= 0.67 && !m.teeth[b.tooth].vis[cellAt(b.u, b.v)] && m.teeth[b.tooth].vis[cellAt(pu, pv)]) {
+      b.u = pu; b.v = pv; b.du = -b.du; b.dv = -b.dv;
+    }
     if (b.v < 0.2) { b.v = 0.2; b.dv = Math.abs(b.dv); }
     if (b.v > 0.78) { b.v = 0.78; b.dv = -Math.abs(b.dv); }
     if (b.u < 0.33 || b.u > 0.67) {
@@ -1573,7 +1643,7 @@ function buildObjectives(m: CleanModel): Objective[] {
   return out;
 }
 
-/** Area progress of a layer over the problem teeth: removing 85% of a tooth's layer counts as all; a snapped tooth counts as 1. */
+/** Area progress of a layer over the problem teeth: removing 80% of a tooth's layer counts as all; a snapped tooth counts as 1. */
 function areaProgress(m: CleanModel, layer: 'plaque' | 'stain'): number {
   let w = 0, got = 0;
   for (const i of m.problem) {

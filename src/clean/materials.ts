@@ -38,6 +38,7 @@ export interface ToothMat {
   caseData: Uint8Array;
   highlight: { value: number };   // 0..1 tutorial / focus pulse
   flash: { value: number };       // 0..1 white flash when the tooth snaps
+  last: { value: number };        // 0..1 "last bits": the specks left on a nearly done problem tooth pulse
   wet: { value: number };         // 0..1 extra shine right after rinsing (the reveal wave)
   shade: { value: number };       // 0 (shade 1, brightest) .. 1 (shade 16)
   gold: { value: number };        // 1 = gold crown (pirate)
@@ -78,6 +79,7 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
   });
   const highlight = { value: 0 };
   const flash = { value: 0 };
+  const last = { value: 0 };
   const wet = { value: 0 };
   const shade = { value: 0.2 };
   const gold = { value: 0 };
@@ -86,7 +88,7 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, shared, {
       uDirt: { value: texture }, uCase: { value: caseTex }, uH: { value: height }, uTipBlue: { value: tipBlue },
-      uHighlight: highlight, uFlash: flash, uWet: wet, uShade: shade, uGold: gold, uLamp: lamp, uGelCol: gelCol,
+      uHighlight: highlight, uFlash: flash, uLast: last, uWet: wet, uShade: shade, uGold: gold, uLamp: lamp, uGelCol: gelCol,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFbLocal;\nvarying vec3 vFbWorld;')
@@ -98,10 +100,10 @@ varying vec3 vFbLocal;
 varying vec3 vFbWorld;
 uniform sampler2D uDirt;
 uniform sampler2D uCase;
-uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uWet, uShade, uGold, uLamp;
+uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uLast, uWet, uShade, uGold, uLamp;
 uniform vec4 uBrush;
 uniform vec3 uPlaqueA, uPlaqueB, uStainA, uStainB, uDiscloseCol, uEagleCol, uGelCol;
-float fbPlaque = 0.0; float fbStain = 0.0; float fbPolish = 0.0; float fbEdge = 0.0; float fbPaste = 0.0; float fbGel = 0.0; float fbV = 0.0;
+float fbPlaque = 0.0; float fbStain = 0.0; float fbPolish = 0.0; float fbEdge = 0.0; float fbPaste = 0.0; float fbGel = 0.0; float fbV = 0.0; float fbLeft = 0.0;
 ${GLSL_NOISE}`)
       .replace('#include <map_fragment>', `#include <map_fragment>
 {
@@ -142,6 +144,9 @@ ${GLSL_NOISE}`)
   vec4 cs = texture2D(uCase, vec2(fu, fv));
   float gl = smoothstep(0.15, 0.55, cs.r + (n2 - 0.5) * 0.2);
   col = mix(col, uGelCol, gl * 0.5);
+  // last bits: any residue at all (even specks too faint to read as plaque) tints pink and pulses gently
+  fbLeft = smoothstep(0.03, 0.2, max(d.r, d.g));
+  if (uLast > 0.0) col = mix(col, uEagleCol, fbLeft * uLast * (0.46 + 0.3 * sin(uTime * 4.2)));
   diffuseColor.rgb = col;
   fbPlaque = pm; fbStain = sm; fbPolish = d.b * (1.0 - pm) * (1.0 - sm) * (1.0 - pa); fbPaste = pa; fbGel = gl; fbV = fv;
 }`)
@@ -174,14 +179,19 @@ material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain) * (1.0 - 0
   }
   totalEmissiveRadiance += vec3(0.3, 0.95, 0.82) * uHighlight * (0.18 + 0.12 * sin(uTime * 6.0));
   totalEmissiveRadiance += vec3(1.0, 0.98, 0.9) * uFlash * 0.9;
+  // last bits: what is left on a nearly done tooth glows and pulses gently
+  if (uLast > 0.0) {
+    float lp = 0.55 + 0.45 * sin(uTime * 4.2);
+    totalEmissiveRadiance += uEagleCol * (fbLeft * 0.12 + rim * 0.3) * uLast * lp;
+  }
   // the rinse reveal: a bright band sweeping up a freshly washed tooth
   float wave = smoothstep(0.18, 0.0, abs(fbV - (1.15 - uWet * 1.3))) * step(0.02, uWet);
   totalEmissiveRadiance += vec3(1.0, 1.0, 0.96) * wave * (0.25 + 0.6 * fbPolish);
   totalEmissiveRadiance += vec3(0.45, 0.35, 1.0) * uLamp * (0.25 + 0.5 * fbGel);
 }`);
   };
-  material.customProgramCacheKey = () => 'fbTooth2';
-  return { material, texture, data, caseTex, caseData, highlight, flash, wet, shade, gold, lamp, gelCol };
+  material.customProgramCacheKey = () => 'fbTooth3';
+  return { material, texture, data, caseTex, caseData, highlight, flash, last, wet, shade, gold, lamp, gelCol };
 }
 
 /** Write a tooth's layers into its texture bytes. */

@@ -5,6 +5,20 @@ import * as THREE from 'three';
 
 export type ViewId = 'front' | 'left' | 'right' | 'upper' | 'lower';
 
+/**
+ * The mini-map focus angle for a tooth (arch position 0..13, outward normal nx/nz), tuned with the GPU
+ * reachability audit (out/cleanfu/focusexp.mjs): the back molars are seen from a little to their own side and
+ * steeply from below (upper) or above (lower), which shows 250+ of their ~270 face cells instead of ~65 from
+ * the old side view that put the cheek in the way.
+ */
+export function focusAngles(pos: number, upper: boolean, nx: number, nz: number): { yaw: number; pitch: number; dist: number } {
+  const up = upper ? -0.22 : 0.24;
+  const side = Math.sign(nx) || 1;
+  if (pos === 0 || pos === 13) return { yaw: side * 0.15, pitch: up * 1.5, dist: 8.6 };
+  if (pos === 1 || pos === 12) return { yaw: side * 0.3, pitch: up * 1.5, dist: 8.6 };
+  return { yaw: THREE.MathUtils.clamp(Math.atan2(nx, nz) * 0.6, -0.45, 0.45), pitch: up, dist: 6.4 };
+}
+
 export const VIEWS: Record<ViewId, { t: [number, number, number]; yaw: number; pitch: number; dist: number }> = {
   front: { t: [0, -0.1, 0.8], yaw: 0, pitch: 0.13, dist: 12.6 },
   left: { t: [-2.3, 0, 0.4], yaw: -0.24, pitch: 0.02, dist: 9.4 },
@@ -66,21 +80,13 @@ export class MouthCamera {
   }
 
   /**
-   * Look at a world point (a tooth), from roughly its outward direction. The back molars use the side
-   * view at distance so the cheek is never in the way. `k` < 1 softens the yaw (used when a retry found
-   * the cheek in the way).
+   * Look at a world point (a tooth) from a chosen angle (see focusAngles). Goals are clamped like any orbit.
    */
-  focus(p: THREE.Vector3, nx: number, nz: number, up: number, backMolar = false, k = 1, extra = 0) {
+  focus(p: THREE.Vector3, yaw: number, pitch: number, dist: number) {
     this.goalTarget.copy(p);
-    if (backMolar) {
-      this.goalYaw = Math.sign(nx) * 0.24 * k;
-      this.goalDist = 8.6 + extra;
-      this.goalPitch = up * 0.6;
-    } else {
-      this.goalYaw = THREE.MathUtils.clamp(Math.atan2(nx, nz) * 0.45, -0.34, 0.34) * k;
-      this.goalDist = 6.4 + extra;
-      this.goalPitch = up;
-    }
+    this.goalYaw = yaw;
+    this.goalPitch = pitch;
+    this.goalDist = dist;
     this.clampGoals(true);
   }
 

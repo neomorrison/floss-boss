@@ -776,6 +776,77 @@ export class MouthScene {
     return best;
   }
 
+  /**
+   * QA (reachability audit): the world point of dirt cell (u, v) on tooth `i`. Side cells cast inward at
+   * height v; biting-surface cells (v >= 0.86) cast down onto the crown at the idealized radius.
+   */
+  cellWorld(i: number, u: number, v: number, out: THREE.Vector3): THREE.Vector3 | null {
+    const tv = this.teeth[i];
+    if (!tv) return null;
+    if (v < 0.86) return out.copy(this.surfacePoint(tv, u, v).point);
+    const th = (u - 0.5) * Math.PI * 2;
+    const dims = TOOTH_DIMS[tv.p.kind];
+    const k = Math.max(0, (1 - v) / 0.14);
+    const o = this.tmpV.set(Math.sin(th) * dims.w * 0.5 * k, tv.h * 2, Math.cos(th) * dims.d * 0.5 * k);
+    const d = this.tmpV2.set(0, -1, 0);
+    tv.mesh.updateWorldMatrix(true, false);
+    o.applyMatrix4(tv.mesh.matrixWorld);
+    d.transformDirection(tv.mesh.matrixWorld);
+    this.raycaster.set(o, d);
+    this.raycaster.far = 10;
+    this.hits.length = 0;
+    tv.mesh.raycast(this.raycaster, this.hits);
+    this.raycaster.far = 100;
+    let h = this.hits[0];
+    for (const x of this.hits) if (x.distance < h.distance) h = x;
+    return h ? out.copy(h.point) : null;
+  }
+
+  /** QA: is the rendered gum (GLB or procedural) in front of world point `to` seen from `from`? */
+  gumCovers(from: THREE.Vector3, to: THREE.Vector3): boolean {
+    const d = this.tmpV.subVectors(to, from);
+    const len = d.length();
+    this.raycaster.set(from, d.normalize());
+    this.raycaster.far = Math.max(0, len - 0.02);
+    this.hits.length = 0;
+    this.raycaster.intersectObjects(this.gums, false, this.hits);
+    this.raycaster.far = 100;
+    return this.hits.length > 0;
+  }
+
+  /** QA: pick only teeth and soft tissue (deposits, debris, bugs and brackets out of the way) while `on`. */
+  teethOnlyPick(on: boolean) {
+    if (on && !this.pickStash) {
+      this.pickStash = this.pickSmall;
+      this.pickSmall = this.pickStash.filter((o) => this.teeth.some((tv) => tv?.mesh === o));
+    } else if (!on && this.pickStash) {
+      this.pickSmall = this.pickStash;
+      this.pickStash = null;
+    }
+  }
+  private pickStash: THREE.Object3D[] | null = null;
+
+  /**
+   * Gum-edge assist: a gum hit just outside a tooth's neck belongs to that tooth at the gumline (v = 0), so the
+   * polisher reaches plaque at the gum edge. Returns the tooth and the u around it, or null.
+   */
+  gumEdgeTooth(p: THREE.Vector3, reach = 0.24): { tooth: number; u: number } | null {
+    let best: { tooth: number; u: number } | null = null, bd = reach;
+    for (const tv of this.teeth) {
+      if (!tv) continue;
+      const lp = tv.mesh.worldToLocal(this.tmpV3.copy(p));
+      if (lp.y < -0.35 || lp.y > tv.h * 0.2) continue;
+      const dims = TOOTH_DIMS[tv.p.kind];
+      const th = Math.atan2(lp.x, lp.z);
+      const ex = Math.sin(th) * dims.w * 0.45, ez = Math.cos(th) * dims.d * 0.45;
+      const d = Math.hypot(lp.x, lp.z) - Math.hypot(ex, ez);
+      // outside the crown (the gum collar), within reach of the neck
+      const dist = Math.hypot(Math.max(0, d), Math.min(0, lp.y) * 0.5);
+      if (d > -0.05 && dist < bd) { bd = dist; best = { tooth: tv.index, u: th / (Math.PI * 2) + 0.5 }; }
+    }
+    return best;
+  }
+
   /** A closed gum pocket within `radius` of world point `p`, or null. */
   pocketNear(p: THREE.Vector3, radius: number): Pocket | null {
     let best: Pocket | null = null, bd = radius * radius;
@@ -901,7 +972,10 @@ export class MouthScene {
       if (rv < 1) dv.mesh.position.y -= (1 - rv) * 0.35;
       const b = since < 0.1 ? buzz : 0;
       if (b > 0) dv.mesh.position.x += Math.sin(time * 190) * 0.012 * b;
-      const glow = d.id === tutorialDep ? 0.35 + 0.3 * Math.sin(time * 6) : 0;
+      let glow = d.id === tutorialDep ? 0.35 + 0.3 * Math.sin(time * 6) : 0;
+      // last bits: a lump left on a nearly done tooth pulses with its specks
+      const lb = this.teeth[d.tooth]?.tm.last.value ?? 0;
+      if (lb > 0) glow = Math.max(glow, lb * (0.22 + 0.18 * Math.sin(time * 4.2)));
       const hot = since < 0.08;
       dv.mat.emissiveIntensity = Math.max(glow, eagle * 0.6, hot ? 0.25 : 0, rv < 1 ? 0.5 * (1 - rv) : 0);
       dv.mat.emissive.copy(hot && glow === 0 && eagle === 0 ? EMISSIVE_HIT : EMISSIVE_GLOW);
@@ -1010,6 +1084,8 @@ export class MouthScene {
       if (tv.tm.flash.value > 0) tv.tm.flash.value = Math.max(0, tv.tm.flash.value - dt * 1.6);
       if (tv.tm.wet.value > 0) tv.tm.wet.value = Math.max(0, tv.tm.wet.value - dt * 0.4);
       if (tv.tm.lamp.value > 0) tv.tm.lamp.value = Math.max(0, tv.tm.lamp.value - dt * 3);
+      const lg = this.lastGoal[tv.index] ?? 0;
+      if (tv.tm.last.value !== lg) tv.tm.last.value = lg > tv.tm.last.value ? Math.min(lg, tv.tm.last.value + dt * 2.5) : Math.max(lg, tv.tm.last.value - dt * 4);
     }
     // lamp
     if (this.lampLight && this.lampCone) {
@@ -1172,11 +1248,17 @@ export class MouthScene {
     return out;
   }
 
+  /** "Last bits" glow on a nearly done problem tooth (fades in and out). */
+  setLastBits(i: number, on: boolean) { this.lastGoal[i] = on ? 1 : 0; }
+  private lastGoal: number[] = [];
+
   /** Problem tooth snapped: flash, and the ring bursts outward. */
   snapTooth(i: number) {
     const tv = this.teeth[i];
     if (!tv) return;
     tv.tm.flash.value = 1;
+    this.lastGoal[i] = 0;
+    tv.tm.last.value = 0;
     if (tv.ring && tv.ringFade < 0) tv.ringFade = 0;
   }
 

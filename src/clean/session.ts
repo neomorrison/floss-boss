@@ -13,11 +13,11 @@ import { audio, type LoopHandle } from '../audio';
 import {
   applyGel, applyLamp, applyPocket, applyPolisher, applyRinse, applyScaler, applySuction, applyWaterFloss, bitsLeft, bonusState, cellCenterU,
   cellCenterV, cheat, cleanScore, createModel, flossStroke, gelCoverage, goldProgress, meanShade, messState, reassure, scoreClean, tickModel,
-  toothBlocked, toothDirtLeft, twistList, wrapRate, type CleanEvent, type CleanModel, type Debris, type FlossTarget,
+  lastBits, toothBlocked, toothDirtLeft, twistList, wrapRate, type CleanEvent, type CleanModel, type Debris, type FlossTarget,
 } from './dirt';
 import { flossHook, flossMove, flossRelease, flossTick, FLOSS, newFloss, type FlossEvent, type FlossState } from './floss';
 import { MouthScene, makeHit, type Hit, type Models } from './scene';
-import { MouthCamera, type ViewId } from './camera';
+import { focusAngles, MouthCamera, type ViewId } from './camera';
 import { CleanHud } from './hud';
 import { allSlots, slotModel, type SlotId } from './slots';
 
@@ -83,6 +83,7 @@ export class CleanController {
   private lastTooth = -1;
   private lastPoint = new THREE.Vector3();
   private strokeAcc = 0;
+  private strokeIdle = 0;
   private ptrSpeed = 0;
   private lastMoveT = 0;
   private holdTooth = -1;
@@ -119,6 +120,9 @@ export class CleanController {
   private joltAnim = 0;
   private lastBonus: string = '';
   private readyGlow = false;
+  private comfortTaught = false;
+  private comfortPulse = 0;
+  private tutComfort = false;
   // tutorial
   private tut = -1;
   private tutDep = -1;
@@ -401,6 +405,7 @@ export class CleanController {
   }
 
   private releaseTool() {
+    this.rehook = false;
     this.toolPtr = -1;
     if (this.mode === 'tool') this.mode = 'none';
     this.lastTooth = -1;
@@ -412,6 +417,19 @@ export class CleanController {
     this.hud.setThread(0, 0, -1);
     this.scene?.setWrap(-1, 0, 0, '#fff');
   }
+
+  /**
+   * The jaw closed (chat, gag): the held stroke pauses and resumes by itself when the jaw opens (frame() skips
+   * the tool while jawClosed > 0). Only the stroke bookkeeping resets, so the scaler does not count a jump.
+   */
+  private pauseStroke() {
+    this.lastTooth = -1;
+    this.strokeAcc = 0;
+    this.holdTooth = -1;
+    this.holdTime = 0;
+    if (this.fl.phase !== 'idle') { flossRelease(this.fl); this.flAim = null; this.hud.setThread(0, 0, -1); this.rehook = true; }
+  }
+  private rehook = false;
 
   private pinchDistance(): number {
     const a = [...this.ptrs.values()];
@@ -451,21 +469,16 @@ export class CleanController {
     this.focusTooth = -1;
   }
 
-  /** Frame a tooth; back molars use the side view at distance, and the yaw softens while the cheek is in the way. */
+  /** Frame a tooth from the angle that shows most of it (focusAngles); if the cheek still blocks, look straight on. */
   private focus(i: number) {
     const sc = this.scene;
     if (!sc || !sc.teeth[i]) return;
     const p = this.model.placements[i];
-    const back = p.pos <= 1 || p.pos >= 12;
     sc.toothCenter(i, this.v1);
     sc.root.worldToLocal(this.v1);
-    let k = 1, extra = 0;
-    for (let tries = 0; tries < 6; tries++) {
-      this.cam.focus(this.v1, p.nx, p.nz, p.arch === 'upper' ? -0.22 : 0.24, back, k, extra);
-      const from = this.cam.goalPosition(this.v2);
-      if (sc.firstHitKind(from, sc.toothCenter(i, this.v3)) !== 'face') break;
-      k *= 0.7; extra += 0.8;
-    }
+    const a = focusAngles(p.pos, p.arch === 'upper', p.nx, p.nz);
+    this.cam.focus(this.v1, a.yaw, a.pitch, a.dist);
+    if (sc.firstHitKind(this.cam.goalPosition(this.v2), sc.toothCenter(i, this.v3)) === 'face') this.cam.focus(this.v1, 0, a.pitch, a.dist);
     this.focusTooth = i;
     this.hud.setView(null);
   }
@@ -538,6 +551,7 @@ export class CleanController {
         headphones: mods.extras.includes('headphones'), numbing: mods.numbingGel, tool: this.toolAt.tooth >= 0 ? this.toolAt : null,
       });
       this.drainEvents();
+      this.comfortCheck(dt);
       this.tutorialTick();
     } else this.toolTouching = false;
     if (this.mode !== 'tool' || (this.slot !== 'polisher' && this.slot !== 'gel')) sc.setWrap(-1, 0, 0, '#fff');
@@ -638,6 +652,7 @@ export class CleanController {
       const td = m.teeth[i];
       this.mapDirt[i] = td.present && td.problem ? toothDirtLeft(m, i) : 0;
       this.mapDone[i] = td.present && td.problem && td.snapped ? 1 : 0;
+      if (td.present && td.problem) this.scene?.setLastBits(i, lastBits(m, i));
     }
     this.hud.setMap(this.mapDirt, this.mapDone, this.focusTooth);
     if (this.setup.bonus) {
@@ -648,6 +663,31 @@ export class CleanController {
     }
     if (m.caseType === 'whitening') this.hud.setShade(meanShade(m));
     this.hud.setDozing(m.dozing);
+  }
+
+  /**
+   * Teach Reassure: the first time comfort drops below 50 in a clean, a one-time hint and a pulsing button
+   * (in the tutorial it becomes a step until Reassure is used).
+   */
+  private comfortCheck(dt: number) {
+    const m = this.model;
+    if (!this.comfortTaught && m.comfort < 50 && !m.walkout) {
+      this.comfortTaught = true;
+      const text = `Comfort is dropping: tap ${m.tw.sleepy ? 'Nudge' : 'Reassure'}`;
+      if (this.tut >= 0) {
+        this.tutComfort = true;
+        this.hud.tutorial(this.tut + 1, TUTORIAL_STEPS.length, text, this.hud.reassureEl);
+      } else {
+        this.hud.tip(text, 5000);
+        this.comfortPulse = 8;
+        this.hud.pulse(this.hud.reassureEl);
+      }
+      this.sfx('notify', 0.4);
+    }
+    if (this.comfortPulse > 0) {
+      this.comfortPulse -= dt;
+      if (this.comfortPulse <= 0) this.hud.pulse(null);
+    }
   }
 
   private currentMood(): Mood {
@@ -668,6 +708,11 @@ export class CleanController {
     const hit = this.pickAt(ptr.x, ptr.y - ptr.off, slot);
     this.toolTouching = hit.kind !== 'none' && hit.kind !== 'face';
     const m = this.model;
+    // gum-edge assist: the polisher cup reaches plaque right at the gumline (the gum is soft, only scalers slip)
+    if (slot === 'polisher' && hit.kind === 'gum') {
+      const ge = sc.gumEdgeTooth(hit.point);
+      if (ge) { hit.kind = 'tooth'; hit.tooth = ge.tooth; hit.u = ge.u; hit.v = 0.02; }
+    }
     if (hit.kind === 'tooth' || hit.kind === 'bracket') { this.toolAt.tooth = hit.tooth; this.toolAt.u = hit.u; this.toolAt.v = hit.v; }
     const onTooth = hit.kind === 'tooth';
     if (onTooth && toothBlocked(m, hit.tooth) && m.doze > 0) this.hint('doze', 'Nudge them awake', hit.point);
@@ -697,7 +742,11 @@ export class CleanController {
         if (hit.kind === 'bracket') { this.clink(hit); this.lastTooth = -1; break; }
         if (hit.kind === 'tooth') {
           const stroke = this.lastTooth === hit.tooth ? hit.point.distanceTo(this.lastPoint) : 0;
-          const r = applyScaler(m, hit.tooth, hit.u, hit.v, stroke, dt);
+          // the stroke speed cap covers the time since the pointer last moved: on a 120+ Hz display the pointer
+          // moves on some frames only, and a per-frame cap would throw most of each stroke away
+          const capDt = Math.min(0.1, this.strokeIdle + dt);
+          this.strokeIdle = stroke > 0 ? 0 : capDt;
+          const r = applyScaler(m, hit.tooth, hit.u, hit.v, stroke, tool.timeBased ? dt : capDt);
           out.working = true;
           out.scaling = tool.timeBased || stroke > 0.004;
           out.molar = isMolar(hit.tooth);
@@ -741,6 +790,11 @@ export class CleanController {
         break;
       }
       case 'floss': {
+        // the jaw reopened under a held string: hook the gap under the pointer again
+        if (this.rehook && this.setup.tools.floss < 3 && !this.flAim) {
+          this.rehook = false;
+          if (this.nearestTarget(hit, ptr.x, ptr.y - ptr.off)) this.tryHook(ptr.x, ptr.y - ptr.off, hit);
+        }
         if (this.setup.tools.floss >= 3 && this.toolTouching) {
           // water flosser: point at a gap or a bracket and hold
           const tg = this.nearestTarget(hit, ptr.x, ptr.y - ptr.off);
@@ -1290,7 +1344,7 @@ export class CleanController {
         this.hud.wince();
         this.sfx('gag', 0.9);
         if (motion) this.cam.shake(0.3, 0.5);
-        this.releaseTool();
+        this.pauseStroke();
         this.vibe(40);
         break;
       }
@@ -1318,11 +1372,13 @@ export class CleanController {
       case 'chat': {
         this.hud.say(e.line, e.closesJaw ? 2400 : 2800);
         this.sfx(e.closesJaw ? 'chatter' : this.setup.patient.archetype === 'kid' ? 'giggle' : 'mmhm', 0.6);
-        if (e.closesJaw) this.releaseTool();
+        if (e.closesJaw) this.pauseStroke();
         break;
       }
       case 'reassure': {
         this.sfx('reassure', 0.7);
+        if (this.comfortPulse > 0) { this.comfortPulse = 0; this.hud.pulse(null); this.hud.tip(null); }
+        if (this.tutComfort) { this.tutComfort = false; this.showTutorial(); }
         if (!this.model.tw.sleepy) this.hud.say(this.setup.patient.archetype === 'mannequin' ? '...' : REASSURE_LINES[Math.floor(Math.random() * REASSURE_LINES.length)], 1500);
         const r = this.hud.root.querySelector('.fbc-portrait')!.getBoundingClientRect();
         const h = this.root.getBoundingClientRect();
@@ -1423,6 +1479,7 @@ export class CleanController {
 
   private tutorialTick() {
     if (this.tut < 0) return;
+    if (this.tutComfort) { this.hud.pulse(this.hud.reassureEl); return; }
     const m = this.model;
     let next = false;
     switch (this.tut) {
@@ -1562,6 +1619,85 @@ export class CleanController {
         const h = sc.pick(self.ndcX(x), self.ndcY(y), self.cam.camera, makeHit(), true);
         return { kind: h.kind, tooth: h.tooth, u: +h.u.toFixed(3), v: +h.v.toFixed(3), pocket: h.pocket };
       },
+      /**
+       * Cell reachability (QA): for each tooth in `teeth` (default all), the dirt cells whose surface point a
+       * pointer can press with the current camera: the pick through that pixel lands on that tooth within
+       * 0.06 units of the point, or (gumline cells) on the gum collar the polisher gum-edge assist maps to it.
+       * Pixels under the HUD do not count; touchOffset is the finger offset below the work point.
+       */
+      scanCells(touchOffset = 0, teeth: number[] | null = null) {
+        const sc = self.scene;
+        if (!sc) return null;
+        self.cam.update(0, true);
+        sc.scene.updateMatrixWorld(true);
+        const canvas = self.renderer!.domElement;
+        const r = canvas.getBoundingClientRect();
+        const out: Record<number, { ray: number[]; edge: number[]; hid: number[] }> = {};
+        const h = makeHit();
+        const w = new THREE.Vector3();
+        const s = { x: 0, y: 0 };
+        sc.teethOnlyPick(true);
+        try {
+          for (const i of teeth ?? Array.from({ length: TOOTH_COUNT }, (_, k) => k)) {
+            const td = self.model.teeth[i];
+            if (!td.present || !sc.teeth[i]) continue;
+            const ray: number[] = [], edge: number[] = [], hid: number[] = [];
+            for (let c = 0; c < td.reach.length; c++) {
+              if (!td.reach[c]) continue;
+              const u = cellCenterU(c), v = cellCenterV(c);
+              if (!sc.cellWorld(i, u, v, w)) continue;
+              self.project(w, s);
+              if (s.x < 1 || s.y < 1 || s.x > self.width - 1 || s.y > self.height - 1) continue;
+              const fy = s.y + touchOffset;
+              if (fy >= self.height) continue;
+              if (document.elementFromPoint(r.left + s.x, r.top + fy) !== canvas) continue;
+              sc.pick(self.ndcX(s.x), self.ndcY(s.y), self.cam.camera, h, false);
+              if (h.kind === 'tooth' && h.tooth === i && h.point.distanceTo(w) < 0.06) { ray.push(c); if (sc.gumCovers(self.cam.camera.position, w)) hid.push(c); }
+              else if (h.kind === 'gum' && v < 0.12) { const ge = sc.gumEdgeTooth(h.point); if (ge && ge.tooth === i) edge.push(c); }
+            }
+            out[i] = { ray, edge, hid };
+          }
+        } finally { sc.teethOnlyPick(false); }
+        return out;
+      },
+      /** QA: screen rects (CSS px, page) of the HUD controls a player presses. */
+      ui() {
+        const R = (e: Element | null) => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height) }; };
+        const slots: Record<string, unknown> = {};
+        for (const s of self.slots) slots[s] = R(self.hud.slotEl(s));
+        const map = [...self.root.querySelectorAll('.fbc-map .fbc-tooth')].map(R);
+        const views: Record<string, unknown> = {};
+        self.root.querySelectorAll('.fbc-view').forEach((b) => { views[(b.textContent || '').toLowerCase()] = R(b); });
+        const modal = [...self.root.querySelectorAll('.fbc-modal .fbc-btn')].map((b) => ({ text: b.textContent, ...R(b) }));
+        const canvas = self.canvasHost.getBoundingClientRect();
+        return { slots, map, views, done: R(self.hud.done), reassure: R(self.hud.reassureEl), modal, canvas: { x: canvas.left, y: canvas.top } };
+      },
+      /**
+       * QA: screen points (canvas CSS px) of the dirty cells of tooth i a pointer can press right now
+       * (plaque + stain above `min`), the way a player sees what is left.
+       */
+      dirtSpots(i: number, min = 0.04) {
+        const sc = self.scene;
+        if (!sc) return [];
+        self.cam.update(0, true);
+        sc.scene.updateMatrixWorld(true);
+        const t = self.model.teeth[i];
+        const out: { x: number; y: number; a: number }[] = [];
+        const w = new THREE.Vector3(), s = { x: 0, y: 0 }, h = makeHit();
+        sc.teethOnlyPick(true);
+        try {
+          for (let c = 0; c < t.plaque.length; c++) {
+            const a = t.plaque[c] + t.stain[c];
+            if (a <= min || !t.reach[c]) continue;
+            if (!sc.cellWorld(i, cellCenterU(c), cellCenterV(c), w)) continue;
+            self.project(w, s);
+            if (s.x < 0 || s.y < 0 || s.x > self.width || s.y > self.height) continue;
+            sc.pick(self.ndcX(s.x), self.ndcY(s.y), self.cam.camera, h, false);
+            if (h.kind === 'tooth' && h.tooth === i && h.point.distanceTo(w) < 0.08) out.push({ x: Math.round(s.x), y: Math.round(s.y), a: +a.toFixed(2) });
+          }
+        } finally { sc.teethOnlyPick(false); }
+        return out;
+      },
       hide(kind: string, on = false) { self.scene?.scene.traverse((o) => { if (o.userData.kind === kind) o.visible = on; }); },
       finish() { self.finish('done'); },
       done() { void self.requestDone(); },
@@ -1569,6 +1705,8 @@ export class CleanController {
       setTool(slot: SlotId | ToolSlot | number) { self.selectTool(typeof slot === 'number' ? self.slots[slot - 1] : slot); },
       view(id: ViewId) { self.setView(id); self.cam.snap(); },
       focus(i: number) { self.focus(i); self.cam.snap(); },
+      /** QA: the orbit camera (goals, snap) for camera experiments. */
+      get cam() { return self.cam; },
       memory() { const r = self.renderer; return r ? { ...r.info.memory, programs: r.info.programs?.length ?? 0 } : null; },
       /** Screen positions (CSS px in the clean container) of work targets. */
       targets() {

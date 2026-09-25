@@ -626,6 +626,24 @@ export class CleanHud {
     target?.classList.add('fbc-pulse');
   }
   slotEl(slot: SlotId) { return this.slots.get(slot) ?? null; }
+  get reassureEl() { return this.reassureBtn; }
+
+  /** A short tip card above the tool bar (fades after `ms`); null hides it. */
+  tip(text: string | null, ms = 4500) {
+    clearTimeout(this.tipTimer);
+    this.tipEl?.remove();
+    this.tipEl = null;
+    if (!text) return;
+    const t = el('div', 'fbc-card fbc-tut fbc-tip');
+    const b = el('div', 'fbc-tut-text');
+    b.textContent = text;
+    t.appendChild(b);
+    this.root.appendChild(t);
+    this.tipEl = t;
+    this.tipTimer = window.setTimeout(() => { t.classList.add('out'); window.setTimeout(() => { t.remove(); if (this.tipEl === t) this.tipEl = null; }, 300); }, ms);
+  }
+  private tipEl: HTMLDivElement | null = null;
+  private tipTimer = 0;
   get done() { return this.doneBtn; }
   get caseEl() { return this.caseCard; }
 
@@ -663,8 +681,13 @@ export class CleanHud {
     });
   }
 
+  /** The back button: the copy says what happens (the patient keeps waiting in your chair; school: the practical stops). */
   confirmLeave(): Promise<boolean> {
-    return this.confirm('Leave this patient?', 'They will reschedule. No pay for this visit.', 'Keep cleaning', 'Leave', true);
+    if (this.setup.tutorial || this.setup.patient.archetype === 'mannequin') {
+      return this.confirm('Stop the practical?', 'You can start it again from the school.', 'Keep going', 'Stop', true);
+    }
+    const first = this.setup.patient.name.split(/\s+/)[0] || 'The patient';
+    return this.confirm('Step away?', `${first} waits in your chair. This clean starts over and pays nothing until you finish.`, 'Keep cleaning', 'Step away', true);
   }
 
   /** Done below 80% asks first (DESIGN 5.8). */
@@ -674,6 +697,7 @@ export class CleanHud {
   get modalOpen() { return !!this.modal; }
 
   dispose() {
+    clearTimeout(this.tipTimer);
     clearTimeout(this.bubbleTimer);
     clearTimeout(this.introTimer);
     this.root.remove();
