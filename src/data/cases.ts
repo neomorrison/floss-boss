@@ -55,9 +55,16 @@ export const CASES: Record<CaseType, CaseDef> = {
     weight: { senior: 10, smoker: 5 },
     requires: 'deepCert',
   },
+  grillz: {
+    id: 'grillz', name: 'Grill Glow-Up', blurb: 'Diamonds up top, plaque underneath.',
+    tip: 'Hold on the grill to take it out, clean underneath, then buff every diamond until it glints. It snaps back in at the end.',
+    minLevel: 4, payMult: 2.5,
+    weight: { rapper: 10 },
+    requires: null,
+  },
 };
 
-export const CASE_ORDER: CaseType[] = ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep'];
+export const CASE_ORDER: CaseType[] = ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep', 'grillz'];
 
 export interface TwistDef { id: TwistId; name: string; text: string; minLevel: number }
 export const TWISTS: Record<TwistId, TwistDef> = {

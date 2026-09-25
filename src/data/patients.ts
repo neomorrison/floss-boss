@@ -16,6 +16,7 @@ export interface Archetype {
   deepChance: number;      // chance the visit is a deep cleaning (needs deepCert, else cleaning)
   weight: Record<OfficeTierId, number>;   // arrival mix per office tier
   firstNames: string[];
+  stageName?: boolean;     // firstNames are full stage names: no last name is added
   lines: string[];         // things they say mid-clean
 }
 
@@ -105,12 +106,19 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     id: 'pirate', label: 'Pirate', blurb: 'Sailed in on the evening tide. Smells of rum and barnacles.',
     dirt: D(0.5, 0.7, 6, 1.4, 2), traits: T(80, 0.9), tipRate: 0.3, patience: 40, difficulty: 1.4, reviewWeight: 2, whitening: 0.05,
     missing: [3, 6], deepChance: 0, weight: { t1: 2, t2: 3, t3: 3, t4: 4 },
-    firstNames: ['Captain Plankbeard', 'Salty Sue', 'One-Eyed Morgan', 'Barnacle Bill', 'Peg-Leg Petra', 'Cutlass Carl'],
+    firstNames: ['Captain Plankbeard', 'Salty Sue', 'One-Eyed Morgan', 'Barnacle Bill', 'Peg-Leg Petra', 'Cutlass Carl'], stageName: true,
     lines: ['Arr, mind me gold tooth!', 'Seven seas and never a floss.', 'Found a doubloon yet, matey?', 'Yo ho... ow.'],
+  },
+  rapper: {
+    id: 'rapper', label: 'Rap Star', blurb: 'Platinum records, a diamond grill, and a busy tour schedule.',
+    dirt: D(0.6, 0.4, 5, 1.2, 1), traits: T(80, 1.1), tipRate: 0.5, patience: 30, difficulty: 1.3, reviewWeight: 5, whitening: 0.3,
+    missing: [0, 0], deepChance: 0, weight: { t1: 0, t2: 1, t3: 2, t4: 3 },
+    firstNames: ['Lil Molar', 'Young Floss', 'MC Canine', 'Diamond Dre', 'Grillz Jones', 'DJ Enamel'], stageName: true,
+    lines: ['Careful with the ice, doc.', 'Make it shine like the chain.', 'This smile is going on the album cover.', 'Keep it quick, I got a show tonight.', 'My fans are gonna love this.', 'Ayy, that tickles.'],
   },
 };
 
-export const PATIENT_ARCHETYPES: ArchetypeId[] = ['regular', 'coffee', 'kid', 'nervous', 'gagger', 'smoker', 'senior', 'influencer', 'athlete', 'chatty', 'pirate'];
+export const PATIENT_ARCHETYPES: ArchetypeId[] = ['regular', 'coffee', 'kid', 'nervous', 'gagger', 'smoker', 'senior', 'influencer', 'athlete', 'chatty', 'pirate', 'rapper'];
 
 export const LAST_NAMES = ['Molar', 'Brushwell', 'Gumm', 'Enamel', 'Crowne', 'Pearl', 'Flossman', 'Bright', 'Canino', 'Plaque', 'Smiley', 'Chompers', 'Toothaker', 'Minty', 'Bicuspid', 'Rinse', 'Nashley', 'Grinwald'];
 

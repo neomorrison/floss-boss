@@ -6,10 +6,10 @@
 
 export type ArchetypeId =
   | 'mannequin' | 'regular' | 'coffee' | 'kid' | 'nervous' | 'gagger'
-  | 'smoker' | 'senior' | 'influencer' | 'athlete' | 'chatty' | 'pirate';
+  | 'smoker' | 'senior' | 'influencer' | 'athlete' | 'chatty' | 'pirate' | 'rapper';
 
 /** What kind of job a patient brings (docs/DESIGN.md 5). Drives objectives, special mechanics and pay. */
-export type CaseType = 'routine' | 'whitening' | 'pirate' | 'candy' | 'braces' | 'deep';
+export type CaseType = 'routine' | 'whitening' | 'pirate' | 'candy' | 'braces' | 'deep' | 'grillz';
 /** Per-patient complications layered on a case. */
 export type TwistId = 'chatty' | 'gagger' | 'fidget' | 'sensitive' | 'hiccups' | 'sleepy';
 /** Optional stretch goal per patient. */
@@ -136,6 +136,7 @@ export interface CaseSpecial {
   treasure: boolean;         // pirate: a doubloon wedged in a molar gap
   barnacles: number;         // pirate: tough barnacle deposits
   seaweed: number;           // pirate: seaweed strands in gaps
+  grillGems: number;         // grillz: diamonds on the grill to buff (0 = no grill)
 }
 
 export interface CleanSetup {

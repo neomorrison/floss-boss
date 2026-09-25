@@ -17,6 +17,8 @@ export const MOUTH_MODELS = [
   'debris_popcorn', 'debris_spinach', 'debris_seed', 'debris_candy',
   // cases (DESIGN 5): pirate barnacles, seaweed and doubloon, candy-kid sugar bugs, braces brackets
   'tartar_barnacle', 'debris_seaweed', 'doubloon', 'sugar_bug', 'bracket',
+  // grillz case (DESIGN 5.5): a diamond grill over the upper front six teeth
+  'grill_diamond',
 ] as const;
 
 // Tools shown in the clean scene and as shop thumbnails (art-mouth builder).
@@ -74,6 +76,8 @@ export const SFX_KEYS = [
   'pocket_open', 'shade_tick', 'check', 'hiccup', 'snore', 'coin_clink', 'shell_crack', 'tooth_done',
   // manager layer
   'event_card', 'event_good', 'event_bad', 'campaign_start', 'perk_pick', 'huddle', 'interview',
+  // grillz case
+  'bling', 'ayy', 'grill_pop',
   // clinic and UI
   'door_chime', 'cash', 'coins', 'ui_click', 'ui_tab', 'purchase', 'level_up', 'hire', 'error', 'day_end',
   'review_good', 'review_bad', 'notify',

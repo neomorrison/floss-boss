@@ -1,7 +1,7 @@
 // Manager layer catalog (DESIGN 10): daily focus, campaigns, staff perks and the event deck.
 // The sim may retune numbers and texts (never ids). Cash amounts marked `scaled` are multiplied by the
 // clinic's OFFICES[tier].tierScale.
-import type { CampaignId, CaseType, FocusId, OfficeTierId, PerkId, StaffRole, EquipId } from '../core/types';
+import type { ArchetypeId, CampaignId, CaseType, FocusId, OfficeTierId, PerkId, StaffRole, EquipId } from '../core/types';
 
 // ------------------------------------------------------------------ daily focus (10.1)
 export interface FocusDef {
@@ -69,7 +69,7 @@ export type EventEffect =
   | { kind: 'skill'; delta: number; who: 'staff' | 'bestHygienist' }
   | { kind: 'salary'; pct: number; who: 'staff' }
   | { kind: 'quitChance'; p: number; who: 'staff' }
-  | { kind: 'vip'; fee: number; reviewWeight: number }   // a VIP patient added to today's schedule
+  | { kind: 'vip'; fee: number; reviewWeight: number; archetype?: ArchetypeId; caseType?: CaseType }   // a VIP patient added to today's schedule
   | { kind: 'closeOp'; days: number }                    // the event's {opId} takes no patients
   | { kind: 'openLate'; minutes: number }
   | { kind: 'tempStaff'; role: StaffRole; days: number; skill: number }
@@ -95,8 +95,8 @@ export const EVENTS: EventDef[] = [
     { label: 'Deep clean the office', hint: '-$300, rating +0.1', effects: [{ kind: 'cash', amount: -300, scaled: true }, { kind: 'rating', delta: 0.1 }] },
     { label: 'Wing it', hint: '70% nothing, 30% a fine', effects: [{ kind: 'chance', p: 0.7, win: [], lose: [{ kind: 'cash', amount: -800, scaled: true }, { kind: 'rating', delta: -0.2 }], winText: 'The inspector found nothing.', loseText: 'Fined for a dusty sterilizer.' }] },
   ] },
-  { id: 'celebrity', title: 'Celebrity Walk-in', text: 'A reality TV star wants a cleaning at {clinic} today.', art: 'star', minTier: 't2', weight: 6, choices: [
-    { label: 'Squeeze them in', hint: 'VIP patient, big fee, their review counts 5x', effects: [{ kind: 'vip', fee: 900, reviewWeight: 5 }] },
+  { id: 'celebrity', title: 'Celebrity Walk-in', text: 'A platinum rap star wants a cleaning at {clinic} today.', art: 'star', minTier: 't2', weight: 6, choices: [
+    { label: 'Squeeze them in', hint: 'VIP patient, big fee, their review counts 5x', effects: [{ kind: 'vip', fee: 900, reviewWeight: 5, archetype: 'rapper', caseType: 'grillz' }] },
     { label: 'Politely decline', hint: 'Nothing happens', effects: [] },
   ] },
   { id: 'supplier', title: 'Supplier Sale', text: 'Gloves and prophy paste are half price this week.', art: 'box', minTier: 't1', weight: 8, choices: [
