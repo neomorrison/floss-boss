@@ -17,8 +17,9 @@ import { enqueue, modals, openModal, type ModalHandle } from './modal';
 import { staffPanelIntent } from './panels/staff';
 import { autoRaiseOn, NoticeQueue, raisePct, setGameSettings, type Notice, type NoticeItem, type NoticeKind } from './pause';
 import { patientPortrait, staffPortrait } from './portrait';
+import { quoteRaiseAll, summarizeRaiseAll } from './raiseall';
 import { attempt } from './safe';
-import { perkChooser } from './staffcard';
+import { perkChooser, raiseAllFlow } from './staffcard';
 import { toast } from './toasts';
 import { btn, chip, toggle } from './widgets';
 
@@ -216,7 +217,7 @@ function quitNotice(items: NoticeItem[], multi: boolean, close: () => void): Bui
 
 function raiseNotice(items: NoticeItem[], multi: boolean, close: () => void): Built {
   const list = h('div.notice-body');
-  const rows: { it: NoticeItem; idx: number; settle: (quiet: boolean) => boolean }[] = [];
+  const rows: { it: NoticeItem; idx: number; settle: (quiet: boolean) => boolean; markRaised: () => void }[] = [];
   let open = 0;
   const settled = () => { open--; if (open <= 0) setTimeout(close, 450); };
   for (const it of items) {
@@ -235,6 +236,12 @@ function raiseNotice(items: NoticeItem[], multi: boolean, close: () => void): Bu
       ),
     );
     let done = false;
+    const markRaised = () => {
+      if (done) return;
+      done = true;
+      raise.replaceWith(chip('Raised', 'mint', 'check'));
+      settled();
+    };
     const settle = (quiet: boolean): boolean => {
       const cur = staffOf(it)?.staff;
       if (done || !cur) return false;
@@ -242,15 +249,29 @@ function raiseNotice(items: NoticeItem[], multi: boolean, close: () => void): Bu
         ? { sound: null, success: '', quietFail: true }
         : { sound: 'cash', success: `${firstName(cur.name)} is happy with the raise` });
       if (!ok) return false;
-      done = true;
-      raise.replaceWith(chip('Raised', 'mint', 'check'));
-      settled();
+      markRaised();
       return true;
     };
     const raise = btn('Raise', { variant: 'sun', size: 'sm', icon: 'trendUp', sub: `+${money(st.ask - st.salary)}/day`, sound: null, onClick: () => { settle(false); } });
     row.appendChild(raise);
     list.appendChild(row);
-    rows.push({ it, idx, settle });
+    rows.push({ it, idx, settle, markRaised });
+  }
+  // Payroll Day: raise everyone below their ask across this notice's location(s) in one tap, next to the
+  // individual raise buttons above (DESIGN 8.5 raise rules, 10.6).
+  const s0 = store.state;
+  let raiseAllBtn: HTMLElement | null = null;
+  if (s0.player.skills.includes('payrollDay')) {
+    const clinicIds = [...new Set(items.map((it) => it.clinicId))];
+    const scope: number | 'all' = clinicIds.length === 1 ? (clinicOf(clinicIds[0])?.index ?? 'all') : 'all';
+    const q = quoteRaiseAll(sim, s0, scope);
+    if (q && q.ok) {
+      const sum = summarizeRaiseAll(q, s0.player.skills.includes('hardBargain'));
+      raiseAllBtn = btn('Raise all', {
+        variant: 'sun', icon: 'trendUp', sub: sum.subLabel, sound: null,
+        onClick: () => { void raiseAllFlow(scope, 'Raise all').then((ok) => { if (ok) rows.forEach((r) => r.markRaised()); }); },
+      });
+    }
   }
   const st0 = staffOf(items[0])?.staff;
   const title = items.length === 1 ? `${firstName(st0?.name ?? items[0].name)} asks for a raise` : `${items.length} raise requests`;
@@ -270,7 +291,7 @@ function raiseNotice(items: NoticeItem[], multi: boolean, close: () => void): Bu
     }, 'Approve raises up to 15%'),
     h('span.grow', h('b', 'Approve raises up to 15%'), h('span.tiny.faint', 'At the end of each day. An Office Manager does this at their location either way.')),
   );
-  return { icon: 'trendUp', eyebrow: '', title, body: list, actions: [], extra: auto };
+  return { icon: 'trendUp', eyebrow: '', title, body: list, actions: raiseAllBtn ? [raiseAllBtn] : [], extra: auto };
 }
 
 // ---------------------------------------------------------------- perk

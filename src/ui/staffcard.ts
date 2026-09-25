@@ -12,12 +12,13 @@ import { confetti, sfx } from './fx';
 import { act, activeClinic, activeIndex, canAfford, isOwner } from './game';
 import { icon } from './icons';
 import { liveModal, select } from './live';
-import { courseState } from './logic';
+import { courseState, noDash } from './logic';
 import * as mgr from './mgr';
 import { caseShort, rangeLabel, specialtyOf } from './mgrlogic';
 import { confirmModal, openModal } from './modal';
 import { staffPortrait } from './portrait';
 import { toast } from './toasts';
+import { quoteRaiseAll, runRaiseAll, summarizeRaiseAll } from './raiseall';
 import { bar, btn, chip, statRow } from './widgets';
 
 export const PERK_ICON: Record<PerkId, string> = {
@@ -147,6 +148,35 @@ export async function fireFlow(idx: number, st: Staff): Promise<void> {
     confirm: 'Fire', danger: true, icon: 'door',
   });
   if (ok) act(() => sim.fire(store.state, idx, st.id), { sound: 'ui_click', success: `${st.name} has left the team` });
+}
+
+/** "Raise all" button (Payroll Day, DESIGN 8.5 raise rules, 10.6): the quote on the button, disabled with
+ * the reason when nobody at that scope is below their ask. Null when the player has not learned Payroll
+ * Day, or while sim.raiseAllQuote has not landed yet (src/ui/raiseall.ts guard). */
+export function raiseAllButton(clinicIndex: number | 'all', label: string, opts: { size?: 'sm' | 'md' } = {}): HTMLElement | null {
+  const s = store.state;
+  if (!s.player.skills.includes('payrollDay')) return null;
+  const q = quoteRaiseAll(sim, s, clinicIndex);
+  if (!q) return null;
+  const sum = summarizeRaiseAll(q, s.player.skills.includes('hardBargain'));
+  return btn(label, {
+    variant: 'sun', size: opts.size ?? 'sm', icon: 'trendUp', sub: sum.subLabel,
+    disabled: !q.ok, title: sum.disabledReason,
+    onClick: () => { void raiseAllFlow(clinicIndex, label); },
+  });
+}
+
+/** Confirm the quote, then give the raise: purchase sound, toast with the result, staff cards update
+ * (act() commits the store). Returns whether it went through. */
+export async function raiseAllFlow(clinicIndex: number | 'all', label = 'Raise all'): Promise<boolean> {
+  const s = store.state;
+  const q = quoteRaiseAll(sim, s, clinicIndex);
+  if (!q) return false;
+  if (!q.ok) { sfx('error'); toast({ text: noDash(q.reason || 'Everyone is paid what they ask'), kind: 'bad', key: 'act-fail' }); return false; }
+  const sum = summarizeRaiseAll(q, s.player.skills.includes('hardBargain'));
+  const ok = await confirmModal({ title: `${label}?`, text: sum.confirmText, confirm: label, icon: 'trendUp' });
+  if (!ok) return false;
+  return act(() => runRaiseAll(sim, store.state, clinicIndex), { sound: 'purchase' });
 }
 
 /** The full staff block (panel grid item or modal body). */

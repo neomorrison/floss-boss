@@ -123,6 +123,7 @@
 .sum-tile .icon, .fc-tile .icon { grid-row: span 2; width: 40px; height: 40px; padding: 9px; border-radius: 12px; background: var(--mint-ll); color: var(--teal); }
 .sum-tile b, .fc-tile b { font-size: 22px; line-height: 1.1; }
 .sum-tile span, .fc-tile span { font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
+.raise-all-bar { margin-bottom: 14px; }
 .staff-hint { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .staff-hint .icon { width: 18px; height: 18px; color: var(--teal); }
 .staff-filter { margin-bottom: 14px; }

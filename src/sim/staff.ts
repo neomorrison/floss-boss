@@ -3,7 +3,7 @@ import type { ActionResult, Candidate, Clinic, GameState, PerkId, SimEvent, Staf
 import type { Rng } from '../core/rng';
 import { clamp } from '../core/rng';
 import { PLAYER_ID, TRAINING_COST } from '../core/constants';
-import { money } from '../core/format';
+import { money, signedMoney } from '../core/format';
 import { OFFICES } from '../data/offices';
 import { ROLES, STAFF_FIRST, STAFF_LAST, STAFF_PORTRAITS, TRAITS } from '../data/staff';
 import { PERKS, PERK_LEVELS } from '../data/manager';
@@ -295,6 +295,69 @@ export function setSalary(state: GameState, clinicIndex: number, staffId: string
     if (v >= s.ask * RAISE_CONTENT) delete ss.raiseDue;
   }
   return { ok: true, message: `${s.name}: ${money(v)} per day` };
+}
+
+/** Hard Bargain pays this share of each raise-all gap (DESIGN 8.5). */
+export const HARD_BARGAIN_SHARE = 0.6;
+
+/** One staff member's raise in a raiseAllQuote/raiseAll, and the location it belongs to (useful with 'all'). */
+export interface RaiseAllStaff { clinicIndex: number; staffId: string; name: string; from: number; to: number }
+
+/** What Raise all (the Payroll Day skill, DESIGN 8.5) would do right now: every staff member paid below
+ * their ask at the location (or, with clinicIndex 'all', every location) gets raised. Without Hard Bargain
+ * `to` is the full ask; with it, `to` is only HARD_BARGAIN_SHARE of the gap, accepted as a full raise.
+ * `fullPerDay` is always the uncapped cost, so the UI can show the saving Hard Bargain makes. `ok` is false
+ * (with a reason) when Payroll Day is not learned, or nobody at the target is paid below their ask. */
+export interface RaiseAllQuote { ok: boolean; reason?: string; count: number; perDay: number; fullPerDay: number; staff: RaiseAllStaff[] }
+
+export function raiseAllQuote(state: GameState, clinicIndex: number | 'all'): RaiseAllQuote {
+  const empty = (reason: string): RaiseAllQuote => ({ ok: false, reason, count: 0, perDay: 0, fullPerDay: 0, staff: [] });
+  if (state.phase !== 'owner') return empty('Open a practice first');
+  if (!hasSkill(state, 'payrollDay')) return empty('Needs Payroll Day first');
+  if (clinicIndex !== 'all' && !state.locations[clinicIndex]) return empty('Location not found');
+  const indices = clinicIndex === 'all' ? state.locations.map((_, i) => i) : [clinicIndex];
+  const hard = hasSkill(state, 'hardBargain');
+  const out: RaiseAllStaff[] = [];
+  let perDay = 0;
+  let fullPerDay = 0;
+  for (const idx of indices) {
+    const c = state.locations[idx];
+    for (const s of c.staff) {
+      if (s.tempUntilDay != null) continue;
+      if (s.salary >= s.ask) continue;
+      const gap = s.ask - s.salary;
+      const to = hard ? s.salary + Math.round(HARD_BARGAIN_SHARE * gap) : s.ask;
+      fullPerDay += gap;
+      perDay += to - s.salary;
+      out.push({ clinicIndex: idx, staffId: s.id, name: s.name, from: s.salary, to });
+    }
+  }
+  if (!out.length) return empty('Everyone is paid what they ask');
+  return { ok: true, count: out.length, perDay, fullPerDay, staff: out };
+}
+
+/** Raise all (DESIGN 8.5): raises every staff member below their ask at the location (or every location
+ * with 'all') to their ask, one location or 'all'. With Hard Bargain, pays only HARD_BARGAIN_SHARE of each
+ * gap and the staff member's ask drops to match, so they take it as a full raise and no follow-up request
+ * comes from that gap. Reuses setSalary's bookkeeping (morale +5, raise request cleared, 10-day clock
+ * restarted) so the result matches a manual raise. A recurring salary change: no cash moves here, salaries
+ * are paid at the day close like any other. */
+export function raiseAll(state: GameState, clinicIndex: number | 'all'): ActionResult {
+  const q = raiseAllQuote(state, clinicIndex);
+  if (!q.ok) return { ok: false, reason: q.reason ?? 'Everyone is paid what they ask' };
+  const hard = hasSkill(state, 'hardBargain');
+  for (const item of q.staff) {
+    const c = state.locations[item.clinicIndex];
+    const s = c?.staff.find((x) => x.id === item.staffId);
+    if (!s) continue;
+    if (hard) s.ask = item.to;   // accepted as a full raise at the discounted rate: satisfied, no follow-up ask
+    setSalary(state, item.clinicIndex, s.id, item.to);
+  }
+  const saved = q.fullPerDay - q.perDay;
+  const message = hard
+    ? `Raised ${q.count} staff: ${signedMoney(q.perDay)}/day (saved ${money(saved)}/day)`
+    : `Raised ${q.count} staff: ${signedMoney(q.perDay)}/day`;
+  return { ok: true, message };
 }
 
 export function assignHygienist(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult {

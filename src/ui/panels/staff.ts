@@ -11,7 +11,7 @@ import { icon } from '../icons';
 import { locationPicker } from './office';
 import type { PanelCtx, PanelInst } from '../panelhost';
 import * as mgr from '../mgr';
-import { candidateBlock, openPerkChoice, staffBlock } from '../staffcard';
+import { candidateBlock, openPerkChoice, raiseAllButton, staffBlock } from '../staffcard';
 import { autoRaiseOn, setGameSettings } from '../pause';
 import { btn, empty, tabs, toggle } from '../widgets';
 
@@ -80,7 +80,11 @@ export function staffPanel(ctx: PanelCtx): PanelInst {
         const offers = mgr.perkOffers(s).filter((o) => o.clinicIndex !== loc);
         const elsewhere = offers.length ? h('div.staff-elsewhere', icon('sparkle'), h('span.grow', `${offers.map((o) => o.staff.name.split(' ')[0]).join(', ')} at ${offers[0].clinic.name}${offers.length > 1 && offers.some((o) => o.clinic !== offers[0].clinic) ? ' and more' : ''} can pick a perk`),
           btn('Choose', { variant: 'sun', size: 'sm', onClick: () => openPerkChoice(offers[0].staff.id) })) : null;
-        return h('div.staff-panel', head, elsewhere, summary, policy, list);
+        // Payroll Day: raise everyone below their ask at this location, or every location at once
+        const raiseAllBtns = [raiseAllButton(loc, 'Raise all'), s.locations.length > 1 ? raiseAllButton('all', 'Raise all locations') : null]
+          .filter((b): b is HTMLElement => !!b);
+        const raiseBar = raiseAllBtns.length ? h('div.row.row-wrap.gap-6.raise-all-bar', ...raiseAllBtns) : null;
+        return h('div.staff-panel', head, elsewhere, summary, policy, raiseBar, list);
       }
       // hire board
       const roles = Array.from(new Set(s.candidates.map((x) => x.role)));

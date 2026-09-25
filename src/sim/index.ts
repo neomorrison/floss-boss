@@ -97,6 +97,19 @@ export function setSalary(state: GameState, clinicIndex: number, staffId: string
 export function assignHygienist(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return staff.assignHygienist(state, clinicIndex, opId, staffId); }
 export function assignAssistant(state: GameState, clinicIndex: number, opId: string, staffId: string | null): ActionResult { return staff.assignAssistant(state, clinicIndex, opId, staffId); }
 export function setPlayerMode(state: GameState, clinicIndex: number, opId: string, mode: 'hands' | 'auto'): ActionResult { return staff.setPlayerMode(state, clinicIndex, opId, mode); }
+/** What Raise all (the Payroll Day skill, DESIGN 8.5) would do right now, without changing anything: every
+ * staff member below their ask at the location (or every location with 'all'), and the total daily cost.
+ * With Hard Bargain learned each raise pays only 60% of the gap (`perDay`); `fullPerDay` is always the
+ * uncapped cost, so the UI can show the saving. `ok` is false with a reason when Payroll Day is not learned
+ * or nobody there is paid below their ask. */
+export function raiseAllQuote(state: GameState, clinicIndex: number | 'all'): { ok: boolean; reason?: string; count: number; perDay: number; fullPerDay: number; staff: { clinicIndex: number; staffId: string; name: string; from: number; to: number }[] } { return staff.raiseAllQuote(state, clinicIndex); }
+/** Raise all (DESIGN 8.5, needs the Payroll Day skill): raises every staff member paid below their ask at
+ * the location (or 'all' of them) up to their ask. With Hard Bargain, pays only 60% of each gap and the
+ * staff member accepts it as a full raise (their ask drops to match, so no follow-up request from that
+ * gap). Same bookkeeping as a manual raise via setSalary: morale +5, raise request cleared, 10-day quiet
+ * period restarted. A recurring salary change, not a one-off charge: cash and the ledger are untouched
+ * here, salaries are paid at the day close as usual. */
+export function raiseAll(state: GameState, clinicIndex: number | 'all'): ActionResult { return staff.raiseAll(state, clinicIndex); }
 
 // ------------------------------------------------------------------ office
 export function buyOperatory(state: GameState, clinicIndex: number): ActionResult { return economy.buyOperatory(state, clinicIndex); }
