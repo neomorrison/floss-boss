@@ -28,7 +28,8 @@ export type SkillId =
   // business (v3)
   | 'paperworkPro' | 'bulkBuyer' | 'brandBuilder' | 'investorRelations' | 'franchiseSavvy'
   // management (v3)
-  | 'talentScout' | 'hrGuru' | 'huddlePro' | 'crisisManager' | 'delegator' | 'nightShift' | 'mentorProgram' | 'moraleOfficer';
+  | 'talentScout' | 'hrGuru' | 'huddlePro' | 'crisisManager' | 'delegator' | 'nightShift' | 'mentorProgram' | 'moraleOfficer'
+  | 'payrollDay' | 'hardBargain';
 
 export type StaffRole = 'hygienist' | 'receptionist' | 'assistant' | 'dentist' | 'manager';
 export type TraitId = 'perfectionist' | 'speedy' | 'charmer' | 'clumsy' | 'nightOwl' | 'loyal' | 'ambitious';

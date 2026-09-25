@@ -34,6 +34,8 @@ export const SKILLS: Skill[] = [
   { id: 'moraleOfficer', branch: 'management', name: 'Morale Officer', text: 'Staff morale never drops below 30.', requires: 'mentorProgram', minLevel: 10 },
   { id: 'delegator', branch: 'management', name: 'Delegator', text: 'Locations without a manager run at full demand.', requires: 'crisisManager', minLevel: 10 },
   { id: 'nightShift', branch: 'management', name: 'Night Shift', text: 'Every location stays open an hour later.', requires: 'delegator', minLevel: 12 },
+  { id: 'payrollDay', branch: 'management', name: 'Payroll Day', text: 'Unlocks Raise all: lift everyone to their asking salary in one tap.', requires: null, minLevel: 4 },
+  { id: 'hardBargain', branch: 'management', name: 'Hard Bargain', text: 'Raise all pays only 60% of each gap, and staff still take it as a full raise.', requires: 'payrollDay', minLevel: 7 },
 ];
 
 export const SKILL_BRANCH_NAMES: Record<SkillBranch, string> = { technique: 'Technique', bedside: 'Bedside', business: 'Business', management: 'Management' };
