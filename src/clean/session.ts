@@ -17,7 +17,8 @@ import {
   type CleanEvent, type CleanModel, type Debris, type FlossTarget,
 } from './dirt';
 import { flossHook, flossMove, flossRelease, flossTick, FLOSS, newFloss, type FlossEvent, type FlossState } from './floss';
-import { GEL_PURPLE, MouthScene, makeHit, type Hit, type Models } from './scene';
+import { depthAt, drawnDepth, screenAxis, splitStep, STRING, stringPath, tautness, type ScreenAxis } from './flossgeo';
+import { GEL_PURPLE, MouthScene, makeHit, type FlossGap, type Hit, type Models } from './scene';
 import { focusAngles, MouthCamera, type ViewId } from './camera';
 import { CleanHud } from './hud';
 import { allSlots, slotModel, type SlotId } from './slots';
@@ -28,6 +29,8 @@ export const cleanOptions = { procedural: false };
 const LOAD_TIMEOUT = 6000;
 const TOUCH_OFFSET = 40;
 const HOOK_RADIUS = 0.45;
+/** The shortest on-screen gap length the floss input is scaled by (px), so tiny far-away gaps stay usable. */
+const FLOSS_MIN_LEN = 56;
 
 export function neededModels(setup: CleanSetup | null): string[] {
   const keys: string[] = [...MOUTH_MODELS];
@@ -36,7 +39,11 @@ export function neededModels(setup: CleanSetup | null): string[] {
 }
 
 interface Ptr { id: number; x: number; y: number; type: string; button: number; off: number; x0: number; y0: number }
-interface FlossAim { target: FlossTarget; bracket: boolean; debId: number; gum: THREE.Vector3; tip: THREE.Vector3; axis: { x: number; y: number }; len: number; perp0: number; lastAlong: number }
+/**
+ * A hooked gap: its frame (arch space, rides the jaw), the on-screen axis re-projected on every move, the last
+ * pointer position and the accumulated sideways offset (gap lengths).
+ */
+interface FlossAim { target: FlossTarget; bracket: boolean; debId: number; gap: FlossGap; axis: ScreenAxis; px: number; py: number; cross: number }
 
 const TUTORIAL_STEPS = [
   'Select the scaler',
@@ -94,6 +101,8 @@ export class CleanController {
   private fl: FlossState = newFloss();
   private flAim: FlossAim | null = null;
   private flEvents: FlossEvent[] = [];
+  private stringPts: THREE.Vector3[] = Array.from({ length: 49 }, () => new THREE.Vector3());
+  private slackPts: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   private markerPts: THREE.Vector3[] = [];
   private markerVis: boolean[] = [];
   private markerClock = 0;
@@ -221,6 +230,8 @@ export class CleanController {
       slots: this.slots, slotModels,
     });
     this.scene.onGrillLand = (where) => this.grillLanded(where);
+    // sample every floss gap now (a few dozen rays each) so picking up the floss never hitches
+    if (this.slots.includes('floss')) for (const d of this.model.debris) this.scene.flossGap(d.a, d.b);
     this.scene.shared.uDisclose.value = this.disclose ? 1 : 0;
     this.scene.shared.uPlaqueBoost.value = this.setup.tools.extras.includes('headlamp') ? 1 : 0;
     if (this.setup.tools.extras.includes('loupes')) this.cam.minDist = 3.8;
@@ -1105,12 +1116,17 @@ export class CleanController {
     return this.model.debris.filter((d) => !d.popped);
   }
 
-  /** The marker point of a floss target (world): the outward edge of the gap at the contact, or the bracket. */
+  /** The marker point of a floss target (world): in front of the gap at the food's height, or at the bracket. */
   private targetPoint(d: Debris, out: THREE.Vector3): THREE.Vector3 {
     const sc = this.scene!;
-    sc.gapPoints(d.a, d.b, this.v5, this.v6);
-    const s = d.bracket ? 0.55 : 1 - d.v;
-    return out.lerpVectors(this.v6, this.v5, THREE.MathUtils.clamp(s, 0.2, 0.8));
+    const g = sc.flossGap(d.a, d.b);
+    if (!g) { sc.gapPoints(d.a, d.b, this.v5, out); return out; }
+    const p = g.prof;
+    const hTooth = ((sc.teeth[d.a]?.h ?? 1) + (sc.teeth[d.b]?.h ?? 1)) / 2;
+    const h = THREE.MathUtils.clamp((d.bracket ? 0.33 : d.v) * hTooth, p.hGum + 0.04, p.hEdge - 0.04);
+    const n = depthAt(p, g.env, 0) + STRING.margin + (d.bracket ? 0.1 : 0.02);
+    g.arch.updateWorldMatrix(true, false);
+    return sc.gapWorld(g, 0, h, n, out);
   }
 
   private nearestTarget(hit: Hit, x: number, y: number): { target: FlossTarget; deb: Debris } | null {
@@ -1133,19 +1149,11 @@ export class CleanController {
       this.hint('gap', this.flossTargets().length ? 'Press a glowing gap' : 'No food left to floss', hit.point);
       return;
     }
-    const sc = this.scene!;
     const d = found.deb;
-    const gum = new THREE.Vector3(), tip = new THREE.Vector3();
-    sc.gapPoints(d.a, d.b, gum, tip);
-    const gs = this.project(gum, { x: 0, y: 0 }), ts = this.project(tip, { x: 0, y: 0 });
-    let ax = gs.x - ts.x, ay = gs.y - ts.y;
-    const len = Math.max(40, Math.hypot(ax, ay));
-    const l = Math.hypot(ax, ay) || 1;
-    ax /= l; ay /= l;
-    const aim: FlossAim = {
-      target: found.target, bracket: d.bracket, debId: d.id, gum, tip, axis: { x: ax, y: ay }, len,
-      perp0: -ay * x + ax * y, lastAlong: ax * x + ay * y,
-    };
+    const gap = this.scene!.flossGap(d.a, d.b);
+    if (!gap) return;
+    const aim: FlossAim = { target: found.target, bracket: d.bracket, debId: d.id, gap, axis: { x: 0, y: 1, len: FLOSS_MIN_LEN }, px: x, py: y, cross: 0 };
+    aim.axis = this.flossAxis(aim);
     this.flAim = aim;
     flossHook(this.fl, !!this.setup.special?.braces, d.bracket);
     if (this.fl.phase === 'thread') this.sfx('floss_creak', 0.25, 1.4);
@@ -1153,16 +1161,31 @@ export class CleanController {
     this.vibe(6);
   }
 
-  /** Pointer motion while hooked: split into the gap axis and the cross axis. */
+  /**
+   * The hooked gap's axis on screen right now: from the biting edge toward the visible gumline at the gap, as
+   * the current camera (focus glide, sway, jolt) sees the arch in its current pose (jaw, fidget).
+   */
+  private flossAxis(a: FlossAim): ScreenAxis {
+    const sc = this.scene!;
+    const g = a.gap, p = g.prof;
+    g.arch.updateWorldMatrix(true, false);
+    this.cam.camera.updateMatrixWorld();
+    const n = depthAt(p, g.env, 0) + STRING.margin;
+    const e = { x: 0, y: 0 }, u = { x: 0, y: 0 };
+    this.project(sc.gapWorld(g, 0, p.hEdge, n, this.v1), e);
+    this.project(sc.gapWorld(g, 0, p.hGum, n, this.v1), u);
+    return screenAxis(e, u, FLOSS_MIN_LEN, a.axis);
+  }
+
+  /** Pointer motion while hooked: each step split along the gap's current axis and across it. */
   private flossPointer(x: number, y: number) {
     const a = this.flAim!;
-    const along = a.axis.x * x + a.axis.y * y;
-    const perp = -a.axis.y * x + a.axis.x * y;
-    const dAlong = (along - a.lastAlong) / a.len;
-    a.lastAlong = along;
-    const cross = (perp - a.perp0) / a.len;
+    a.axis = this.flossAxis(a);
+    const step = splitStep(a.axis, x - a.px, y - a.py);
+    a.px = x; a.py = y;
+    a.cross = THREE.MathUtils.clamp(a.cross + step.cross, -1.4, 1.4);
     this.flEvents.length = 0;
-    flossMove(this.fl, dAlong, cross, this.flEvents);
+    flossMove(this.fl, step.along, a.cross, this.flEvents);
     this.flossEvents();
   }
 
@@ -1237,24 +1260,14 @@ export class CleanController {
     if (water) { sc.setFloss(null); return; }
     if (a && this.fl.phase !== 'idle') {
       const d = this.model.debris.find((x) => x.id === a.debId);
-      const gum = a.gum, tip = a.tip;
-      const s = THREE.MathUtils.clamp(this.fl.s, -0.3, 1);
-      const handS = s + this.fl.pressure * 0.35 - this.fl.pull * 0.3;
-      const mid = this.v1.lerpVectors(tip, gum, THREE.MathUtils.clamp(s, 0, 1));
-      if (s < 0) mid.addScaledVector(this.v2.subVectors(tip, gum), -s);
-      // outward normal and arch tangent at the gap
-      const pa = this.model.placements[a.target.a], pb = this.model.placements[a.target.b];
-      const n = this.v3.set((pa.nx + pb.nx) / 2, 0, (pa.nz + pb.nz) / 2).normalize();
-      const tan = this.v4.set(n.z, 0, -n.x);
-      const hand = this.v5.lerpVectors(tip, gum, THREE.MathUtils.clamp(handS, -0.3, 1.3)).addScaledVector(n, 0.55);
-      hand.addScaledVector(tan, this.fl.bend * 0.8);
-      const l = new THREE.Vector3().copy(hand).addScaledVector(tan, -0.7);
-      const r = new THREE.Vector3().copy(hand).addScaledVector(tan, 0.7);
-      mid.addScaledVector(n, a.bracket ? 0.05 : 0.02);
-      const tension = Math.max(this.fl.pressure, this.fl.pull, Math.abs(this.fl.bend), this.fl.phase === 'through' ? 0.35 : 0);
-      sc.setFloss(l, mid, r, this.cam.camera, tension);
+      const g = a.gap;
+      g.arch.updateWorldMatrix(true, false);
+      const taut = tautness(this.fl);
+      const path = stringPath(g.prof, g.env, drawnDepth(this.fl), this.fl.bend, taut, this.stringPts.length);
+      for (let i = 0; i < path.pts.length; i++) { const q = path.pts[i]; sc.gapWorld(g, q.t, q.h, q.n, this.stringPts[i]); }
+      sc.setFloss(this.stringPts, this.cam.camera, taut);
       if (this.fl.phase === 'thread') {
-        this.project(d ? this.targetPoint(d, this.v6) : mid, this.s2);
+        this.project(d ? this.targetPoint(d, this.v2) : this.stringPts[this.stringPts.length >> 1], this.s2);
         this.hud.setThread(this.s2.x, this.s2.y, this.fl.thread);
       } else this.hud.setThread(0, 0, -1);
       return;
@@ -1263,11 +1276,13 @@ export class CleanController {
     // not hooked: slack string between the hands around the pointer
     const has = (this.mode === 'tool' || (this.hoverIn && this.mode === 'none')) && this.hit.kind !== 'none' && this.hit.kind !== 'face';
     if (!has) { sc.setFloss(null); return; }
-    const c = this.v1.copy(this.hit.point).addScaledVector(this.hit.normal, 0.35);
+    const [l, c, r] = this.slackPts;
+    c.copy(this.hit.point).addScaledVector(this.hit.normal, 0.35);
     const camRight = this.v2.set(1, 0, 0).applyQuaternion(this.cam.camera.quaternion);
-    const l = new THREE.Vector3().copy(c).addScaledVector(camRight, -0.8).addScaledVector(this.hit.normal, 0.3);
-    const r = new THREE.Vector3().copy(c).addScaledVector(camRight, 0.8).addScaledVector(this.hit.normal, 0.3);
-    sc.setFloss(l, c, r, this.cam.camera, 0);
+    l.copy(c).addScaledVector(camRight, -0.8).addScaledVector(this.hit.normal, 0.3);
+    r.copy(c).addScaledVector(camRight, 0.8).addScaledVector(this.hit.normal, 0.3);
+    c.y -= 0.06;
+    sc.setFloss(this.slackPts, this.cam.camera, 0);
   }
 
   private dust(hit: Hit, color: string, n: number) {
@@ -2006,6 +2021,23 @@ export class CleanController {
       /** QA: the orbit camera (goals, snap) for camera experiments. */
       get cam() { return self.cam; },
       memory() { const r = self.renderer; return r ? { ...r.info.memory, programs: r.info.programs?.length ?? 0 } : null; },
+      /**
+       * QA: the hooked string on screen (canvas px) and where its gap is: the string's points, the gap's biting-edge
+       * and gumline points, the current input axis. null when nothing is hooked.
+       */
+      flossString() {
+        const sc = self.scene, a = self.flAim;
+        if (!sc || !a || self.fl.phase === 'idle') return null;
+        const s = { x: 0, y: 0 };
+        const P = (w: THREE.Vector3) => { self.project(w, s); return { x: +s.x.toFixed(1), y: +s.y.toFixed(1) }; };
+        const g = a.gap, n = depthAt(g.prof, g.env, 0) + STRING.margin;
+        return {
+          pts: self.stringPts.map(P),
+          edge: P(sc.gapWorld(g, 0, g.prof.hEdge, n, new THREE.Vector3())),
+          gum: P(sc.gapWorld(g, 0, g.prof.hGum, n, new THREE.Vector3())),
+          axis: { ...a.axis }, cross: +a.cross.toFixed(3),
+        };
+      },
       /** Screen positions (CSS px in the clean container) of work targets. */
       targets() {
         const sc = self.scene;
@@ -2018,7 +2050,11 @@ export class CleanController {
         const dep = m.tartar.filter((d) => !d.popped && !d.hidden).map((d) => { const w = sc.depositCenter(d.id, new THREE.Vector3()); return w ? { id: d.id, tooth: d.tooth, kind: d.kind, ...P(w) } : null; }).filter(Boolean);
         const deb = m.debris.filter((d) => !d.popped).map((d) => {
           const g = new THREE.Vector3(), t = new THREE.Vector3();
-          sc.gapPoints(d.a, d.b, g, t);
+          const fg = sc.flossGap(d.a, d.b);
+          if (fg) {
+            const n = depthAt(fg.prof, fg.env, 0) + STRING.margin;
+            sc.gapWorld(fg, 0, fg.prof.hGum, n, g); sc.gapWorld(fg, 0, fg.prof.hEdge, n, t);
+          } else sc.gapPoints(d.a, d.b, g, t);
           const mk = self.targetPoint(d, new THREE.Vector3());
           return { id: d.id, a: d.a, b: d.b, kind: d.kind, bracket: d.bracket, ...P(mk), tip: P(t), gum: P(g) };
         });

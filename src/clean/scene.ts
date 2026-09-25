@@ -21,9 +21,23 @@ import {
   makeWaterMaterial, skinMaterial, throatMaterial, tongueMaterial, uploadDirt, type SharedToothUniforms, type ToothMat, type WaterMat,
 } from './materials';
 import { Fx } from './fx';
+import { envelope, type GapProfile } from './flossgeo';
 import type { SlotId } from './slots';
 
 export type Models = Record<string, THREE.Object3D | null>;
+
+/**
+ * A floss gap in its arch's own space (so it rides the jaw and the fidget sway): origin at the gap on the
+ * gumline-centre level, T along the arch (tooth a at t < 0), Y up the crown, N out of the mouth; the sampled
+ * profile (flossgeo.ts). World points are recomputed from the arch's current matrix every time.
+ */
+export interface FlossGap {
+  a: number; b: number;
+  arch: THREE.Group;
+  o: THREE.Vector3; T: THREE.Vector3; Y: THREE.Vector3; N: THREE.Vector3;
+  prof: GapProfile;
+  env: number[];
+}
 
 export type HitKind = 'tooth' | 'gum' | 'tongue' | 'water' | 'soft' | 'face' | 'bracket' | 'pocket' | 'grill' | 'none';
 export interface Hit {
@@ -179,6 +193,8 @@ export class MouthScene {
   private stringGeo: THREE.BufferGeometry;
   private stringMat: THREE.MeshStandardMaterial;
   private hands: THREE.Mesh[] = [];
+  private stringCurve = new THREE.CatmullRomCurve3([], false, 'centripetal');
+  private gapCache = new Map<string, FlossGap>();
   private lampLight: THREE.PointLight | null = null;
   private lampCone: THREE.Mesh | null = null;
   private lampOn = 0;
@@ -656,7 +672,7 @@ export class MouthScene {
       this.root.add(sp);
       this.markers.push(sp);
     }
-    const SEG = 28;
+    const SEG = 48;
     this.stringGeo = own(new THREE.BufferGeometry());
     this.stringGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SEG + 1) * 2 * 3), 3).setUsage(THREE.DynamicDrawUsage));
     const sidx: number[] = [];
@@ -1753,47 +1769,59 @@ export class MouthScene {
   }
 
   /**
-   * Floss string as a bowed ribbon from hand L through the gap point to hand R (world points).
-   * `bow` pulls the middle toward `pull` (the string pressing against a tooth). null hides it.
+   * Floss string as a ribbon through world points (one continuous curve, fingertips at the two ends).
+   * null hides it. The ribbon is nudged a hair toward the camera so it never z-fights the tooth it lies on.
    */
-  setFloss(l: THREE.Vector3 | null, mid?: THREE.Vector3, r?: THREE.Vector3, camera?: THREE.Camera, tension = 0, showHands = true) {
-    if (!l || !mid || !r || !camera) {
+  setFloss(points: THREE.Vector3[] | null, camera?: THREE.Camera, tension = 0, showHands = true) {
+    if (!points || points.length < 2 || !camera) {
       this.string.visible = false;
       for (const h of this.hands) h.visible = false;
       return;
     }
     const pos = this.stringGeo.getAttribute('position') as THREE.BufferAttribute;
     const SEG = pos.count / 2 - 1;
-    const width = 0.035 + 0.01 * (1 - tension);
+    const width = 0.032 + 0.012 * (1 - tension);
     const camPos = camera.getWorldPosition(this.tmpV3);
-    const pt = new THREE.Vector3(), tan = new THREE.Vector3(), side = new THREE.Vector3(), toCam = new THREE.Vector3();
-    // two quadratic halves meeting at the gap point: a tight V under tension, a soft U when slack
-    const sag = (1 - tension) * 0.25;
+    const curve = this.stringCurve;
+    curve.points = points;
+    const pt = new THREE.Vector3(), nx = new THREE.Vector3(), tan = new THREE.Vector3(), side = new THREE.Vector3(), toCam = new THREE.Vector3();
     for (let i = 0; i <= SEG; i++) {
-      const t = i / SEG;
-      const half = t < 0.5;
-      const a = half ? l : mid, b = half ? mid : r;
-      const k = half ? t * 2 : (t - 0.5) * 2;
-      const c = this.tmpV.lerpVectors(a, b, 0.5);
-      c.y -= sag * (1 - Math.abs(k - 0.5) * 2) * 0.3;
-      // quadratic Bezier a -> c -> b, flattened near the gap
-      const u = 1 - k;
-      pt.set(0, 0, 0).addScaledVector(a, u * u).addScaledVector(c, 2 * u * k).addScaledVector(b, k * k);
+      curve.getPoint(i / SEG, pt);
+      if (i < SEG) { curve.getPoint((i + 1) / SEG, nx); tan.subVectors(nx, pt); } else { curve.getPoint((SEG - 1) / SEG, nx); tan.subVectors(pt, nx); }
+      if (tan.lengthSq() < 1e-12) tan.set(1, 0, 0);
+      tan.normalize();
+      toCam.copy(camPos).sub(pt);
+      const dist = toCam.length();
+      toCam.multiplyScalar(1 / Math.max(1e-6, dist));
+      pt.addScaledVector(toCam, Math.min(0.03, dist * 0.2));
+      side.crossVectors(tan, toCam);
+      if (side.lengthSq() < 1e-12) side.set(0, 1, 0);
+      side.normalize().multiplyScalar(width / 2);
+      nx.copy(pt).add(side);
       this.toolRoot.worldToLocal(pt);
-      tan.copy(i < SEG ? b : a).sub(i < SEG ? a : b).normalize();
-      toCam.copy(camPos).sub(pt).normalize();
-      side.crossVectors(tan, toCam).normalize().multiplyScalar(width / 2);
-      pos.setXYZ(i * 2, pt.x + side.x, pt.y + side.y, pt.z + side.z);
-      pos.setXYZ(i * 2 + 1, pt.x - side.x, pt.y - side.y, pt.z - side.z);
+      this.toolRoot.worldToLocal(nx).sub(pt);
+      pos.setXYZ(i * 2, pt.x + nx.x, pt.y + nx.y, pt.z + nx.z);
+      pos.setXYZ(i * 2 + 1, pt.x - nx.x, pt.y - nx.y, pt.z - nx.z);
     }
     pos.needsUpdate = true;
     this.stringGeo.computeVertexNormals();
     this.string.visible = true;
     this.stringMat.emissiveIntensity = 0.35 + 0.5 * tension;
+    // fingertips: at the ends, pointing away along the string and a little toward the camera
+    const last = points.length - 1;
+    this.toolRoot.getWorldQuaternion(this.tmpQ).invert();
     for (let i = 0; i < 2; i++) {
       const h = this.hands[i];
       h.visible = showHands;
-      this.toolRoot.worldToLocal(h.position.copy(i === 0 ? l : r));
+      if (!showHands) continue;
+      const end = i === 0 ? points[0] : points[last];
+      const inner = i === 0 ? points[1] : points[last - 1];
+      tan.subVectors(end, inner).normalize();
+      toCam.copy(camPos).sub(end).normalize();
+      tan.addScaledVector(toCam, 0.8).normalize();
+      this.toolRoot.worldToLocal(h.position.copy(end).addScaledVector(tan, 0.1));
+      tan.applyQuaternion(this.tmpQ);
+      h.quaternion.setFromUnitVectors(this.tmpV.set(0, 0, 1), tan);
     }
   }
 
@@ -1849,6 +1877,106 @@ export class MouthScene {
     tip.y += pa.dir * h * 0.95;
     gum.y -= pa.dir * 0.1;
     return true;
+  }
+
+  /**
+   * The floss frame and sampled profile of the gap between teeth a and b (a === b: the bracket on a), built
+   * once per gap with rays in arch space: the outward depth of the teeth along the arch, the biting edge at the
+   * gap and the visible gumline (papilla) there. null when a tooth is missing.
+   */
+  flossGap(a: number, b: number): FlossGap | null {
+    const key = `${a}:${b}`;
+    const cached = this.gapCache.get(key);
+    if (cached) return cached;
+    const ta = this.teeth[a], tb = this.teeth[b];
+    if (!ta || !tb) return null;
+    const arch = ta.p.arch === 'upper' ? this.upper : this.lower;
+    const bracket = a === b;
+    const pa = new THREE.Vector3(ta.p.x, ta.p.y, ta.p.z), pb = new THREE.Vector3(tb.p.x, tb.p.y, tb.p.z);
+    const N = new THREE.Vector3(ta.p.nx + tb.p.nx, 0, ta.p.nz + tb.p.nz).normalize();
+    let T: THREE.Vector3, o: THREE.Vector3, tA: number, tB: number, wA: number, wB: number;
+    if (bracket) {
+      T = new THREE.Vector3(N.z, 0, -N.x);
+      o = pa.clone();
+      tA = -ta.p.width * 0.42; tB = ta.p.width * 0.42; wA = wB = 0.16;
+    } else {
+      const d = pb.clone().sub(pa); d.y = 0;
+      const dist = d.length();
+      T = d.normalize();
+      const ka = dist * ta.p.width / (ta.p.width + tb.p.width);
+      o = pa.clone().addScaledVector(T, ka);
+      o.y = (pa.y + pb.y) / 2;
+      tA = -ka; tB = dist - ka; wA = ta.p.width; wB = tb.p.width;
+    }
+    N.addScaledVector(T, -N.dot(T)).normalize();
+    const Y = new THREE.Vector3(0, ta.p.dir, 0);
+    // rays from in front of the gap (arch space -> world), against the teeth of this arch near the gap
+    arch.updateMatrixWorld(true);
+    const mw = arch.matrixWorld;
+    const inv = new THREE.Matrix4().copy(mw).invert();
+    const near: THREE.Object3D[] = [];
+    const span: { mesh: THREE.Object3D; t0: number; t1: number }[] = [];
+    for (const tv of this.teeth) {
+      if (!tv || tv.p.arch !== ta.p.arch) continue;
+      if (Math.hypot(tv.p.x - o.x, tv.p.z - o.z) >= 2.2) continue;
+      near.push(tv.mesh);
+      const tc = (tv.p.x - o.x) * T.x + (tv.p.z - o.z) * T.z;
+      span.push({ mesh: tv.mesh, t0: tc - tv.p.width * 0.6 - 0.05, t1: tc + tv.p.width * 0.6 + 0.05 });
+    }
+    const from = new THREE.Vector3(), dir = new THREE.Vector3(), loc = new THREE.Vector3();
+    const cast = (t: number, h: number, objs: THREE.Object3D[]): THREE.Intersection | null => {
+      from.copy(o).addScaledVector(T, t).addScaledVector(Y, h).addScaledVector(N, 3).applyMatrix4(mw);
+      dir.copy(N).negate().transformDirection(mw);
+      this.raycaster.set(from, dir);
+      this.raycaster.far = 6;
+      this.hits.length = 0;
+      this.raycaster.intersectObjects(objs, false, this.hits);
+      this.raycaster.far = 100;
+      let best: THREE.Intersection | null = null;
+      for (const x of this.hits) if (!best || x.distance < best.distance) best = x;
+      return best;
+    };
+    const nOf = (x: THREE.Intersection) => loc.copy(x.point).applyMatrix4(inv).sub(o).dot(N);
+    // biting edge at the gap: the highest point where rays just beside the gap still hit each tooth (bisection)
+    const edgeAt = (t: number, mesh: THREE.Mesh, top: number) => {
+      let lo = top * 0.3, hi = top;
+      if (!cast(t, lo, [mesh])) return top * 0.9;
+      for (let i = 0; i < 7; i++) { const m = (lo + hi) / 2; if (cast(t, m, [mesh])) lo = m; else hi = m; }
+      return lo;
+    };
+    let hEdge = bracket ? edgeAt(0, ta.mesh, ta.h + 0.05)
+      : Math.min(edgeAt(tA * 0.35, ta.mesh, ta.h + 0.05), edgeAt(tB * 0.35, tb.mesh, tb.h + 0.05));
+    hEdge -= 0.02;
+    // visible gumline at the gap: climb from the gumline centre until the first thing in front is no longer gum
+    const soft = [...this.gums, ...near];
+    const gumSet = new Set<THREE.Object3D>(this.gums);
+    const gumFront = (h: number) => { const x = cast(0, h, soft); return !!x && gumSet.has(x.object) && nOf(x) >= 0; };
+    let lo = 0, hi = hEdge * 0.6;
+    if (!gumFront(lo)) hi = 0;
+    else if (gumFront(hi)) lo = hi;
+    else for (let i = 0; i < 7; i++) { const m = (lo + hi) / 2; if (gumFront(m)) lo = m; else hi = m; }
+    const hGum = Math.min(hEdge * 0.6, hi + 0.04);
+    // outward depth profile along the arch, over the heights the string uses
+    const ts: number[] = [], depth: number[] = [];
+    const t0 = tA - wA / 2 - 0.32, t1 = tB + wB / 2 + 0.32;
+    const hs = [0.05, 0.5, 0.95].map((k) => hGum + (hEdge - hGum) * k);
+    const under: THREE.Object3D[] = [];
+    for (let t = t0; t <= t1 + 1e-6; t += 0.05) {
+      let dmax = -Infinity;
+      under.length = 0;
+      for (const sp of span) if (t >= sp.t0 && t <= sp.t1) under.push(sp.mesh);
+      if (under.length) for (const h of hs) { const x = cast(t, h, under); if (x) dmax = Math.max(dmax, nOf(x)); }
+      ts.push(t); depth.push(dmax);
+    }
+    const prof: GapProfile = { ts, depth, tA, tB, wA, wB, hEdge, hGum, bracket };
+    const g: FlossGap = { a, b, arch, o, T, Y, N, prof, env: envelope(prof) };
+    this.gapCache.set(key, g);
+    return g;
+  }
+
+  /** A gap-frame point (t along the arch, h up the crown, n outward) in world space, from the arch's current pose. */
+  gapWorld(g: FlossGap, t: number, h: number, n: number, out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(g.o).addScaledVector(g.T, t).addScaledVector(g.Y, h).addScaledVector(g.N, n).applyMatrix4(g.arch.matrixWorld);
   }
 
   setJaw(v: number) { this.jaw = v; }

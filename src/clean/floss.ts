@@ -4,7 +4,7 @@
 //
 //   idle ──press near a gap──> above ──push to the contact, pressure 1──> through (thwip)
 //     ^                         │                                           │ saw: along-axis reversals = strokes
-//     └──── release / slip out ─┴──────── pull back past the contact (zip) ─┘
+//     └──── release / slip out ─┴─────── pull back out past the edge (zip) ─┘
 //   braces: press ──hold still 0.6 s (thread)──> above (gap) or through (bracket)
 //
 // Cross-axis motion never moves the string: it bows against the tooth and creaks.
@@ -16,7 +16,7 @@ export interface FlossState {
   bracket: boolean;         // the target is food under the wire at a bracket (no contact point)
   s: number;                // along the gap: 0 at the biting edge, CONTACT at the contact point, 1 at the gum
   pressure: number;         // 0..1 at the contact while pushing toward the gum
-  pull: number;             // 0..1 pulling back out past the contact from below
+  pull: number;             // 0..1 pulled back above the contact from below (1 = out past the biting edge)
   bend: number;             // -1..1 how hard the string is pressed sideways (cross-axis)
   thread: number;           // 0..1 threading progress (braces)
   dir: number;              // sign of the last along-axis movement
@@ -30,7 +30,9 @@ export const FLOSS = {
   contact: 0.3,             // contact point along the gap
   pressureGain: 4.2,        // pressure per unit of push past the contact
   pressureRelax: 3,         // pressure lost per unit pulled back
-  pullGain: 4,              // pull-out per unit pulled back above the contact
+  pullOver: 0.15,           // through: pulled back this far past the biting edge, the string zips out
+  pullGain: 1 / (0.3 + 0.15), // pull-out per unit pulled back above the contact (1 at the edge + pullOver)
+  rubPull: 0.5,             // pulled up against the contact this far still counts as saw travel
   strokeTravel: 0.12,       // minimum along-axis travel between reversals for a stroke
   entry: -0.35,             // pulled this far above the edge, the string slips out
   bendCreak: 0.3,           // |bend| where the string starts to creak
@@ -73,7 +75,7 @@ export function flossTick(st: FlossState, dt: number, still: boolean, out: Floss
   }
   // the string relaxes back when nothing pushes it
   if (st.phase === 'above' && st.pressure > 0) st.pressure = Math.max(0, st.pressure - dt * 0.6);
-  if (st.phase === 'through' && st.pull > 0) st.pull = Math.max(0, st.pull - dt * 0.8);
+  if (st.phase === 'through' && st.pull > 0) st.pull = Math.max(0, st.pull - dt * 0.25);
 }
 
 /**
@@ -121,16 +123,21 @@ export function flossMove(st: FlossState, along: number, cross: number, out: Flo
     return;
   }
   // through: below the contact (or under the wire at a bracket). Saw up and down; pull back out to zip.
+  // Pulling up against the contact still rubs the food until the string is halfway out (FLOSS.rubPull), so a
+  // saw stroke that overshoots the contact a little still counts.
   const top = st.bracket ? 0.3 : FLOSS.contact;
+  const rub = (a: number, b: number) => Math.abs(Math.min(a, FLOSS.rubPull) - Math.min(b, FLOSS.rubPull)) / FLOSS.pullGain;
   let moved = 0;
   if (along > 0) {
     if (st.pull > 0) {
       const use = Math.min(along, st.pull / FLOSS.pullGain);
+      const before = st.pull;
       st.pull = Math.max(0, st.pull - use * FLOSS.pullGain);
+      moved += rub(before, st.pull);
       along -= use;
     }
     const ns = Math.min(1, st.s + along);
-    moved = ns - st.s;
+    moved += ns - st.s;
     st.s = ns;
   } else if (along < 0) {
     const ns = Math.max(top, st.s + along);
@@ -138,7 +145,9 @@ export function flossMove(st: FlossState, along: number, cross: number, out: Flo
     const excess = -along + moved;          // what pushed past the contact
     st.s = ns;
     if (excess > 1e-6 && st.s <= top + 1e-6) {
+      const before = st.pull;
       st.pull = Math.min(1, st.pull + excess * FLOSS.pullGain);
+      moved -= rub(before, st.pull);
       if (st.pull >= 1) {
         flossRelease(st);
         out.push('zip');
