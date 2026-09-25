@@ -29,7 +29,7 @@ export const CASES: Record<CaseType, CaseDef> = {
   },
   whitening: {
     id: 'whitening', name: 'Whitening', blurb: 'Coffee, wine, regret. Time to brighten up.',
-    tip: 'Polish the stains, paint gel on the front teeth, then cure each tooth under the lamp. Keep the lamp moving.',
+    tip: 'Polish the stains, then paint gel on the front teeth only: they glow purple. Sweep the lamp across them and keep it moving.',
     minLevel: 2, payMult: 1.35,
     weight: { coffee: 6, smoker: 4, influencer: 8, regular: 1 },
     requires: 'whiteningLamp',

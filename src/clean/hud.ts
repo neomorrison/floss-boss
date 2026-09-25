@@ -263,7 +263,7 @@ export class CleanHud {
     const tools = el('div', 'fbc-card fbc-tools');
     tools.style.setProperty('--n', String(this.o.slots.length));
     this.o.slots.forEach((slot, k) => {
-      const b = el('button', 'fbc-slot' + (isCaseSlot(slot) ? ' case' : ''));
+      const b = el('button', 'fbc-slot' + (isCaseSlot(slot) ? ' case' : '') + (slot === 'gel' && this.setup.caseType === 'whitening' ? ' gel-purple' : ''));
       let dots = '', title: string;
       if (isCaseSlot(slot)) title = CASE_TOOL_NAMES[slot];
       else {
@@ -424,6 +424,23 @@ export class CleanHud {
     this.last.shade = q;
     this.shadeNow.style.left = `${((mean - 0.5) / 16) * 100}%`;
     (this.shadeEl.querySelector('.n') as HTMLElement).textContent = `Shade ${Math.round(mean)}, goal ${Math.max(1, this.setup.special?.targetShade || 1)}`;
+  }
+
+  /** A shade step: the meter's marker and label bump (restarts on every step). */
+  shadeStep() {
+    const e = this.shadeEl;
+    if (!e) return;
+    e.classList.remove('step');
+    void e.offsetWidth;
+    e.classList.add('step');
+  }
+
+  /** Target shade reached: the meter lights up. */
+  shadeGoal() { this.shadeEl?.classList.add('goal'); }
+
+  /** Whitening: purple marks on the mini-map for the front teeth that still need gel. */
+  setGelMap(need: Uint8Array) {
+    for (let i = 0; i < this.teeth.length; i++) this.teeth[i]?.classList.toggle('gel', !!need[i]);
   }
 
   setReassure(cdFrac: number) {

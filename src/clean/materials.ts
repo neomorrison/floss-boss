@@ -44,6 +44,8 @@ export interface ToothMat {
   gold: { value: number };        // 1 = gold crown (pirate)
   lamp: { value: number };        // 0..1 UV lamp glow on this tooth
   gelCol: { value: THREE.Color }; // whitening gel or sealant colour
+  gelA: { value: number };        // how strongly the gel colour covers the enamel (whitening: a deep purple coat)
+  need: { value: number };        // 0..1 whitening: pulsing purple outline on a front tooth that still needs gel
 }
 
 const GLSL_NOISE = /* glsl */`
@@ -85,10 +87,13 @@ export function makeToothMaterial(height: number, shared: SharedToothUniforms, t
   const gold = { value: 0 };
   const lamp = { value: 0 };
   const gelCol = { value: new THREE.Color('#8FE3FF') };
+  const gelA = { value: 0.5 };
+  const need = { value: 0 };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, shared, {
       uDirt: { value: texture }, uCase: { value: caseTex }, uH: { value: height }, uTipBlue: { value: tipBlue },
       uHighlight: highlight, uFlash: flash, uLast: last, uWet: wet, uShade: shade, uGold: gold, uLamp: lamp, uGelCol: gelCol,
+      uGelA: gelA, uNeed: need,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFbLocal;\nvarying vec3 vFbWorld;')
@@ -100,7 +105,7 @@ varying vec3 vFbLocal;
 varying vec3 vFbWorld;
 uniform sampler2D uDirt;
 uniform sampler2D uCase;
-uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uLast, uWet, uShade, uGold, uLamp;
+uniform float uH, uTime, uDisclose, uEagle, uPlaqueBoost, uTipBlue, uHighlight, uFlash, uLast, uWet, uShade, uGold, uLamp, uGelA, uNeed;
 uniform vec4 uBrush;
 uniform vec3 uPlaqueA, uPlaqueB, uStainA, uStainB, uDiscloseCol, uEagleCol, uGelCol;
 float fbPlaque = 0.0; float fbStain = 0.0; float fbPolish = 0.0; float fbEdge = 0.0; float fbPaste = 0.0; float fbGel = 0.0; float fbV = 0.0; float fbLeft = 0.0;
@@ -140,10 +145,11 @@ ${GLSL_NOISE}`)
   float grit = smoothstep(0.62, 0.9, fbNoise(vFbLocal * 80.0));
   pasteCol = mix(pasteCol, vec3(1.0, 0.86, 0.9), grit * 0.7);
   col = mix(col, pasteCol, pa * 0.92);
-  // whitening gel / sealant: a glossy coat
+  // whitening gel / sealant: a glossy coat (thicker and thinner patches let a little enamel through)
   vec4 cs = texture2D(uCase, vec2(fu, fv));
   float gl = smoothstep(0.15, 0.55, cs.r + (n2 - 0.5) * 0.2);
-  col = mix(col, uGelCol, gl * 0.5);
+  float gv = fbNoise(vFbLocal * 5.0 + 11.0);
+  col = mix(col, uGelCol * (0.9 + 0.2 * gv), gl * uGelA * (0.9 + 0.1 * gv));
   // last bits: any residue at all (even specks too faint to read as plaque) tints pink and pulses gently
   fbLeft = smoothstep(0.03, 0.2, max(d.r, d.g));
   if (uLast > 0.0) col = mix(col, uEagleCol, fbLeft * uLast * (0.46 + 0.3 * sin(uTime * 4.2)));
@@ -155,13 +161,22 @@ roughnessFactor = mix(roughnessFactor, 0.72, fbPlaque);
 roughnessFactor = mix(roughnessFactor, 0.5, fbStain * 0.6);
 roughnessFactor = mix(roughnessFactor, 0.06, max(fbPolish, uWet * 0.6));
 roughnessFactor = mix(roughnessFactor, 0.85, fbPaste);
-roughnessFactor = mix(roughnessFactor, 0.04, fbGel);
+roughnessFactor = mix(roughnessFactor, 0.1, fbGel);
 roughnessFactor = mix(roughnessFactor, mix(0.55, 0.12, fbPolish), uGold);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
 metalnessFactor = mix(metalnessFactor, 0.9, uGold);`)
-      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+      .replace('#include <lights_physical_fragment>', `{
+  // whitening: a front tooth that still needs gel gets a pulsing purple outline (its silhouette tints purple)
+  if (uNeed > 0.0) {
+    float rimN = 1.0 - abs(dot(normal, normalize(vViewPosition)));
+    float np = 0.72 + 0.28 * sin(uTime * 4.0);
+    float edgeN = smoothstep(0.08, 0.45, rimN);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.3, 0.1, 0.88), min(1.0, edgeN * 0.8 + 0.14) * uNeed * np * (1.0 - fbGel));
+  }
+}
+#include <lights_physical_fragment>
 #ifdef USE_CLEARCOAT
-material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain) * (1.0 - 0.8 * fbPaste);
+material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain) * (1.0 - 0.8 * fbPaste) * (1.0 - 0.45 * fbGel * uGelA);
 #endif`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 {
@@ -188,10 +203,19 @@ material.clearcoat *= (1.0 - 0.85 * fbPlaque) * (1.0 - 0.5 * fbStain) * (1.0 - 0
   float wave = smoothstep(0.18, 0.0, abs(fbV - (1.15 - uWet * 1.3))) * step(0.02, uWet);
   totalEmissiveRadiance += vec3(1.0, 1.0, 0.96) * wave * (0.25 + 0.6 * fbPolish);
   totalEmissiveRadiance += vec3(0.45, 0.35, 1.0) * uLamp * (0.25 + 0.5 * fbGel);
+  // the gel itself glows faintly, so the purple reads in the shadow of the lips
+  // (a violet glow of its own keeps the colour steady from dim side views to the bright spot of a close-up)
+  totalEmissiveRadiance += mix(uGelCol, vec3(0.26, 0.1, 0.92), step(0.7, uGelA)) * fbGel * uGelA * 0.2;
+  // a front tooth that still needs gel: a pulsing purple outline (rim light) and a faint tint
+  if (uNeed > 0.0) {
+    float rimN = 1.0 - abs(dot(normal, normalize(vViewPosition)));
+    float np = 0.6 + 0.4 * sin(uTime * 4.0);
+    totalEmissiveRadiance += vec3(0.32, 0.12, 0.88) * (smoothstep(0.1, 0.5, rimN) * 0.8 + 0.04) * uNeed * np * (1.0 - fbGel);
+  }
 }`);
   };
-  material.customProgramCacheKey = () => 'fbTooth3';
-  return { material, texture, data, caseTex, caseData, highlight, flash, last, wet, shade, gold, lamp, gelCol };
+  material.customProgramCacheKey = () => 'fbTooth4';
+  return { material, texture, data, caseTex, caseData, highlight, flash, last, wet, shade, gold, lamp, gelCol, gelA, need };
 }
 
 /** Write a tooth's layers into its texture bytes. */

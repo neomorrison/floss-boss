@@ -10,7 +10,7 @@ import type { ToothKind } from '../core/types';
 import { LOWER_GUM_Y, TEETH_PER_ARCH, TOOTH_DIMS, UPPER_GUM_Y, type ToothPlacement } from '../core/mouth';
 import { makeRng } from '../core/rng';
 import type { CleanModel, Debris, LooseBit, Pocket, SugarBug, TartarDeposit } from './dirt';
-import { MAX_BITS, sideU } from './dirt';
+import { lampTeeth, MAX_BITS, sideU } from './dirt';
 import {
   barnacleGeometry, bracketGeometry, cavityGeometry, debrisGeometry, flatRingGeometry, gumGeometry, lipsGeometry, normalizeToothGeometry,
   palateGeometry, pocketGeometry, skinGeometry, skirtGeometry, sugarBugModel, tartarGeometry, throatGeometry, toolModel, toothGeometry,
@@ -48,6 +48,7 @@ export interface ToothView {
   ring: THREE.Mesh | null; // problem-tooth glow ring
   ringFade: number;        // -1 alive; 0..1 snapping out
   sore: THREE.Mesh | null; // sensitive gums: faint red glow
+  gelShell: THREE.Mesh | null; // whitening: purple outline (inverted hull) while the tooth needs gel
 }
 
 interface DepositView {
@@ -67,6 +68,11 @@ const POCKET_RED = new THREE.Color('#FFFFFF');
 const POCKET_OPEN = new THREE.Color('#A8404F');
 const POCKET_PINK = new THREE.Color('#FFE0E6');
 const GLOVE = '#B9A8FF';
+/** Whitening gel: a glossy violet coat (also the gel brush tip, the wrap ring and the Gel slot icon). */
+export const GEL_PURPLE = '#8B5CF6';
+const GEL_GLOW = '#6D28D9';
+/** The coat colour in the tooth shader: deeper, so that under the lamp light and tone mapping it reads as GEL_PURPLE. */
+const GEL_COAT = '#3F1CA8';
 
 export interface SceneOptions { lowQuality: boolean; headlamp: boolean; procedural: boolean; slots: SlotId[]; slotModels: Record<string, string> }
 
@@ -293,7 +299,8 @@ export class MouthScene {
     };
     const ringGeo = own(flatRingGeometry(0.075));
     const sensitive = model.tw.sensitive;
-    const gelCol = model.caseType === 'whitening' ? '#8FE3FF' : '#F4FBFF';
+    const whitening = model.caseType === 'whitening';
+    const gelCol = whitening ? GEL_COAT : '#F4FBFF';
     for (const p of model.placements) {
       const td = model.teeth[p.index];
       if (!td.present) { this.teeth.push(null); continue; }
@@ -301,6 +308,7 @@ export class MouthScene {
       const tm = makeToothMaterial(dims.h, this.shared, p.kind === 'incisor' || p.kind === 'canine' ? 1 : 0.4);
       tm.gold.value = td.gold ? 1 : 0;
       tm.gelCol.value.set(gelCol);
+      tm.gelA.value = whitening ? 1 : 0.5;
       tm.shade.value = shadeTint(td.shade);
       const mesh = new THREE.Mesh(toothGeo(p.kind), tm.material);
       mesh.scale.x = p.width / dims.w;
@@ -335,7 +343,16 @@ export class MouthScene {
           sore = sp as unknown as THREE.Mesh;
         }
       }
-      this.teeth.push({ index: p.index, p, group, flip, mesh, tm, h: dims.h, ring, ringFade: -1, sore });
+      let gelShell: THREE.Mesh | null = null;
+      if (td.gelTarget) {
+        // an outline: a slightly larger back-faced copy of the crown shows as a purple rim around its silhouette
+        gelShell = new THREE.Mesh(mesh.geometry, own(new THREE.MeshBasicMaterial({ color: GEL_PURPLE, side: THREE.BackSide, transparent: true, opacity: 0, depthWrite: false })));
+        gelShell.scale.set(mesh.scale.x * 1.09, 1.045, 1.09);
+        gelShell.renderOrder = 3;
+        gelShell.visible = false;
+        flip.add(gelShell);
+      }
+      this.teeth.push({ index: p.index, p, group, flip, mesh, tm, h: dims.h, ring, ringFade: -1, sore, gelShell });
     }
     this.scene.updateMatrixWorld(true);
 
@@ -646,6 +663,23 @@ export class MouthScene {
       } else {
         parts = toolModel(key);
         parts.group.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { own(m.geometry); const mm = m.material; if (Array.isArray(mm)) mm.forEach((x) => own(x)); else own(mm); } });
+      }
+      // whitening: the gel brush carries purple gel
+      if (slot === 'gel' && this.model.caseType === 'whitening') {
+        parts.group.traverse((o) => {
+          const me = o as THREE.Mesh;
+          if (!me.isMesh) return;
+          const recolor = (mm: THREE.Material) => {
+            const gel = /gel/i.test(mm.name), bristle = /bristle/i.test(mm.name);
+            if (!gel && !bristle) return mm;
+            const c = own(mm.clone()) as THREE.MeshStandardMaterial;
+            c.color?.set(gel ? GEL_PURPLE : '#A78BFA');   // gel-soaked bristles
+            if (gel && c.emissive) { c.emissive.set(GEL_GLOW); c.emissiveIntensity = 0.35; }
+            if (gel) c.opacity = Math.max(c.opacity, 0.85);
+            return c;
+          };
+          me.material = Array.isArray(me.material) ? me.material.map(recolor) : recolor(me.material);
+        });
       }
       const holder = new THREE.Group();
       parts.group.scale.setScalar(0.72);
@@ -1084,6 +1118,13 @@ export class MouthScene {
       if (tv.tm.flash.value > 0) tv.tm.flash.value = Math.max(0, tv.tm.flash.value - dt * 1.6);
       if (tv.tm.wet.value > 0) tv.tm.wet.value = Math.max(0, tv.tm.wet.value - dt * 0.4);
       if (tv.tm.lamp.value > 0) tv.tm.lamp.value = Math.max(0, tv.tm.lamp.value - dt * 3);
+      const ng = this.needGoal[tv.index] ?? 0;
+      if (tv.tm.need.value !== ng) tv.tm.need.value = ng > tv.tm.need.value ? Math.min(ng, tv.tm.need.value + dt * 3) : Math.max(ng, tv.tm.need.value - dt * 5);
+      if (tv.gelShell) {
+        const nv = tv.tm.need.value;
+        tv.gelShell.visible = nv > 0.01;
+        (tv.gelShell.material as THREE.MeshBasicMaterial).opacity = nv * (0.62 + 0.3 * Math.sin(time * 4 + tv.index * 0.5));
+      }
       const lg = this.lastGoal[tv.index] ?? 0;
       if (tv.tm.last.value !== lg) tv.tm.last.value = lg > tv.tm.last.value ? Math.min(lg, tv.tm.last.value + dt * 2.5) : Math.max(lg, tv.tm.last.value - dt * 4);
     }
@@ -1267,8 +1308,8 @@ export class MouthScene {
     if (tv) tv.tm.wet.value = 1;
   }
 
-  /** Wrap-assist ring around `tooth` at height v, opacity by strength (0 hides it). */
-  setWrap(tooth: number, v: number, strength: number, color: string) {
+  /** Wrap-assist ring around `tooth` at height v, opacity by strength (0 hides it). `glow` false draws it as paint (the purple gel ring). */
+  setWrap(tooth: number, v: number, strength: number, color: string, glow = true) {
     const tv = tooth >= 0 ? this.teeth[tooth] : null;
     if (!tv || strength <= 0.01) { this.wrapRing.visible = false; return; }
     if (this.wrapRing.parent !== tv.flip) tv.flip.add(this.wrapRing);
@@ -1278,6 +1319,8 @@ export class MouthScene {
     const k = top ? 0.52 : 0.6;
     this.wrapRing.scale.set(tv.p.width * k, 1, tv.p.depth * (k + 0.04));
     this.wrapMat.color.set(color);
+    const blend = glow ? THREE.AdditiveBlending : THREE.NormalBlending;
+    if (this.wrapMat.blending !== blend) { this.wrapMat.blending = blend; this.wrapMat.needsUpdate = true; }
     this.wrapMat.opacity = 0.18 + 0.5 * strength;
   }
 
@@ -1340,8 +1383,8 @@ export class MouthScene {
     }
   }
 
-  /** UV lamp: glow at a world point on `tooth` and its neighbours. */
-  setLamp(point: THREE.Vector3, tooth: number, tip: THREE.Vector3) {
+  /** UV lamp: glow at a world point on `tooth` and the neighbours in the beam (lampTeeth). */
+  setLamp(point: THREE.Vector3, tooth: number, tip: THREE.Vector3, side = 0) {
     if (!this.lampLight || !this.lampCone) return;
     this.lampOn = 1;
     this.root.worldToLocal(this.lampLight.position.copy(point));
@@ -1351,14 +1394,22 @@ export class MouthScene {
     const to = this.toolRoot.worldToLocal(point.clone());
     const d = from.distanceTo(to);
     this.lampCone.position.copy(from);
-    this.lampCone.scale.set(0.9, Math.max(0.1, d), 0.9);
+    this.lampCone.scale.set(1.25, Math.max(0.1, d), 1.25);
     this.lampCone.quaternion.setFromUnitVectors(this.tmpV.set(0, -1, 0), this.tmpV2.copy(to).sub(from).normalize());
-    const arch = Math.floor(tooth / TEETH_PER_ARCH);
-    for (let n = tooth - 1; n <= tooth + 1; n++) {
-      if (n < 0 || n >= 28 || Math.floor(n / TEETH_PER_ARCH) !== arch) continue;
+    for (const n of lampTeeth(tooth, side)) {
       const tv = this.teeth[n];
-      if (tv) tv.tm.lamp.value = Math.max(tv.tm.lamp.value, n === tooth ? 1 : 0.6);
+      if (tv) tv.tm.lamp.value = Math.max(tv.tm.lamp.value, n === tooth ? 1 : 0.65);
     }
+  }
+
+  /** Whitening: how strongly a front tooth that still needs gel shows its purple outline (0 hides it). */
+  setGelNeed(i: number, v: number) { this.needGoal[i] = v; }
+  private needGoal: number[] = [];
+
+  /** A quick brightness pop on one tooth (shade step, gel coat, the Hollywood wave). */
+  pop(i: number, amount: number) {
+    const tv = this.teeth[i];
+    if (tv) tv.tm.flash.value = Math.max(tv.tm.flash.value, amount);
   }
 
   /** Gap line for floss: gumline point and biting-edge point on the outward side (world). */
@@ -1420,7 +1471,7 @@ export class MouthScene {
   /** Render the current state with `camera` and return a small JPEG (in the same task, since the buffer is not preserved). */
   snapshot(renderer: THREE.WebGLRenderer, camera: THREE.Camera, width = 480): string | null {
     const hide: THREE.Object3D[] = [this.toolRoot, this.fx.group, this.wrapRing, ...this.markers];
-    for (const tv of this.teeth) if (tv?.ring) hide.push(tv.ring);
+    for (const tv of this.teeth) { if (tv?.ring) hide.push(tv.ring); if (tv?.gelShell) hide.push(tv.gelShell); }
     const was = hide.map((o) => o.visible);
     try {
       for (const o of hide) o.visible = false;

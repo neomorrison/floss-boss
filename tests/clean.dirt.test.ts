@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyGel, applyLamp, applyPocket, applyPolisher, applyRinse, applyScaler, applySuction, applyWaterFloss, CELLS, cellCenterU, cellCenterV,
-  cheat, createModel, flossStroke, fractions, gelCoverage, meanShade, qualityFor, reassure, RATES, scoreClean, sideU, starsFor, tickModel,
+  cheat, createModel, flossStroke, fractions, gelAllowed, gelCoverage, lampTeeth, meanShade, updateObjectives, qualityFor, reassure, RATES, scoreClean, sideU, starsFor, tickModel,
   toothDone, visibleCell, REASSURE_COOLDOWN, REASSURE_AMOUNT, type CleanModel, type TickInput,
 } from '../src/clean/dirt';
 import { buildSetup } from '../src/clean/setup';
@@ -227,7 +227,7 @@ describe('tooth snap (DESIGN 5.2)', () => {
 });
 
 describe('cases', () => {
-  it('whitening: gel then lamp brightens a shade per 1.2 s, zings after 4 s nonstop, shadeGain reported', () => {
+  it('whitening: gel snaps to a full coat in under 0.5 s, the lamp brightens a shade per 0.3 s, zings after 1.5 s nonstop', () => {
     const m = createModel(buildSetup({ caseType: 'whitening', seed: 3 }));
     const sp = m.setup.special;
     expect(sp.startShade).toBeGreaterThanOrEqual(11);
@@ -235,20 +235,114 @@ describe('cases', () => {
     // no gel: nothing happens
     for (let k = 0; k < 60; k++) { applyLamp(m, i, 1 / 60); tickModel(m, idle(1 / 60)); }
     expect(m.teeth[i].shade).toBe(sp.startShade);
-    for (let k = 0; k < 60; k++) applyGel(m, i, 0.5, 0.45, 1 / 60, k / 60);
-    expect(gelCoverage(m, i)).toBeGreaterThan(0.6);
-    expect(m.events.some((e) => e.type === 'gelDone')).toBe(true);
-    let zing = 0;
-    for (let k = 0; k < 60 * 3.7; k++) { applyLamp(m, i, 1 / 60); tickModel(m, idle(1 / 60)); }
+    for (let f = 0; f < 30; f++) tickModel(m, idle(1 / 60));   // the lamp moves away: the nonstop clock runs down
+    expect(m.teeth[i].lampRun).toBe(0);
+    // brushing the crown: the tooth snaps to a full coat well inside half a second
+    let k = 0;
+    while (!m.teeth[i].gelled && k < 120) { applyGel(m, i, 0.5, 0.45, 1 / 60, k / 60); k++; }
+    expect(k / 60).toBeLessThanOrEqual(0.5);
+    expect(gelCoverage(m, i)).toBe(1);
+    expect(m.events.some((e) => e.type === 'gelDone' && e.tooth === i && !e.seal)).toBe(true);
+    // 0.3 s per shade: 3 shades in 0.95 s
+    for (let f = 0; f < Math.round(60 * 0.95); f++) { applyLamp(m, i, 1 / 60); tickModel(m, idle(1 / 60)); }
     expect(sp.startShade - m.teeth[i].shade).toBe(3);
-    for (let k = 0; k < 60; k++) { applyLamp(m, i, 1 / 60); tickModel(m, idle(1 / 60)); }
-    zing = m.events.filter((e) => e.type === 'zing' && e.tooth === i).length;
-    expect(zing).toBe(1);
+    expect(m.events.filter((e) => e.type === 'zing').length).toBe(0);
+    // over 1.5 s nonstop on one tooth zings once
+    for (let f = 0; f < 36; f++) { applyLamp(m, i, 1 / 60); tickModel(m, idle(1 / 60)); }
+    expect(m.events.filter((e) => e.type === 'zing' && e.tooth === i).length).toBe(1);
     cheat(m, 1);
     const r = scoreClean(m, 'done', 60);
     expect(meanShade(m)).toBe(sp.targetShade);
     expect(r.shadeGain).toBe(sp.startShade - sp.targetShade);
     expect(r.objectives.every((o) => o.done)).toBe(true);
+  });
+
+  it('whitening: gel goes on the front teeth only (arch positions 4 to 9), and the checklist counts them', () => {
+    const m = createModel(buildSetup({ caseType: 'whitening', seed: 5 }));
+    const front = m.teeth.filter((t) => t.gelTarget).map((t) => t.index);
+    const want = m.teeth.filter((t) => t.present && t.index % TEETH_PER_ARCH >= 4 && t.index % TEETH_PER_ARCH <= 9).map((t) => t.index);
+    expect(front).toEqual(want);
+    const g = m.objectives.find((o) => o.id === 'gel')!;
+    expect(g.label).toBe('Paint gel on the front teeth');
+    expect(g.count).toBe(want.length);
+    // a molar and a premolar take nothing
+    for (const j of [1, 3, 15, 24]) {
+      if (!m.teeth[j].present) continue;
+      expect(gelAllowed(m, j)).toBe(false);
+      let added = 0;
+      for (let f = 0; f < 60; f++) added += applyGel(m, j, 0.5, 0.45, 1 / 60, f / 60);
+      expect(added).toBe(0);
+      expect(m.teeth[j].gel.every((x) => x === 0)).toBe(true);
+    }
+    // gelling the front teeth ticks the count
+    for (const j of front) for (let f = 0; f < 30 && !m.teeth[j].gelled; f++) applyGel(m, j, 0.5, 0.45, 1 / 60, f / 60);
+    updateObjectives(m);
+    expect(g.have).toBe(want.length);
+    expect(g.done).toBe(true);
+    // missing front teeth are skipped
+    const setup = buildSetup({ caseType: 'whitening', seed: 5 });
+    setup.missingTeeth = [5, 20];
+    const m2 = createModel(setup);
+    expect(m2.teeth.filter((t) => t.gelTarget).length).toBe(10);
+    expect(m2.objectives.find((o) => o.id === 'gel')!.count).toBe(10);
+    // sealant (candy) still paints molars
+    const c = createModel(buildSetup({ caseType: 'candy', seed: 3, level: 3 }));
+    expect(gelAllowed(c, 1)).toBe(true);
+  });
+
+  it('whitening: the lamp beam covers 3 to 4 teeth of one arch, and a sweep cures 12 teeth in 8 to 12 s', () => {
+    expect(lampTeeth(6).sort((a, b) => a - b)).toEqual([5, 6, 7]);
+    expect(lampTeeth(6, 1).sort((a, b) => a - b)).toEqual([5, 6, 7, 8]);
+    expect(lampTeeth(6, -1).sort((a, b) => a - b)).toEqual([4, 5, 6, 7]);
+    expect(lampTeeth(14, -1)).toEqual([14, 15]);          // never crosses into the other arch
+    const m = createModel(buildSetup({ caseType: 'whitening', seed: 3 }));
+    const sp = m.setup.special;
+    for (const t of m.teeth) if (t.gelTarget) for (let f = 0; f < 30 && !t.gelled; f++) applyGel(m, t.index, 0.5, 0.45, 1 / 60, f / 60);
+    // neighbours cure at the same rate, and only the aimed tooth counts toward the zing
+    const n0 = m.teeth[7].shade;
+    for (let f = 0; f < 36; f++) { applyLamp(m, 6, 1 / 60, 1); tickModel(m, idle(1 / 60)); }
+    expect(n0 - m.teeth[8].shade).toBe(2);
+    expect(n0 - m.teeth[4].shade).toBe(0);
+    expect(m.teeth[8].lampRun).toBe(0);
+    // a steady sweep back and forth over each arch, about a quarter second per tooth
+    const cure = m.objectives.find((o) => o.id === 'cure')!;
+    let t = 0, zings = 0;
+    for (const arch of [0, TEETH_PER_ARCH]) {
+      const row = [4, 5, 6, 7, 8, 9].map((p) => arch + p);
+      for (let pass = 0; pass < 20; pass++) {
+        const done = row.every((j) => m.teeth[j].shade <= sp.targetShade);
+        if (done) break;
+        // the player sweeps across the teeth that still look yellow
+        const left = row.filter((j) => m.teeth[j].shade > sp.targetShade);
+        const path = pass % 2 ? left.slice().reverse() : left;
+        for (const j of path) {
+          for (let f = 0; f < 15; f++) { applyLamp(m, j, 1 / 60, pass % 2 ? -1 : 1); tickModel(m, idle(1 / 60)); t += 1 / 60; }
+        }
+      }
+    }
+    updateObjectives(m);
+    zings = m.events.filter((e) => e.type === 'zing').length;
+    expect(cure.done).toBe(true);
+    expect(zings).toBe(0);
+    expect(t).toBeGreaterThan(6);
+    expect(t).toBeLessThan(12);
+  });
+
+  it('whitening: a lagging front tooth catches up under the lamp, and rinsing the gel off gets the shine reveal', () => {
+    const m = createModel(buildSetup({ caseType: 'whitening', seed: 3 }));
+    for (const t of m.teeth) if (t.gelTarget) for (let f = 0; f < 30 && !t.gelled; f++) applyGel(m, t.index, 0.5, 0.45, 1 / 60, f / 60);
+    const s0 = m.teeth[6].shade;
+    m.teeth[5].shade = s0 - 6;                  // a tooth in the same row is already 6 shades brighter
+    const lag = m.teeth[7], even = m.teeth[21];
+    lag.shade = s0; even.shade = s0;
+    for (let f = 0; f < 60; f++) { applyLamp(m, 7, 1 / 60, 1); applyLamp(m, 21, 1 / 60, 1); tickModel(m, idle(1 / 60)); }
+    expect(s0 - lag.shade).toBeGreaterThan(s0 - even.shade);
+    // rinse: gel washes off and each washed tooth pushes the reveal
+    m.events.length = 0;
+    const c = m.teeth[6];
+    for (let f = 0; f < 60; f++) { applyRinse(m, 0, 0.9, 3.2, 1 / 60); applyRinse(m, 0, -0.9, 3.2, 1 / 60); }
+    expect(gelCoverage(m, c.index)).toBe(0);
+    expect(m.events.some((e) => e.type === 'pasteRinsed' && e.tooth === c.index)).toBe(true);
   });
 
   it('candy: bugs spread plaque every 6 s and squash under the polisher', () => {

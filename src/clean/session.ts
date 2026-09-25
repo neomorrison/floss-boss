@@ -11,12 +11,12 @@ import { MOUTH_MODELS, type Mood, type SfxKey } from '../data/assets';
 import { toolTier } from '../data/tools';
 import { audio, type LoopHandle } from '../audio';
 import {
-  applyGel, applyLamp, applyPocket, applyPolisher, applyRinse, applyScaler, applySuction, applyWaterFloss, bitsLeft, bonusState, cellCenterU,
+  applyGel, applyLamp, gelAllowed, lampTeeth, applyPocket, applyPolisher, applyRinse, applyScaler, applySuction, applyWaterFloss, bitsLeft, bonusState, cellCenterU,
   cellCenterV, cheat, cleanScore, createModel, flossStroke, gelCoverage, goldProgress, meanShade, messState, reassure, scoreClean, tickModel,
   lastBits, toothBlocked, toothDirtLeft, twistList, wrapRate, type CleanEvent, type CleanModel, type Debris, type FlossTarget,
 } from './dirt';
 import { flossHook, flossMove, flossRelease, flossTick, FLOSS, newFloss, type FlossEvent, type FlossState } from './floss';
-import { MouthScene, makeHit, type Hit, type Models } from './scene';
+import { GEL_PURPLE, MouthScene, makeHit, type Hit, type Models } from './scene';
 import { focusAngles, MouthCamera, type ViewId } from './camera';
 import { CleanHud } from './hud';
 import { allSlots, slotModel, type SlotId } from './slots';
@@ -116,6 +116,12 @@ export class CleanController {
   private hints = new Map<string, number>();
   private clinkT = 0;
   private gelSfxT = 0;
+  private gelTaught = false;       // whitening: the "front teeth" tip on first picking the gel brush
+  private gelRejected = false;     // whitening: the one-time "Front teeth only" hint
+  private shadeSfxT = -1;
+  private hollywoodDone = false;
+  private zings = 0;
+  private gelNeed = new Uint8Array(TOOTH_COUNT);
   private snoreT = 0;
   private joltAnim = 0;
   private lastBonus: string = '';
@@ -455,6 +461,11 @@ export class CleanController {
     this.slot = s;
     this.releaseTool();
     this.hud.setTool(s);
+    if (s === 'gel' && this.model.caseType === 'whitening' && !this.gelTaught && this.model.teeth.some((t) => t.gelTarget && !t.gelled)) {
+      this.gelTaught = true;
+      this.hud.tip('Gel goes on the front teeth: the ones glowing purple', 3800);
+    }
+    this.refreshGelNeed();
     if (this.scene) for (const k of this.slots) this.scene.tools[k].holder.visible = false;
   }
 
@@ -661,8 +672,53 @@ export class CleanController {
       if (b === 'met' && this.lastBonus !== 'met') { this.sfx('star', 0.8); this.hud.showCombo('Bonus'); }
       this.lastBonus = b;
     }
-    if (m.caseType === 'whitening') this.hud.setShade(meanShade(m));
+    if (m.caseType === 'whitening') { this.hud.setShade(meanShade(m)); this.refreshGelNeed(); }
     this.hud.setDozing(m.dozing);
+  }
+
+  /** Whitening: the front teeth that still need gel glow purple (brighter with the gel brush in hand) and are marked on the mini-map. */
+  private refreshGelNeed() {
+    const m = this.model;
+    if (m.caseType !== 'whitening') return;
+    const k = this.slot === 'gel' ? 1 : 0.45;
+    for (let i = 0; i < TOOTH_COUNT; i++) {
+      const t = m.teeth[i];
+      const need = t.present && t.gelTarget && !t.gelled ? 1 : 0;
+      this.gelNeed[i] = need;
+      this.scene?.setGelNeed(i, need * k);
+    }
+    this.hud.setGelMap(this.gelNeed);
+  }
+
+  /** Whitening goal reached: a "Hollywood white" sparkle wave sweeps across the front teeth. */
+  private hollywood() {
+    if (this.hollywoodDone || this.model.caseType !== 'whitening') return;
+    this.hollywoodDone = true;
+    this.hud.shadeGoal();
+    this.hud.showCombo('Hollywood white');
+    this.sfx('perfect', 0.8);
+    this.wowUntil = this.model.time + 2;
+    this.vibe(20);
+    // upper and lower front teeth together, left to right as the player sees them
+    const cols = new Map<number, number[]>();
+    for (const t of this.model.teeth) {
+      if (!t.gelTarget || !t.present) continue;
+      const pos = t.index % TEETH_PER_ARCH;
+      cols.set(pos, [...(cols.get(pos) ?? []), t.index]);
+    }
+    [...cols.keys()].sort((a, b) => a - b).forEach((pos, k) => {
+      window.setTimeout(() => {
+        const sc = this.scene;
+        if (this.disposed || !sc) return;
+        for (const i of cols.get(pos)!) {
+          sc.pop(i, 1);
+          sc.toothCenter(i, this.v1);
+          sc.fx.sparkle(this.rootLocal(this.v1, this.v3), 7, 0.4, 0.4, k % 2 ? '#FFF6D0' : '#FFFFFF', 1.2);
+        }
+        if (k % 2 === 0) this.sfx('sparkle', 0.45, 1 + k * 0.08);
+      }, 90 * k);
+    });
+    window.setTimeout(() => { if (!this.disposed) this.sfx('tooth_done', 0.7, 1.5); }, 90 * cols.size);
   }
 
   /**
@@ -831,11 +887,21 @@ export class CleanController {
       }
       case 'gel': {
         if (hit.kind === 'bracket') { this.clink(hit); break; }
+        if (onTooth && !gelAllowed(m, hit.tooth)) {
+          // whitening gel is for the front teeth only: nothing sticks here
+          if (!this.gelRejected) {
+            this.gelRejected = true;
+            this.hint('gelFront', 'Front teeth only', hit.point);
+            this.sfx('error', 0.3);
+          }
+          break;
+        }
         if (onTooth) {
           const added = applyGel(m, hit.tooth, hit.u, hit.v, dt, this.holdTime);
           out.working = true;
           out.molar = isMolar(hit.tooth);
-          sc.setWrap(hit.tooth, m.caseType === 'whitening' ? hit.v : 0.95, (wrapRate(this.holdTime) - 0.4) / 0.3, m.caseType === 'whitening' ? '#9FE8FF' : '#FFFFFF');
+          const whiteGel = m.caseType === 'whitening';
+          sc.setWrap(hit.tooth, whiteGel ? hit.v : 0.95, (wrapRate(this.holdTime) - 0.4) / 0.3, whiteGel ? GEL_PURPLE : '#FFFFFF', !whiteGel);
           this.gelSfxT -= dt;
           if (added > 0.02 && this.gelSfxT <= 0) { this.gelSfxT = 0.32; this.sfx('gel_paint', 0.45, 0.9 + Math.random() * 0.2); }
           if (added > 0.02 && Math.random() < dt * 10) sc.fx.drop(this.rootLocal(hit.point, this.v2), 0, 0.3, 0.3, 0.05, 0.3);
@@ -844,13 +910,16 @@ export class CleanController {
       }
       case 'lamp': {
         if (onTooth) {
-          applyLamp(m, hit.tooth, dt);
+          // the beam reaches one tooth further on the side of the tooth it is aimed at (tooth index grows with world x)
+          const side = hit.point.x >= sc.toothCenter(hit.tooth, this.v5).x ? 1 : -1;
+          const beam = applyLamp(m, hit.tooth, dt, side);
           out.working = true;
           out.molar = isMolar(hit.tooth);
-          sc.setLamp(hit.point, hit.tooth, this.toolNozzleWorld(this.v4));
+          sc.setLamp(hit.point, hit.tooth, this.toolNozzleWorld(this.v4), beam);
           this.loopVol.lamp_loop = 0.45;
           const t = m.teeth[hit.tooth];
           if (t.gelTarget && gelCoverage(m, hit.tooth) < 0.45) this.hint('gel', 'Paint gel first', hit.point);
+          else if (!lampTeeth(hit.tooth, beam).some((n) => m.teeth[n].gelTarget)) this.hint('lampFront', 'Front teeth only', hit.point);
         } else this.loopVol.lamp_loop = 0.15;
         break;
       }
@@ -1276,19 +1345,35 @@ export class CleanController {
       case 'bugSpread': break;
       case 'gelDone': {
         sc.toothCenter(e.tooth, this.v1);
-        sc.fx.sparkle(this.rootLocal(this.v1, this.v3), 6, 0.35, 0.3, e.seal ? '#FFFFFF' : '#A9ECFF', 1);
-        this.sfx(e.seal ? 'tooth_ding' : 'gel_paint', 0.6, 1.2);
-        if (e.seal) { this.project(this.v1, this.s1); this.hud.float(this.s1.x, this.s1.y - 20, 'Sealed', 'mint'); }
+        sc.fx.sparkle(this.rootLocal(this.v1, this.v3), e.seal ? 6 : 8, 0.35, 0.3, e.seal ? '#FFFFFF' : '#C4B5FD', 1);
+        if (e.seal) {
+          this.sfx('tooth_ding', 0.6, 1.2);
+          this.project(this.v1, this.s1); this.hud.float(this.s1.x, this.s1.y - 20, 'Sealed', 'mint');
+        } else {
+          // the coat snaps on: a small squish and a gloss pop
+          sc.pop(e.tooth, 0.55);
+          this.sfx('squish', 0.35, 1.45 + Math.random() * 0.15);
+          this.sfx('gel_paint', 0.5, 1.25);
+          this.refreshGelNeed();
+        }
         break;
       }
       case 'shadeTick': {
+        // every step pops the tooth; the tick climbs in pitch as the whole smile nears the goal
+        sc.pop(e.tooth, 0.42);
         sc.toothCenter(e.tooth, this.v1);
         sc.fx.sparkle(this.rootLocal(this.v1, this.v3), 3, 0.3, 0.25, '#FFFFFF', 0.8);
         const s0 = this.setup.special?.startShade || 12;
-        this.sfx('shade_tick', 0.55, 0.9 + Math.min(0.8, (s0 - e.shade) * 0.08));
+        const tgt = Math.max(1, this.setup.special?.targetShade || 1);
+        const mean = meanShade(this.model);
+        const prog = Math.max(0, Math.min(1, (s0 - mean) / Math.max(1, s0 - tgt)));
+        if (this.elapsed - this.shadeSfxT > 0.06) { this.shadeSfxT = this.elapsed; this.sfx('shade_tick', 0.55, 0.85 + prog * 0.9); }
+        this.hud.setShade(mean);
+        this.hud.shadeStep();
         break;
       }
       case 'zing': {
+        this.zings++;
         this.hud.say('Ooh, cold!', 1300);
         this.hud.wince();
         this.sfx('ow', 0.5, 1.3);
@@ -1323,6 +1408,7 @@ export class CleanController {
       case 'objective': {
         this.sfx('check', 0.9);
         this.hud.setObjectives(this.model.objectives);
+        if (e.obj.id === 'cure') this.hollywood();
         break;
       }
       case 'ow': {
@@ -1604,7 +1690,7 @@ export class CleanController {
           bitsLeft: bitsLeft(m), bitsCreated: m.bitsCreated, seconds: self.elapsed, tool: self.slot,
           combo: m.combo, bestCombo: m.bestCombo, gumHits: m.gumHits, gags: m.gags, doze: +m.doze.toFixed(2),
           floss: { phase: self.fl.phase, s: +self.fl.s.toFixed(3), pressure: +self.fl.pressure.toFixed(2), bend: +self.fl.bend.toFixed(2), strokes: self.fl.strokes, target: self.flAim?.debId ?? null },
-          ready: !!self.scene, intro: self.introPaused, tutorialStep: self.tut, par: self.setup.parSeconds,
+          zings: self.zings, ready: !!self.scene, intro: self.introPaused, tutorialStep: self.tut, par: self.setup.parSeconds,
         };
       },
       cheat(fraction: number) { cheat(self.model, fraction); },
@@ -1724,7 +1810,7 @@ export class CleanController {
           const mk = self.targetPoint(d, new THREE.Vector3());
           return { id: d.id, a: d.a, b: d.b, kind: d.kind, bracket: d.bracket, ...P(mk), tip: P(t), gum: P(g) };
         });
-        const teeth = sc.teeth.map((tv, i) => { if (!tv) return null; const w = sc.toothCenter(i, new THREE.Vector3()); return { i, problem: m.teeth[i].problem, ...P(w) }; }).filter(Boolean);
+        const teeth = sc.teeth.map((tv, i) => { if (!tv) return null; const w = sc.toothCenter(i, new THREE.Vector3()); return { i, problem: m.teeth[i].problem, gelTarget: m.teeth[i].gelTarget, gelled: m.teeth[i].gelled, shade: m.teeth[i].shade, ...P(w) }; }).filter(Boolean);
         const bugs = m.bugs.filter((b) => b.alive).map((b) => { const w = sc.bugWorld(b.id, new THREE.Vector3()); return w ? { id: b.id, tooth: b.tooth, ...P(w) } : null; }).filter(Boolean);
         const pockets = m.pockets.filter((p) => !p.opened).map((p) => { const w = sc.pocketWorld(p.id, new THREE.Vector3()); return w ? { id: p.id, tooth: p.tooth, ...P(w) } : null; }).filter(Boolean);
         const bits = m.bits.filter((b) => b.state !== 'gone').map((b) => { const w = sc.lower.localToWorld(new THREE.Vector3(b.x, b.y, b.z)); return { id: b.id, state: b.state, ...P(w) }; });

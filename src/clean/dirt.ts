@@ -43,7 +43,7 @@ export const RATES = {
   pasteLay: 0.85,           // prophy paste left on polished cells
   gelPaint: 6.0,            // gel per second under the brush centre
   gelBand: 0.22,            // half height (v) of the gel brush wrap band
-  gelDone: 0.6,             // share of a tooth's gel target covered for it to count
+  gelDone: 0.6,             // share of a tooth's gel target covered for it to snap to a full coat (~0.5 s of brushing)
   waterFloss: 0.9,          // debris hp per second per floss power (water flosser)
   flossPlaque: 0.6,         // interproximal plaque removed per floss stroke
   flossStrip: 0.14,         // half-width in u of the interproximal strip a stroke cleans
@@ -67,8 +67,9 @@ export const RATES = {
   bugFlee: 0.5,             // sidle speed when a tool comes near
   bugFleeRadius: 0.6,
   bugSpread: 6,             // seconds between plaque spreads per live bug
-  lampShade: 1.2,           // seconds under the lamp per shade step
-  lampZing: 4,              // nonstop seconds on one tooth before it zings
+  lampShade: 0.3,           // seconds under the lamp per shade step (every gel-coated tooth in the beam)
+  lampCatchUp: 0.3,         // extra cure rate per shade a tooth lags the brightest of its row, past the first (max 2 steps)
+  lampZing: 1.5,            // nonstop seconds aiming at one tooth before it zings
   pocketHold: 0.8,          // seconds of scaler on a pocket to open it
 };
 
@@ -994,9 +995,9 @@ export function applyPolisher(m: CleanModel, tooth: number, u: number, v: number
 export function applyGel(m: CleanModel, tooth: number, u: number, v: number, dt: number, hold = 0): number {
   if (blocked(m, tooth)) return 0;
   const t = m.teeth[tooth];
-  if (!t || !t.present) return 0;
+  if (!t || !t.present || !gelAllowed(m, tooth)) return 0;
   const seal = m.caseType !== 'whitening';
-  const target = (i: number) => (seal ? cellV[i] >= OCCLUSAL_V && isBack(t.kind) : t.vis[i] === 1 && cellV[i] < OCCLUSAL_V);
+  const target = (i: number) => (seal ? cellV[i] >= OCCLUSAL_V && isBack(t.kind) : gelFaceCell(t, i));
   const amt = RATES.gelPaint * dt;
   let added = 0;
   const paint = (i: number, w: number) => {
@@ -1009,13 +1010,26 @@ export function applyGel(m: CleanModel, tooth: number, u: number, v: number, dt:
   forWrap(m, tooth, seal ? 1 : v, (i) => paint(i, wrapRate(hold) * 0.8), RATES.gelBand);
   if (added > 0) {
     t.changed = true;
-    if (!seal) m.messEver = true;
+    if (!seal) { m.messEver = true; t.pasteOn = true; }   // rinsing the gel off gets the shine reveal too
     if (!t.gelled && (seal ? t.sealTarget : t.gelTarget) && gelCoverage(m, tooth) >= RATES.gelDone) {
       t.gelled = true;
+      // whitening: the tooth snaps to a full, even coat
+      if (!seal) for (let i = 0; i < CELLS; i++) if (t.reach[i] && target(i)) t.gel[i] = 1;
       m.events.push({ type: 'gelDone', tooth, seal });
     }
   }
   return added;
+}
+
+/** Whitening gel goes on the front teeth only (arch positions 4 to 9); sealant anywhere the brush can reach. */
+export function gelAllowed(m: CleanModel, tooth: number): boolean {
+  const t = m.teeth[tooth];
+  return !!t && t.present && (m.caseType !== 'whitening' || t.gelTarget);
+}
+
+/** Whitening gel area: the whole outward face up to the biting edge (every cell of it, so the coat has no holes). */
+function gelFaceCell(t: ToothDirt, i: number): boolean {
+  return t.reach[i] === 1 && visibleCell(t.kind, cellU[i], cellV[i]) && cellV[i] >= 0.03;
 }
 
 /** Share of a tooth's gel target cells (face for whitening, biting surface for sealant) with gel >= 0.5. */
@@ -1026,7 +1040,7 @@ export function gelCoverage(m: CleanModel, tooth: number): number {
   let n = 0, on = 0;
   for (let i = 0; i < CELLS; i++) {
     if (!t.reach[i]) continue;
-    const tgt = seal ? cellV[i] >= OCCLUSAL_V : t.vis[i] === 1 && cellV[i] < OCCLUSAL_V;
+    const tgt = seal ? cellV[i] >= OCCLUSAL_V : gelFaceCell(t, i);
     if (!tgt) continue;
     n++;
     if (t.gel[i] >= 0.5) on++;
@@ -1034,29 +1048,51 @@ export function gelCoverage(m: CleanModel, tooth: number): number {
   return n ? on / n : 0;
 }
 
-/**
- * UV lamp aimed at `tooth`: the lamp cone covers that tooth and its two neighbours. Each gel-coated
- * whitening tooth under it brightens one shade per 1.2 s down to the target; more than 4 s nonstop on
- * one tooth zings (comfort -5).
- */
-export function applyLamp(m: CleanModel, tooth: number, dt: number): void {
-  if (blocked(m, tooth) || m.caseType !== 'whitening') return;
+/** Teeth under the UV lamp beam aimed at `tooth`: it and both neighbours, plus the next one on `side` (+1 higher index, -1 lower). */
+export function lampTeeth(tooth: number, side = 0): number[] {
   const arch = Math.floor(tooth / TEETH_PER_ARCH);
-  const target = Math.max(1, m.setup.special?.targetShade || 1);
-  for (let n = tooth - 1; n <= tooth + 1; n++) {
+  const out: number[] = [];
+  const far = side > 0 ? tooth + 2 : side < 0 ? tooth - 2 : -1;
+  for (const n of [tooth, tooth - 1, tooth + 1, far]) {
     if (n < 0 || n >= TOOTH_COUNT || Math.floor(n / TEETH_PER_ARCH) !== arch) continue;
+    out.push(n);
+  }
+  return out;
+}
+
+/**
+ * UV lamp aimed at `tooth` (`side`: which half of it the beam centre is on, see lampTeeth): the beam covers
+ * 3 to 4 neighbouring teeth. Each gel-coated whitening tooth under it brightens one shade per 0.3 s down to
+ * the target; more than 1.5 s nonstop aimed at one tooth zings (comfort -5). The wide edge of the beam leans
+ * toward a tooth that still needs curing (at the end of the front row it swings back inward). Returns the
+ * side used, for the glow.
+ */
+export function applyLamp(m: CleanModel, tooth: number, dt: number, side = 0): number {
+  if (blocked(m, tooth) || m.caseType !== 'whitening') return side;
+  const target = Math.max(1, m.setup.special?.targetShade || 1);
+  const wants = (n: number) => n >= 0 && n < TOOTH_COUNT && Math.floor(n / TEETH_PER_ARCH) === Math.floor(tooth / TEETH_PER_ARCH)
+    && m.teeth[n].present && m.teeth[n].gelTarget && m.teeth[n].shade > target;
+  if (side !== 0 && !wants(tooth + 2 * side) && wants(tooth - 2 * side)) side = -side;
+  // a tooth that has fallen 2+ shades behind the brightest front tooth of its arch catches up faster (up to 1.6x),
+  // so the row finishes together instead of leaving the end teeth to hunt down
+  let best = 99;
+  const a0 = Math.floor(tooth / TEETH_PER_ARCH) * TEETH_PER_ARCH;
+  for (let n = a0; n < a0 + TEETH_PER_ARCH; n++) if (m.teeth[n].present && m.teeth[n].gelTarget) best = Math.min(best, m.teeth[n].shade);
+  for (const n of lampTeeth(tooth, side)) {
     const t = m.teeth[n];
     if (!t.present) continue;
-    t.lampFrame = m.frame;
-    t.lampRun += dt;
-    if (t.lampRun > RATES.lampZing) {
-      t.lampRun = 0;
-      m.comfort = clamp(m.comfort - 5, 0, 100);
-      m.lastHurt = m.time;
-      m.events.push({ type: 'zing', tooth: n });
+    if (n === tooth) {
+      t.lampFrame = m.frame;
+      t.lampRun += dt;
+      if (t.lampRun > RATES.lampZing) {
+        t.lampRun = 0;
+        m.comfort = clamp(m.comfort - 5, 0, 100);
+        m.lastHurt = m.time;
+        m.events.push({ type: 'zing', tooth: n });
+      }
     }
     if (!t.gelTarget || t.shade <= target || gelCoverage(m, n) < RATES.gelDone * 0.75) continue;
-    t.cure += dt;
+    t.cure += dt * (1 + RATES.lampCatchUp * clamp(t.shade - best - 1, 0, 2));
     if (t.cure >= RATES.lampShade) {
       t.cure -= RATES.lampShade;
       t.shade = Math.max(target, t.shade - 1);
@@ -1064,6 +1100,7 @@ export function applyLamp(m: CleanModel, tooth: number, dt: number): void {
       m.events.push({ type: 'shadeTick', tooth: n, shade: t.shade });
     }
   }
+  return side;
 }
 
 /** Mean shade of the whitening teeth (or of every present tooth outside whitening). */
@@ -1233,7 +1270,7 @@ export function applyRinse(m: CleanModel, x: number, y: number, z: number, dt: n
     let left = 0, any = false;
     for (let i = 0; i < CELLS; i++) {
       if (t.paste[i] > 0) { t.paste[i] = Math.max(0, t.paste[i] - k); if (t.paste[i] < 0.03) t.paste[i] = 0; any = true; left += t.paste[i]; }
-      if (whitening && t.gel[i] > 0) { t.gel[i] = Math.max(0, t.gel[i] - k); if (t.gel[i] < 0.03) t.gel[i] = 0; any = true; }
+      if (whitening && t.gel[i] > 0) { t.gel[i] = Math.max(0, t.gel[i] - k); if (t.gel[i] < 0.03) t.gel[i] = 0; any = true; left += t.gel[i]; }
     }
     if (any) t.changed = true;
     if (t.pasteOn && left <= 0) { t.pasteOn = false; m.events.push({ type: 'pasteRinsed', tooth: t.index }); }
@@ -1577,7 +1614,7 @@ export function reassure(m: CleanModel): boolean {
 
 const OBJ_LABEL: Record<ObjectiveId, string> = {
   tartar: 'Pop the tartar', barnacles: 'Crack the barnacles', plaque: 'Clear the plaque', stain: 'Polish out the stains',
-  debris: 'Floss out the food', bugs: 'Squash the sugar bugs', seal: 'Seal the molars', gel: 'Paint gel on the fronts',
+  debris: 'Floss out the food', bugs: 'Squash the sugar bugs', seal: 'Seal the molars', gel: 'Paint gel on the front teeth',
   cure: 'Whiten with the lamp', gold: 'Buff the gold tooth', pockets: 'Open the gum pockets', hidden: 'Scrape out the hidden tartar',
   finish: 'Rinse and suction',
 };

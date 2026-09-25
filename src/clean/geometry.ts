@@ -780,7 +780,7 @@ export function toolModel(key: string): ToolParts {
       const tipG = new THREE.ConeGeometry(0.12, 0.7, 14);
       tipG.rotateX(Math.PI);
       tipG.translate(0, 0.35, 0);
-      const tip = new THREE.Mesh(tipG, new THREE.MeshStandardMaterial({ color: '#8FE3FF', roughness: 0.6, emissive: '#3FB8E8', emissiveIntensity: 0.25 }));
+      const tip = new THREE.Mesh(tipG, new THREE.MeshStandardMaterial({ name: 'Gel', color: '#8FE3FF', roughness: 0.6, emissive: '#3FB8E8', emissiveIntensity: 0.25 }));
       g.add(tip);
       break;
     }
