@@ -44,7 +44,8 @@ export type EquipId =
   | 'waterFilter' | 'aromatherapy' | 'loyaltyProgram' | 'staffLockers'
   | 'digitalXray' | 'soundMasking' | 'patientApp' | 'nitrousSystem'
   | 'laserWhitening' | 'spaLounge' | 'cadcam' | 'rooftopGarden'
-  | 'smileStudio' | 'researchWing' | 'helipad' | 'aiScheduler';
+  | 'smileStudio' | 'researchWing' | 'helipad' | 'aiScheduler'
+  | 'smileVan';
 
 // ------------------------------------------------------------------ manager layer (v3, DESIGN 10)
 export type FocusId = 'steady' | 'speed' | 'quality' | 'walkin' | 'upsell' | 'team' | 'training';
@@ -76,6 +77,28 @@ export interface PendingEvent {
 }
 
 export type Phase = 'school' | 'employee' | 'owner';
+
+// ------------------------------------------------------------------ end game (DESIGN 11)
+export type DistrictId = 'downtown' | 'harbor' | 'maple' | 'university' | 'oldtown' | 'uptown';
+export type Difficulty = 'relaxed' | 'standard' | 'veteran';
+export type LegacyPerkId = 'headStart' | 'prodigy' | 'famousName' | 'trainedHands' | 'alumniNetwork' | 'goldScrubs';
+
+export interface DistrictState {
+  id: DistrictId;
+  index: number;              // Smile Index 0..1 for this district
+  served: number;             // lifetime patients from this district
+}
+
+export interface TimelineEntry { day: number; text: string; kind: 'career' | 'office' | 'city' | 'award' | 'mastery' }
+
+export interface FinaleState {
+  milestones: number[];       // city-wide Smile Index milestones reached (10, 20, ... 100)
+  galaUnlocked: boolean;      // city at 100%: the Golden Molar Gala is scheduled
+  attempts: number;           // showcase cleans tried
+  won: boolean;               // Golden Molar won
+  wonDay: number | null;
+  retired: boolean;           // the player retired this run into New Game+
+}
 export type Speed = 0 | 1 | 2 | 4;
 
 // ------------------------------------------------------------------ mouth / clean contract
@@ -137,6 +160,7 @@ export interface CaseSpecial {
   barnacles: number;         // pirate: tough barnacle deposits
   seaweed: number;           // pirate: seaweed strands in gaps
   grillGems: number;         // grillz: diamonds on the grill to buff (0 = no grill)
+  showcase: boolean;         // the Golden Molar Gala finale: on stage, spotlight, crowd meter (DESIGN 11.3)
 }
 
 export interface CleanSetup {
@@ -309,6 +333,7 @@ export interface Clinic {
   modifiers: ClinicModifier[];        // events, campaigns, focus (expired ones removed at day close)
   campaign: { id: CampaignId; untilDay: number } | null;
   campaignCooldownUntil: number;      // no new campaign before this day
+  district: DistrictId;               // where this location serves (DESIGN 11.1)
 }
 
 // ------------------------------------------------------------------ economy and records
@@ -407,6 +432,13 @@ export interface GameState {
   huddleDay: number;           // day the morning huddle was last completed
   pendingEvents: PendingEvent[];   // event cards awaiting a decision this morning (at most one per location)
   eventLog: { day: number; eventId: string; clinicId: string; choice: number; text: string }[];   // last 30
+  // end game (DESIGN 11)
+  difficulty: Difficulty;
+  city: DistrictState[];
+  timeline: TimelineEntry[];   // career milestones for the Legacy screen (keep all; they are small)
+  finale: FinaleState;
+  legacyPerks: LegacyPerkId[]; // New Game+ perks active in this run
+  distress: number;            // consecutive day closes with cash below zero (bankruptcy pressure, DESIGN 11.5)
   settings: {
     autoHuddle: boolean;   // skip the huddle and keep yesterday's focus (events auto-resolve with the first choice)
     autoRaise?: boolean;   // approve raise requests up to +15% automatically at day close

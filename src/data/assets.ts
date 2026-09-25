@@ -44,6 +44,8 @@ export const CLINIC_MODELS = [
   'helipad_sign', 'ai_screen', 'ergo_stool',
   // v3 event props in the diorama (DESIGN 10.2)
   'prop_puppy', 'prop_balloons', 'prop_jolly_roger', 'prop_rival_sign', 'prop_red_carpet', 'prop_generator', 'prop_camera_crew',
+  // end game (DESIGN 11): Smile Van on the street, the trophy wall, the ribbon for openings
+  'smile_van', 'trophy_golden_molar', 'plaque_frame', 'prop_ribbon',
 ] as const;
 
 // People: child nodes named Body, Head, LegL, LegR, ArmL, ArmR with pivots at the joints (walk and sit
@@ -78,6 +80,8 @@ export const SFX_KEYS = [
   'event_card', 'event_good', 'event_bad', 'campaign_start', 'perk_pick', 'huddle', 'interview',
   // grillz case
   'bling', 'ayy', 'grill_pop',
+  // end game
+  'crowd_cheer', 'fanfare_gala', 'ribbon_snip', 'milestone', 'promotion',
   // clinic and UI
   'door_chime', 'cash', 'coins', 'ui_click', 'ui_tab', 'purchase', 'level_up', 'hire', 'error', 'day_end',
   'review_good', 'review_bad', 'notify',

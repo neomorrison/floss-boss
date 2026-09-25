@@ -46,10 +46,11 @@ export const EQUIPMENT: Record<EquipId, EquipDef> = {
   researchWing: { id: 'researchWing', name: 'Research Wing', price: 35000, blurb: 'Staff at every location level up 50% faster. Training costs half.', model: 'research_desk', minTier: 't4' },
   helipad: { id: 'helipad', name: 'Helipad', price: 60000, blurb: 'Demand +15% at every location. Also a helipad.', model: 'helipad_sign', minTier: 't4' },
   aiScheduler: { id: 'aiScheduler', name: 'AI Scheduler', price: 30000, blurb: 'Capacity +10% here: the schedule fills every gap.', model: 'ai_screen', minTier: 't4' },
+  smileVan: { id: 'smileVan', name: 'Smile Van', price: 20000, blurb: 'Free outreach cleanings every day in the least-smiling district without a location. Unlocks at Smile City 50%.', model: 'smile_van', minTier: 't2' },
 };
 export const EQUIP_ORDER: EquipId[] = [
   'deepCert', 'espresso', 'waterFilter', 'aromatherapy', 'kidsCorner', 'staffLockers', 'fishTank', 'loyaltyProgram', 'sterilizer', 'onlineBooking', 'ultrasonicKits', 'xray',
   'breakRoom', 'soundMasking', 'digitalXray', 'patientApp', 'nitrousSystem',
   'rooftopGarden', 'laserWhitening', 'spaLounge', 'cadcam',
-  'aiScheduler', 'researchWing', 'smileStudio', 'helipad',
+  'aiScheduler', 'researchWing', 'smileStudio', 'helipad', 'smileVan',
 ];
