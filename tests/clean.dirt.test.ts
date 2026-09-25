@@ -39,7 +39,7 @@ describe('spawn (DESIGN 5.2)', () => {
     expect(c.tartar.map((d) => d.u)).not.toEqual(a.tartar.map((d) => d.u));
   });
 
-  for (const caseType of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep'] as CaseType[]) {
+  for (const caseType of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep', 'grillz'] as CaseType[]) {
     it(`${caseType}: real dirt only on problem teeth and only on visible cells`, () => {
       for (const seed of [1, 2, 3, 4]) {
         const m = createModel(buildSetup({ caseType, seed, level: 5 }));
@@ -534,7 +534,7 @@ describe('objectives and scoring (DESIGN 5.8)', () => {
   });
 
   it('cheat(0.5) is half way, cheat(1) is perfect with the bonus', () => {
-    for (const caseType of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep'] as CaseType[]) {
+    for (const caseType of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep', 'grillz'] as CaseType[]) {
       const m = createModel(buildSetup({ caseType, seed: 6, bonus: 'combo', level: 4 }));
       cheat(m, 0.5);
       const c = fractions(m).clean;

@@ -9,9 +9,10 @@ import { BONUSES, CASES, TWISTS } from '../data/cases';
 import { portraitUrl, type Mood } from '../data/assets';
 import { probeImage } from '../core/assets';
 import { TEETH_PER_ARCH } from '../core/mouth';
+import { fiveStarNeeds } from '../core/stars';
 import { ICONS, TOOL_ICONS } from './icons';
 import type { ViewId } from './camera';
-import type { Objective } from './dirt';
+import { CROWD, GRILL_TEETH, type Objective } from './dirt';
 import { CASE_TOOL_NAMES, SLOT_NAMES, isCaseSlot, type SlotId } from './slots';
 
 export interface HudHandlers {
@@ -37,7 +38,17 @@ const VIEW_LABELS: [ViewId, string][] = [['front', 'Front'], ['left', 'Left'], [
 const PORTRAIT_BG: Record<string, string> = {
   mannequin: '#E4E9EE', regular: '#BDEFE3', coffee: '#F3DCC2', kid: '#FFE6A8', nervous: '#D9E4FF', gagger: '#D8F2C9',
   smoker: '#E7DDD3', senior: '#EBDDF5', influencer: '#FFD1E3', athlete: '#C9EEFF', chatty: '#FFE0CC', pirate: '#FFE3B0',
+  rapper: '#FFE08A',
 };
+const STAR_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2.8l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 16.8l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>';
+
+/** "5 stars: 94% and under 1:20" (the chair card's line) from the clean rules and the par time, or null without rules. */
+export function fiveStarLine(setup: Pick<CleanSetup, 'rules' | 'parSeconds'>): string | null {
+  if (!setup.rules) return null;
+  const n = fiveStarNeeds(setup.rules, setup.parSeconds);
+  const pct = `${Math.round(n.quality * 100)}%`;
+  return n.seconds !== null ? `5 stars: ${pct} and under ${fmt(n.seconds)}` : `5 stars: ${pct}`;
+}
 /** Shade guide swatches 1 (brightest) .. 16. */
 const SHADE_COLORS = Array.from({ length: 16 }, (_, i) => {
   const t = i / 15;
@@ -82,7 +93,7 @@ export class CleanHud {
   private floats: HTMLDivElement[] = [];
   private floatNext = 0;
   private flash!: HTMLDivElement;
-  private last = { comfort: -1, time: '', clean: -1, cd: -1, water: -1, shade: -1, bonus: '' };
+  private last = { comfort: -1, time: '', clean: -1, cd: -1, water: -1, shade: -1, bonus: '', stars: -1, crowd: -1 };
   private counts: Record<string, number> = {};
   private modal: HTMLDivElement | null = null;
   private objRows = new Map<string, ObjRow>();
@@ -97,10 +108,18 @@ export class CleanHud {
   private intro: HTMLDivElement | null = null;
   private introTimer = 0;
   private caseCard!: HTMLDivElement;
+  private starsEl!: HTMLElement;
+  private crowdEl: HTMLElement | null = null;
+  private crowdFill: HTMLElement | null = null;
 
   constructor(host: HTMLElement, private setup: CleanSetup, private h: HudHandlers, private o: HudOptions) {
     this.root = el('div', 'fbc-hud');
     host.appendChild(this.root);
+    if (setup.special?.showcase) {
+      // the Golden Molar Gala stage: curtains at the frame edges and a dark hall around the spotlight
+      this.root.classList.add('showcase');
+      this.root.appendChild(el('div', 'fbc-stage', '<i class="l"></i><i class="r"></i><i class="top"></i>'));
+    }
     // mouse clicks do not leave buttons focused (Space is Reassure, not "click the last button")
     this.root.addEventListener('mousedown', (e) => { if ((e.target as HTMLElement).closest('button')) e.preventDefault(); });
     this.buildTopLeft();
@@ -188,9 +207,19 @@ export class CleanHud {
     const par = el('span', 'fbc-par');
     par.textContent = `Par ${fmt(this.setup.parSeconds)}`;
     clock.append(this.timeEl, par);
-    t.append(name, clock);
+    this.starsEl = el('div', 'fbc-stars', STAR_SVG.repeat(5));
+    this.starsEl.setAttribute('aria-label', 'Stars');
+    t.append(name, clock, this.starsEl);
     head.append(this.ring, t);
     c.appendChild(head);
+    if (this.setup.special?.showcase) {
+      // the crowd meter: climbs with pops, snaps, ticks and diamonds, dips on gum slips
+      const cr = el('div', 'fbc-crowd', `<span class="fbc-crowd-lbl">Crowd</span><span class="fbc-crowd-track"><i></i>${CROWD.cheers.map((x) => `<b style="left:${x * 100}%"></b>`).join('')}</span>`);
+      cr.setAttribute('aria-label', 'Crowd');
+      this.crowdEl = cr;
+      this.crowdFill = cr.querySelector('i');
+      c.appendChild(cr);
+    }
     const list = el('ul', 'fbc-objs');
     for (const o of this.o.objectives) {
       const row = el('li', 'fbc-obj');
@@ -389,6 +418,41 @@ export class CleanHud {
     this.doneBtn.classList.toggle('ready', ready);
   }
 
+  /** The stars the clean would get now (1..5), from the same function as the result. */
+  setStars(n: number) {
+    const k = Math.max(0, Math.min(5, Math.round(n)));
+    if (k === this.last.stars) return;
+    const up = this.last.stars >= 0 && k > this.last.stars;
+    this.last.stars = k;
+    this.starsEl.querySelectorAll('svg').forEach((s, i) => s.classList.toggle('on', i < k));
+    this.starsEl.setAttribute('aria-label', `${k} stars`);
+    if (up) { this.starsEl.classList.remove('up'); void this.starsEl.offsetWidth; this.starsEl.classList.add('up'); }
+  }
+
+  /** Showcase: the crowd meter 0..1. */
+  setCrowd(v: number) {
+    if (!this.crowdFill || !this.crowdEl) return;
+    const q = Math.round(Math.max(0, Math.min(1, v)) * 200) / 200;
+    if (q === this.last.crowd) return;
+    this.last.crowd = q;
+    this.crowdFill.style.width = `${q * 100}%`;
+    this.crowdEl.classList.toggle('hot', q >= CROWD.cheers[CROWD.cheers.length - 1]);
+  }
+
+  /** Showcase: the crowd cheers (a threshold was passed): the meter bounces. */
+  crowdCheer() {
+    const e = this.crowdEl;
+    if (!e) return;
+    e.classList.remove('cheer');
+    void e.offsetWidth;
+    e.classList.add('cheer');
+  }
+
+  /** grillz: the mini-map marks the teeth under the grill while it is on them. */
+  setGrillMap(on: boolean) {
+    for (const i of GRILL_TEETH) this.teeth[i]?.classList.toggle('grill', on);
+  }
+
   /** Live checklist. Returns the ids that just ticked (for the caller's juice). */
   setObjectives(objs: Objective[]) {
     for (const o of objs) {
@@ -555,8 +619,14 @@ export class CleanHud {
       const title = el('div', 'fbc-intro-title');
       title.textContent = c?.name ?? 'Cleaning';
       const blurb = el('div', 'fbc-intro-blurb');
-      blurb.textContent = c?.blurb ?? '';
+      blurb.textContent = this.setup.special?.showcase ? 'The Golden Molar Gala. The crowd is watching.' : c?.blurb ?? '';
       card.append(tag, title, blurb);
+      const five = fiveStarLine(this.setup);
+      if (five && !this.setup.tutorial) {
+        const fs = el('div', 'fbc-intro-stars', `<i>${STAR_SVG}</i><span></span>`);
+        (fs.querySelector('span') as HTMLElement).textContent = five;
+        card.appendChild(fs);
+      }
       if (first && c?.tip) {
         const tip = el('div', 'fbc-intro-tip');
         tip.textContent = c.tip;

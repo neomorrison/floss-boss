@@ -7,7 +7,8 @@
 //
 // Scope (5.2): only the case's problem teeth carry real dirt, and only on cells a view can see (the outward
 // face and the biting surface of back teeth). Other teeth get faint cosmetic plaque that is not scored.
-// A problem tooth snaps clean once its tartar is gone and 80% of its plaque and stain is (at most 20% left).
+// A problem tooth snaps clean once its tartar is gone and `rules.snapAt` of its plaque and stain is (0.8 on
+// Standard: at most 20% left; DESIGN 11.5). Stars come from core/stars, the same function the sim uses.
 //
 // Tools act through an elliptical brush on an idealized crown (an elliptic cylinder with a domed top,
 // sized by TOOTH_DIMS), so the brush keeps its size in mouth units on every tooth.
@@ -17,6 +18,7 @@ import { DIRT_GU, DIRT_GV, OCCLUSAL_V, TARTAR_HP } from '../core/constants';
 import type { BonusId, CaseType, CleanObjective, CleanResult, CleanSetup, ToolSlot, ToothKind, TwistId } from '../core/types';
 import { layoutTeeth, reachable, TEETH_PER_ARCH, TOOTH_COUNT, type ToothPlacement } from '../core/mouth';
 import { clamp, hashSeed, makeRng, type Rng } from '../core/rng';
+import { starsWith } from '../core/stars';
 import { toolTier, type ToolTier } from '../data/tools';
 import { pressable } from './reach';
 
@@ -59,8 +61,8 @@ export const RATES = {
   hitChunk: 0.14,           // tartar damage per "hit" (crunch + flakes)
   cleanEps: 0.02,
   comboWindow: 2.6,         // seconds between pops to keep a combo
-  snapLeft: 0.2,            // a problem tooth snaps once 80% of its plaque and stain is gone (and its tartar)
-  areaDone: 0.8,            // area objectives: removing 80% of a tooth's layer counts as all of it
+  snapLeft: 0.2,            // default snap (no rules): a problem tooth snaps once 80% of its plaque and stain is gone
+  areaDone: 0.8,            // default area objectives (no rules): removing 80% of a tooth's layer counts as all of it
   lastBits: 0.7,            // from 70% done the specks left on a problem tooth pulse ("last bits" glow)
   bandFloor: 0.05,          // dirt starts just above the gum (the first cell row, v ~0.02, stays clean)
   bugSpeed: 0.14,           // sugar bug crawl, surface units per second
@@ -71,6 +73,36 @@ export const RATES = {
   lampCatchUp: 0.3,         // extra cure rate per shade a tooth lags the brightest of its row, past the first (max 2 steps)
   lampZing: 1.5,            // nonstop seconds aiming at one tooth before it zings
   pocketHold: 0.8,          // seconds of scaler on a pocket to open it
+  grillHold: 0.6,           // grillz: seconds of holding on the grill to take it out
+  gemBuff: 0.9,             // grillz: gem shine per second per polish power (about 0.8 s a gem with the Prophy Angle)
+  gemShare: 0.35,           // grillz: the other gem on the same tooth shines along at this share
+};
+
+/** The grill covers the upper front six (arch positions 4 to 9 of the upper arch, DESIGN 11.6). */
+export const GRILL_TEETH: readonly number[] = [4, 5, 6, 7, 8, 9];
+const GRILL_SET = new Set<number>(GRILL_TEETH);
+/**
+ * The tooth under each of the grill's 12 gem slots (the GLB's Gem_00..Gem_11): slots 0..5 are the big stones
+ * toward the biting edge (centre out: 6, 7, 5, 8, 4, 9), slots 6..11 the small ones near the gum. A grill with
+ * n gems shows slots 0..n-1, so 6 gems put one stone on every tooth.
+ */
+export const GEM_TEETH: readonly number[] = [6, 7, 5, 8, 4, 9, 6, 7, 5, 8, 4, 9];
+export const MAX_GEMS = GEM_TEETH.length;
+
+/** The showcase crowd meter (DESIGN 11.3): what moves it, on a 0..1 scale. */
+export const CROWD = {
+  start: 0.3,
+  pop: 0.035,               // a tartar lump pops
+  snap: 0.05,               // a marked tooth snaps clean
+  objective: 0.09,          // a checklist tick
+  gem: 0.045,               // a diamond buffed
+  grillOut: 0.06,
+  slip: -0.1,               // a gum slip (or a hiccup jolt slip)
+  gag: -0.08,
+  zing: -0.04,
+  decay: 0.006,             // per second, only above `start` (a quiet crowd settles back)
+  cheers: [0.5, 0.75, 0.95] as readonly number[],   // a light cheer each time the meter climbs past one
+  rearm: 0.12,              // a threshold cheers again once the meter has fallen this far below it
 };
 
 export const GUM_CONTACT_DELAY = 0.15;
@@ -182,7 +214,22 @@ export interface Pocket {
 
 export type ObjectiveId =
   | 'tartar' | 'barnacles' | 'plaque' | 'stain' | 'debris' | 'bugs' | 'seal' | 'gel' | 'cure'
-  | 'gold' | 'pockets' | 'hidden' | 'finish';
+  | 'gold' | 'pockets' | 'hidden' | 'grill' | 'under' | 'gems' | 'others' | 'finish';
+
+/** One diamond on the grill: `slot` is its GLB index (Gem_00..Gem_11), `shine` 0 (cloudy) .. 1 (buffed). */
+export interface GrillGem { id: number; slot: number; tooth: number; shine: number; done: boolean; lastBuff: number }
+
+/**
+ * Grill Glow-Up (DESIGN 11.6): 'in' (on the teeth: hold on it to take it out), 'out' (on the tray while the
+ * gunk under it is cleaned), 'back' (snapped back in: buff each diamond).
+ */
+export interface GrillState {
+  state: 'in' | 'out' | 'back';
+  hold: number;             // seconds held so far (runs back down when let go)
+  heldFrame: number;
+  teeth: number[];          // present teeth under the grill
+  gems: GrillGem[];
+}
 
 export interface Objective extends CleanObjective {
   id: ObjectiveId;
@@ -209,6 +256,10 @@ export type CleanEvent =
   | { type: 'pocketOpen'; pocket: Pocket }
   | { type: 'pocketHeal'; pocket: Pocket }
   | { type: 'objective'; obj: Objective }
+  | { type: 'grillOut' }
+  | { type: 'grillBack' }
+  | { type: 'gemDone'; gem: GrillGem; n: number }
+  | { type: 'crowdCheer'; level: number }
   | { type: 'ow' }
   | { type: 'gag' }
   | { type: 'gagWarn' }
@@ -275,6 +326,12 @@ export interface CleanModel {
   nextId: number;
   totalTartarHp: number;
   totalDebrisHp: number;
+  /** grillz: the grill and its diamonds (null in every other case). */
+  grill: GrillState | null;
+  /** Showcase (the Golden Molar Gala): the crowd meter 0..1, or -1 when there is no crowd. */
+  crowd: number;
+  crowdArmed: boolean[];
+  crowdSeen: WeakSet<CleanEvent>;
 }
 
 // ------------------------------------------------------------------ geometry helpers
@@ -293,6 +350,12 @@ export const cellCenterU = (i: number) => cellU[i];
 export const cellCenterV = (i: number) => cellV[i];
 
 const isBack = (k: ToothKind) => k === 'molar' || k === 'premolar';
+
+/** The snap point of this clean (DESIGN 11.5 `rules.snapAt`): the share of a problem tooth's dirt removed before it snaps. */
+export function snapAt(m: { setup: Pick<CleanSetup, 'rules'> }): number {
+  const s = m.setup.rules?.snapAt;
+  return typeof s === 'number' && s > 0 && s <= 1 ? s : RATES.areaDone;
+}
 
 /** Can a view see this cell? The outward face (u 0.3..0.7) and the biting surface of back teeth (5.2). */
 export function visibleCell(kind: ToothKind, u: number, v: number): boolean {
@@ -473,9 +536,12 @@ export function createModel(setup: CleanSetup): CleanModel {
   const nextId = { v: 1 };
   const tartar: TartarDeposit[] = [];
   const pockets: Pocket[] = [];
-  spawnTartar(tartar, teeth, placements, srng, setup, problem, nextId);
+  // grillz: the tartar is the gunk that hid under the grill (a few lumps on the upper front six)
+  const grillProblem = problem.filter((i) => GRILL_SET.has(i));
+  spawnTartar(tartar, teeth, placements, srng, setup, caseType === 'grillz' && grillProblem.length ? grillProblem : problem, nextId);
   if (caseType === 'deep') spawnPockets(tartar, pockets, teeth, srng, setup, problem, nextId);
-  const debris = spawnDebris(teeth, srng, setup, problem, nextId);
+  // grillz: the case is the grill, so no food to floss (par still counts the sim's one bit: a few spare seconds)
+  const debris = caseType === 'grillz' ? [] : spawnDebris(teeth, srng, setup, problem, nextId);
   const bugs: SugarBug[] = [];
   const nBugs = caseType === 'candy' ? Math.max(0, Math.round(sp?.sugarBugs ?? 0)) : 0;
   for (let k = 0; k < nBugs && problem.length; k++) {
@@ -527,12 +593,25 @@ export function createModel(setup: CleanSetup): CleanModel {
     events: [], rng, nextId: nextId.v,
     totalTartarHp: tartar.reduce((s, d) => s + d.hp0, 0),
     totalDebrisHp: debris.reduce((s, d) => s + d.hp0, 0),
+    grill: caseType === 'grillz' ? makeGrill(teeth, sp?.grillGems ?? 0) : null,
+    crowd: sp?.showcase ? CROWD.start : -1,
+    crowdArmed: CROWD.cheers.map(() => true),
+    crowdSeen: new WeakSet(),
   };
   m.objectives = buildObjectives(m);
   // a problem tooth with nothing on it (should not happen) is done from the start
   for (const i of problem) if (toothDone(m, i)) m.teeth[i].snapped = true;
   updateObjectives(m, true);
   return m;
+}
+
+function makeGrill(teeth: ToothDirt[], gems: number): GrillState {
+  const n = clamp(Math.round(gems || 0), 0, MAX_GEMS);
+  return {
+    state: 'in', hold: 0, heldFrame: -1,
+    teeth: GRILL_TEETH.filter((i) => teeth[i].present),
+    gems: Array.from({ length: n }, (_, k) => ({ id: k, slot: k, tooth: GEM_TEETH[k], shine: 0, done: false, lastBuff: -99 })),
+  };
 }
 
 function paintBand(t: ToothDirt, rng: Rng, height: number, amount: number) {
@@ -549,10 +628,17 @@ function paintBand(t: ToothDirt, rng: Rng, height: number, amount: number) {
 function spawnPlaque(teeth: ToothDirt[], placements: ToothPlacement[], rng: Rng, setup: CleanSetup, problem: number[]) {
   const share = clamp(setup.dirt.plaque, 0, 1);
   if (share <= 0 || !problem.length) return;
-  const n = Math.max(1, Math.round(share * problem.length));
-  const order = problem.slice();
-  shuffle(order, rng);
   const thick = 0.26 + 0.16 * share;             // band height grows with the amount (the gum hides the first ~0.1)
+  let pool = problem;
+  if (setup.caseType === 'grillz') {
+    // the gunk that hides under a grill: a heavier band on every tooth it covers, the usual share elsewhere
+    for (const i of problem) if (GRILL_SET.has(i)) paintBand(teeth[i], rng, thick + 0.1, 1);
+    pool = problem.filter((i) => !GRILL_SET.has(i));
+    if (!pool.length) return;
+  }
+  const n = Math.max(1, Math.round(share * pool.length));
+  const order = pool.slice();
+  shuffle(order, rng);
   for (const i of order.slice(0, n)) {
     const t = teeth[i];
     const p = placements[i];
@@ -900,6 +986,8 @@ function resetRes() { res.plaque = 0; res.stain = 0; res.polish = 0; res.tartar 
 
 function blocked(m: CleanModel, tooth: number): boolean {
   if (m.jawClosed > 0 || m.walkout) return true;
+  // grillz: the teeth under the grill are out of reach while it is on them
+  if (m.grill && m.grill.state !== 'out' && GRILL_SET.has(tooth)) return true;
   if (m.doze >= 0.95) return true;
   if (m.doze >= DOZE_BLOCK && m.teeth[tooth]?.arch === 'lower') return true;
   return false;
@@ -1011,14 +1099,39 @@ export function applyGel(m: CleanModel, tooth: number, u: number, v: number, dt:
   if (added > 0) {
     t.changed = true;
     if (!seal) { m.messEver = true; t.pasteOn = true; }   // rinsing the gel off gets the shine reveal too
-    if (!t.gelled && (seal ? t.sealTarget : t.gelTarget) && gelCoverage(m, tooth) >= RATES.gelDone) {
-      t.gelled = true;
-      // whitening: the tooth snaps to a full, even coat
+    if ((seal ? t.sealTarget : t.gelTarget) && gelReady(m, tooth)) {
+      // whitening: at the coat threshold the tooth snaps to a full, even coat (again after a partial wash-off)
       if (!seal) for (let i = 0; i < CELLS; i++) if (t.reach[i] && target(i)) t.gel[i] = 1;
-      m.events.push({ type: 'gelDone', tooth, seal });
+      if (!t.gelled) {
+        t.gelled = true;
+        m.events.push({ type: 'gelDone', tooth, seal });
+      }
     }
   }
   return added;
+}
+
+/**
+ * One coat threshold for everything whitening shows and does (RATES.gelDone of the face painted): the coat
+ * snaps full, the outline goes, the checklist ticks and the lamp cures. Below it the lamp does nothing.
+ */
+export function gelReady(m: CleanModel, tooth: number): boolean {
+  return gelCoverage(m, tooth) >= RATES.gelDone - 1e-9;
+}
+
+/**
+ * Whitening: how strongly a front tooth still asks for gel, 0..1. A bare tooth outlines at 1; a partial coat
+ * dims the outline as it grows (down to 0.35 just under the threshold); a coated tooth, a tooth at its goal
+ * shade and every tooth once the smile reached the goal show nothing.
+ */
+export function gelNeed(m: CleanModel, tooth: number): number {
+  const t = m.teeth[tooth];
+  if (m.caseType !== 'whitening' || !t?.present || !t.gelTarget) return 0;
+  const target = Math.max(1, m.setup.special?.targetShade || 1);
+  if (t.shade <= target || m.objectives.some((o) => o.id === 'cure' && o.done)) return 0;
+  const cov = gelCoverage(m, tooth);
+  if (cov >= RATES.gelDone - 1e-9) return 0;
+  return 1 - 0.65 * clamp(cov / RATES.gelDone, 0, 1);
 }
 
 /** Whitening gel goes on the front teeth only (arch positions 4 to 9); sealant anywhere the brush can reach. */
@@ -1091,7 +1204,7 @@ export function applyLamp(m: CleanModel, tooth: number, dt: number, side = 0): n
         m.events.push({ type: 'zing', tooth: n });
       }
     }
-    if (!t.gelTarget || t.shade <= target || gelCoverage(m, n) < RATES.gelDone * 0.75) continue;
+    if (!t.gelTarget || t.shade <= target || !gelReady(m, n)) continue;
     t.cure += dt * (1 + RATES.lampCatchUp * clamp(t.shade - best - 1, 0, 2));
     if (t.cure >= RATES.lampShade) {
       t.cure -= RATES.lampShade;
@@ -1125,6 +1238,59 @@ export function applyPocket(m: CleanModel, pocketId: number, dt: number): boolea
     m.events.push({ type: 'pocketOpen', pocket: pk });
   }
   return true;
+}
+
+/**
+ * grillz: hold on the grill (any tool or an empty hand) for RATES.grillHold s to take it out. Returns the hold
+ * progress 0..1 (1 the frame it comes out), or -1 when there is nothing to hold (no grill, not on the teeth).
+ */
+export function applyGrillHold(m: CleanModel, dt: number): number {
+  const g = m.grill;
+  if (!g || g.state !== 'in') return -1;
+  if (m.jawClosed > 0 || m.walkout || m.doze >= 0.95) return g.hold / RATES.grillHold;
+  g.heldFrame = m.frame;
+  g.hold = Math.min(RATES.grillHold, g.hold + dt);
+  if (g.hold >= RATES.grillHold - 1e-9) {
+    g.state = 'out';
+    g.hold = 0;
+    m.events.push({ type: 'grillOut' });
+    return 1;
+  }
+  return g.hold / RATES.grillHold;
+}
+
+/** grillz: are the teeth under the grill clean (every present one snapped)? */
+export function underGrillDone(m: CleanModel): boolean {
+  const g = m.grill;
+  return !!g && g.teeth.every((i) => !m.teeth[i].problem || m.teeth[i].snapped);
+}
+
+/**
+ * grillz: the polisher on a diamond (the grill back in). It shines up, the other stone on the same tooth
+ * along with it; a finished gem pushes 'gemDone' (n = gems finished so far). Returns the shine added.
+ */
+export function applyGemBuff(m: CleanModel, gemId: number, dt: number, moving = 1): number {
+  const g = m.grill;
+  const gem = g?.gems.find((x) => x.id === gemId);
+  if (!g || !gem || g.state !== 'back' || m.jawClosed > 0 || m.walkout || m.doze >= 0.95) return 0;
+  const tool = activeTool(m.setup, 'polisher');
+  const amt = RATES.gemBuff * Math.max(0.3, tool.polish) * m.setup.mods.polishSpeed * (0.55 + 0.45 * clamp(moving, 0, 1)) * dt;
+  let added = 0;
+  const buff = (x: GrillGem, k: number) => {
+    if (x.done) return;
+    const s0 = x.shine;
+    x.shine = Math.min(1, s0 + amt * k);
+    x.lastBuff = m.time;
+    added += x.shine - s0;
+    if (x.shine >= 1 - 1e-9) {
+      x.shine = 1;
+      x.done = true;
+      m.events.push({ type: 'gemDone', gem: x, n: g.gems.filter((y) => y.done).length });
+    }
+  };
+  buff(gem, 1);
+  for (const x of g.gems) if (x !== gem && x.tooth === gem.tooth) buff(x, RATES.gemShare);
+  return added;
 }
 
 export type FlossTarget = { a: number; b: number };   // a === b: food at a bracket
@@ -1298,14 +1464,14 @@ function layerSums(t: ToothDirt): { p: number; s: number } {
   return { p, s };
 }
 
-/** Is a problem tooth finished: no tartar (visible or hidden) and at most 20% of its plaque and stain left? */
+/** Is a problem tooth finished: no tartar (visible or hidden) and at most 1 - snapAt of its plaque and stain left? */
 export function toothDone(m: CleanModel, tooth: number): boolean {
   const t = m.teeth[tooth];
   if (!t.present) return true;
   for (const d of m.tartar) if (d.tooth === tooth && !d.popped) return false;
   const { p, s } = layerSums(t);
   const start = t.plaque0 + t.plaqueAdded + t.stain0;
-  return p + s <= start * RATES.snapLeft + 1e-6;
+  return p + s <= start * (1 - snapAt(m)) + 1e-6;
 }
 
 /**
@@ -1336,7 +1502,7 @@ export function toothProgress(m: CleanModel, tooth: number): number {
   for (const d of m.tartar) if (d.tooth === tooth) { th += d.hp; th0 += d.hp0; nd++; }
   const wA = start > 0.5 ? 1 : 0, wT = th0 > 0 ? 0.5 * nd : 0;
   if (wA + wT <= 0) return 1;
-  const area = wA ? clamp((1 - (p + s) / start) / (1 - RATES.snapLeft), 0, 1) : 1;
+  const area = wA ? clamp((1 - (p + s) / start) / snapAt(m), 0, 1) : 1;
   const tart = th0 > 0 ? clamp(1 - th / th0, 0, 1) : 1;
   return (wA * area + wT * tart) / (wA + wT);
 }
@@ -1577,9 +1743,14 @@ export function tickModel(m: CleanModel, inp: TickInput): void {
   if (m.bugs.length) tickBugs(m, dt, inp.tool);
   for (const t of m.teeth) if (t.lampRun > 0 && t.lampFrame !== m.frame) t.lampRun = Math.max(0, t.lampRun - dt * 3);
   for (const pk of m.pockets) if (!pk.opened && pk.open > 0 && pk.held !== m.frame) pk.open = Math.max(0, pk.open - dt * 1.5);
+  const g = m.grill;
+  if (g && g.state === 'in' && g.hold > 0 && g.heldFrame !== m.frame) g.hold = Math.max(0, g.hold - dt * 2);
 
   m.comfort = clamp(c, 0, 100);
   updateObjectives(m);
+  // grillz: the gunk under it is gone, so the grill snaps back in and the diamonds are next
+  if (g && g.state === 'out' && underGrillDone(m)) { g.state = 'back'; m.events.push({ type: 'grillBack' }); }
+  tickCrowd(m, dt);
   m.frame++;
   if (m.comfort <= 0) {
     m.walkout = true;
@@ -1610,12 +1781,58 @@ export function reassure(m: CleanModel): boolean {
   return true;
 }
 
+// ------------------------------------------------------------------ the showcase crowd (DESIGN 11.3)
+
+/** How one clean event moves the crowd meter (0 for events the crowd ignores). */
+export function crowdDelta(e: CleanEvent): number {
+  switch (e.type) {
+    case 'tartarPop': return CROWD.pop;
+    case 'toothSnap': return CROWD.snap;
+    case 'objective': return CROWD.objective;
+    case 'gemDone': return CROWD.gem;
+    case 'grillOut': return CROWD.grillOut;
+    case 'ow': return CROWD.slip;
+    case 'gag': return CROWD.gag;
+    case 'zing': return CROWD.zing;
+    default: return 0;
+  }
+}
+
+/**
+ * The crowd meter (showcase only): every new event since the last tick moves it (pops, snaps, ticks and
+ * buffed gems up; gum slips, gags and zings down), a warm crowd slowly settles back toward the start, and
+ * climbing past a cheer threshold pushes one 'crowdCheer' (re-armed after falling CROWD.rearm below it).
+ * Always within 0..1.
+ */
+export function tickCrowd(m: CleanModel, dt: number): void {
+  if (m.crowd < 0) return;
+  let v = m.crowd;
+  for (const e of m.events) {
+    if (m.crowdSeen.has(e)) continue;
+    m.crowdSeen.add(e);
+    v += crowdDelta(e);
+  }
+  if (v > CROWD.start) v = Math.max(CROWD.start, v - CROWD.decay * dt);
+  v = clamp(v, 0, 1);
+  const was = m.crowd;
+  m.crowd = v;
+  CROWD.cheers.forEach((th, k) => {
+    if (m.crowdArmed[k] && was < th && v >= th) {
+      m.crowdArmed[k] = false;
+      const e: CleanEvent = { type: 'crowdCheer', level: k + 1 };
+      m.crowdSeen.add(e);
+      m.events.push(e);
+    } else if (!m.crowdArmed[k] && v < th - CROWD.rearm) m.crowdArmed[k] = true;
+  });
+}
+
 // ------------------------------------------------------------------ objectives (DESIGN 5.5, 5.8)
 
 const OBJ_LABEL: Record<ObjectiveId, string> = {
   tartar: 'Pop the tartar', barnacles: 'Crack the barnacles', plaque: 'Clear the plaque', stain: 'Polish out the stains',
   debris: 'Floss out the food', bugs: 'Squash the sugar bugs', seal: 'Seal the molars', gel: 'Paint gel on the front teeth',
   cure: 'Whiten with the lamp', gold: 'Buff the gold tooth', pockets: 'Open the gum pockets', hidden: 'Scrape out the hidden tartar',
+  grill: 'Take out the grill', under: 'Clean under the grill', gems: 'Buff the diamonds', others: 'Clean the other marked teeth',
   finish: 'Rinse and suction',
 };
 
@@ -1669,6 +1886,15 @@ function buildObjectives(m: CleanModel): Objective[] {
       if (nTartar) out.push(obj('tartar', OBJ_LABEL.tartar, nTartar));
       if (out.length < 4 && plaque) out.push(obj('plaque', OBJ_LABEL.plaque));
       break;
+    case 'grillz': {
+      // DESIGN 11.6: take it out, clean underneath, buff every diamond, rinse and suction
+      const g = m.grill!;
+      out.push(obj('grill', OBJ_LABEL.grill));
+      if (g.teeth.some((i) => m.teeth[i].problem)) out.push(obj('under', OBJ_LABEL.under));
+      if (g.gems.length) out.push(obj('gems', OBJ_LABEL.gems, g.gems.length));
+      if (m.problem.some((i) => !GRILL_SET.has(i))) out.push(obj('others', OBJ_LABEL.others));
+      break;
+    }
     default:
       if (nTartar) out.push(obj('tartar', OBJ_LABEL.tartar, nTartar));
       if (plaque) out.push(obj('plaque', OBJ_LABEL.plaque));
@@ -1680,8 +1906,9 @@ function buildObjectives(m: CleanModel): Objective[] {
   return out;
 }
 
-/** Area progress of a layer over the problem teeth: removing 80% of a tooth's layer counts as all; a snapped tooth counts as 1. */
+/** Area progress of a layer over the problem teeth: removing snapAt (80% on Standard) of a tooth's layer counts as all; a snapped tooth counts as 1. */
 function areaProgress(m: CleanModel, layer: 'plaque' | 'stain'): number {
+  const k = snapAt(m);
   let w = 0, got = 0;
   for (const i of m.problem) {
     const t = m.teeth[i];
@@ -1690,7 +1917,7 @@ function areaProgress(m: CleanModel, layer: 'plaque' | 'stain'): number {
     let cur = 0;
     const arr = t[layer];
     for (let c = 0; c < CELLS; c++) cur += arr[c];
-    const p = t.snapped ? 1 : clamp((1 - cur / init) / RATES.areaDone, 0, 1);
+    const p = t.snapped ? 1 : clamp((1 - cur / init) / k, 0, 1);
     w += init; got += init * p;
   }
   return w > 0 ? got / w : 1;
@@ -1701,7 +1928,16 @@ export function goldProgress(m: CleanModel): number {
   if (!t) return 1;
   let s = 0, n = 0;
   for (let i = 0; i < CELLS; i++) { if (!t.vis[i]) continue; s += t.polish[i]; n++; }
-  return n ? clamp(s / n / RATES.areaDone, 0, 1) : 1;
+  return n ? clamp(s / n / snapAt(m), 0, 1) : 1;
+}
+
+/** Mean snap progress over some teeth (a snapped tooth counts 1), for the grill case's area objectives. */
+function teethProgress(m: CleanModel, teeth: number[]): number {
+  const list = teeth.filter((i) => m.teeth[i].present && m.teeth[i].problem);
+  if (!list.length) return 1;
+  let s = 0;
+  for (const i of list) s += toothProgress(m, i);
+  return s / list.length;
 }
 
 /** 0..1 how much is left to rinse or suction (paste, whitening gel, resting and floating bits, water). */
@@ -1734,6 +1970,15 @@ function progressOf(m: CleanModel, o: Objective): number {
     case 'plaque': return areaProgress(m, 'plaque');
     case 'stain': return areaProgress(m, 'stain');
     case 'gold': return goldProgress(m);
+    case 'grill': return m.grill && m.grill.state !== 'in' ? 1 : 0;
+    case 'under': {
+      const g = m.grill!;
+      if (g.state === 'back') return 1;
+      // while the grill is on, nothing under it can be touched: the row reads 0 until it comes out
+      return g.state === 'in' ? 0 : Math.min(underGrillDone(m) ? 1 : 0.99, teethProgress(m, g.teeth));
+    }
+    case 'gems': return countDone(m.grill ? m.grill.gems.filter((x) => x.done).length : 0);
+    case 'others': return teethProgress(m, m.problem.filter((i) => !GRILL_SET.has(i)));
     case 'cure': {
       const s0 = m.setup.special?.startShade || 12;
       const tgt = Math.max(1, m.setup.special?.targetShade || 1);
@@ -1801,8 +2046,18 @@ export function cleanScore(m: CleanModel): number {
   return s / m.objectives.length;
 }
 
+/** Stars without difficulty rules (the v3 thresholds): starsWith from core/stars with no shift and no time limit. */
 export function starsFor(quality: number): number {
-  return quality >= 0.92 ? 5 : quality >= 0.8 ? 4 : quality >= 0.65 ? 3 : quality >= 0.45 ? 2 : 1;
+  return starsWith(quality, null);
+}
+
+/**
+ * The stars this clean would get if it ended now: starsWith(quality, setup.rules, seconds, par) from core/stars,
+ * the same function the sim scores with, so the live ring and the result can never disagree.
+ */
+export function liveStars(m: CleanModel, seconds: number): number {
+  if (m.walkout) return 1;
+  return starsWith(qualityFor(cleanScore(m), m.comfort, false), m.setup.rules, seconds, m.setup.parSeconds);
 }
 
 export function qualityFor(clean: number, comfort: number, walkout: boolean): number {
@@ -1810,9 +2065,11 @@ export function qualityFor(clean: number, comfort: number, walkout: boolean): nu
   return walkout ? Math.min(q, 0.25) : q;
 }
 
-export const CASE_PAR_EXTRA: Record<CaseType, number> = { routine: 0, whitening: 25, candy: 10, braces: 15, pirate: 20, deep: 25 };
+export const CASE_PAR_EXTRA: Record<CaseType, number> = { routine: 0, whitening: 25, candy: 10, braces: 15, pirate: 20, deep: 25, grillz: 20 };
+/** Grill Glow-Up: par seconds per diamond to buff (DESIGN 11.6). */
+export const PAR_PER_GEM = 2.5;
 
-/** par = (20 + 2.6*tartarHp + 5*problemTeeth + 4*debris + case extra) * parMult (DESIGN 5.8). */
+/** par = (20 + 2.6*tartarHp + 5*problemTeeth + 4*debris + case extra + 2.5*gems) * parMult (DESIGN 5.8, 11.6). */
 export function parFor(setup: Pick<CleanSetup, 'dirt' | 'mods'> & Partial<Pick<CleanSetup, 'caseType' | 'special' | 'problemTeeth'>>): number {
   const d = setup.dirt;
   const sp = setup.special;
@@ -1823,7 +2080,8 @@ export function parFor(setup: Pick<CleanSetup, 'dirt' | 'mods'> & Partial<Pick<C
   let debris = d.debrisCount;
   if (c === 'pirate') debris += (sp?.seaweed ?? 0) + (sp?.treasure ? 1 : 0);
   const n = setup.problemTeeth?.length ?? 0;
-  return (20 + 2.6 * hp + 5 * n + 4 * debris + CASE_PAR_EXTRA[c]) * setup.mods.parMult;
+  const gems = c === 'grillz' ? (sp?.grillGems ?? 0) : 0;
+  return (20 + 2.6 * hp + 5 * n + 4 * debris + (CASE_PAR_EXTRA[c] ?? 0) + PAR_PER_GEM * gems) * setup.mods.parMult;
 }
 
 /** Is the bonus met right now (seconds = clean time so far)? null bonus counts as met. */
@@ -1853,7 +2111,8 @@ export function scoreClean(m: CleanModel, quit: CleanResult['quit'], seconds: nu
     clean: f.clean,
     comfort: m.comfort,
     quality,
-    stars: walkout ? 1 : starsFor(quality),
+    // the same function (and the same rules) the sim scores the clean with
+    stars: walkout ? 1 : starsWith(quality, m.setup.rules, seconds, m.setup.parSeconds),
     seconds,
     chunks: m.chunks,
     bestCombo: m.bestCombo,
@@ -1879,6 +2138,8 @@ export function scoreClean(m: CleanModel, quit: CleanResult['quit'], seconds: nu
  */
 export function cheat(m: CleanModel, frac: number): void {
   const f = clamp(frac, 0, 1);
+  const g = m.grill;
+  if (g && g.state === 'in' && f > 0) { g.state = 'out'; g.hold = 0; m.events.push({ type: 'grillOut' }); }
   const closed = m.pockets.filter((p) => !p.opened);
   for (const pk of closed.slice(0, f >= 1 ? closed.length : Math.round(closed.length * f))) {
     pk.open = 1; pk.opened = true;
@@ -1909,7 +2170,14 @@ export function cheat(m: CleanModel, frac: number): void {
   // gel, sealant and shade
   const gt = m.teeth.filter((t) => (t.gelTarget || t.sealTarget) && !t.gelled && t.present);
   const nG = f >= 1 ? gt.length : Math.round(gt.length * f);
-  for (let k = 0; k < nG; k++) { gt[k].gelled = true; m.events.push({ type: 'gelDone', tooth: gt[k].index, seal: gt[k].sealTarget }); }
+  for (let k = 0; k < nG; k++) {
+    const t = gt[k];
+    t.gelled = true;
+    // paint the whitening coat too, so the outline and the lamp agree with the checklist
+    if (t.gelTarget) for (let i = 0; i < CELLS; i++) if (gelFaceCell(t, i)) t.gel[i] = 1;
+    t.changed = true;
+    m.events.push({ type: 'gelDone', tooth: t.index, seal: t.sealTarget });
+  }
   if (m.caseType === 'whitening') {
     const s0 = m.setup.special?.startShade || 12;
     const tgt = Math.max(1, m.setup.special?.targetShade || 1);
@@ -1929,6 +2197,15 @@ export function cheat(m: CleanModel, frac: number): void {
   m.water *= 1 - f;
   if (f > 0) m.messEver = true;
   for (const i of m.problem) checkSnap(m, i);
+  if (g && g.state === 'out' && underGrillDone(m)) { g.state = 'back'; m.events.push({ type: 'grillBack' }); }
+  if (g && g.state === 'back') {
+    const open = g.gems.filter((x) => !x.done);
+    const nGem = f >= 1 ? open.length : Math.round(open.length * f);
+    for (let k = 0; k < nGem; k++) {
+      open[k].shine = 1; open[k].done = true;
+      m.events.push({ type: 'gemDone', gem: open[k], n: g.gems.filter((x) => x.done).length });
+    }
+  }
   const gold = m.teeth.find((t) => t.gold);
   if (gold && !gold.goldShine && goldProgress(m) >= 1) { gold.goldShine = true; m.events.push({ type: 'goldShine', tooth: gold.index }); }
   updateObjectives(m);

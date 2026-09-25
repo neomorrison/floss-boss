@@ -21,7 +21,7 @@ describe('setup builder', () => {
 
   it('builds a valid setup for every archetype and case, par per DESIGN 5.8', () => {
     for (const a of ['mannequin', ...PATIENT_ARCHETYPES] as const) {
-      for (const c of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep'] as CaseType[]) {
+      for (const c of ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep', 'grillz'] as CaseType[]) {
         const s = buildSetup({ archetype: a, caseType: c, seed: 99, level: 3 });
         expect(s.patient.archetype).toBe(a);
         expect(s.caseType).toBe(c);

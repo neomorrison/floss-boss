@@ -1,13 +1,14 @@
 // Builds a CleanSetup from simple options, following the spawn contract in DESIGN 5.5. Used by the clean
 // harness and tests (the game builds its own setups in the sim). Pure: no DOM.
 import type {
-  ArchetypeId, BonusId, CaseSpecial, CaseType, CleanModifiers, CleanSetup, DirtProfile, ExtraId, PatientTraits, ServiceId, SkillId, ToolLoadout, TwistId,
+  ArchetypeId, BonusId, CaseSpecial, CaseType, CleanModifiers, CleanSetup, Difficulty, DirtProfile, ExtraId, PatientTraits, ServiceId, SkillId, ToolLoadout, TwistId,
 } from '../core/types';
 import { ARCHETYPES } from '../data/patients';
 import { problemToothCount } from '../data/cases';
+import { DIFFICULTIES } from '../data/difficulty';
 import { TEETH_PER_ARCH } from '../core/mouth';
 import { clamp, makeRng, type Rng } from '../core/rng';
-import { parFor } from './dirt';
+import { GRILL_TEETH, parFor } from './dirt';
 
 export const DEFAULT_MODS: CleanModifiers = {
   gumDamage: 1, scalerPower: 1, polishRadius: 1, polishSpeed: 1, eagleEye: false,
@@ -32,8 +33,25 @@ export function modsFromSkills(skills: SkillId[]): CleanModifiers {
 
 export const NO_SPECIAL: CaseSpecial = {
   goldTooth: null, braces: false, startShade: 0, targetShade: 0, sugarBugs: 0, sealants: 0,
-  pockets: 0, treasure: false, barnacles: 0, seaweed: 0,
+  pockets: 0, treasure: false, barnacles: 0, seaweed: 0, grillGems: 0, showcase: false,
 };
+
+/** Rules without difficulty (the v3 feel): snap at 80%, no star shift, no time limit on 5 stars. */
+export const NO_RULES: CleanSetup['rules'] = { snapAt: 0.8, starShift: 0, fiveStarPar: 99 };
+
+/**
+ * The clean rules of a difficulty for a title `titlesAbove` steps above Staff Hygienist (DESIGN 11.5), the way
+ * the sim's cleanRules builds them. For the harness and tests; the game gets its rules from the sim.
+ */
+export function rulesFor(difficulty: Difficulty, titlesAbove = 0): CleanSetup['rules'] {
+  const d = DIFFICULTIES[difficulty] ?? DIFFICULTIES.standard;
+  const shift = Math.min(d.starShiftCap, d.starShiftPerTitle * Math.max(0, titlesAbove));
+  return { snapAt: d.snapAt, starShift: Math.round(shift * 1000) / 1000, fiveStarPar: d.fiveStarPar };
+}
+
+/** Grill gems: 6 to 10 on a normal visit, 12 at the Golden Molar Gala showcase (DESIGN 11.6). */
+export const GRILL_GEMS: [number, number] = [6, 10];
+export const SHOWCASE_GEMS = 12;
 
 export interface SetupOptions {
   archetype?: ArchetypeId;
@@ -50,10 +68,16 @@ export interface SetupOptions {
   skills?: SkillId[];
   service?: ServiceId;
   name?: string;
+  /** grillz: diamonds on the grill (default: 6 to 10 from the seed, 12 on the showcase). */
+  gems?: number;
+  /** grillz: the Golden Molar Gala showcase (on stage, crowd meter, 12 gems). */
+  showcase?: boolean;
+  /** Difficulty rules (default NO_RULES: snap at 80%, v3 stars). */
+  rules?: CleanSetup['rules'];
 }
 
 const DEFAULT_ARCHETYPE: Record<CaseType, ArchetypeId> = {
-  routine: 'regular', candy: 'kid', whitening: 'coffee', braces: 'athlete', pirate: 'pirate', deep: 'senior',
+  routine: 'regular', candy: 'kid', whitening: 'coffee', braces: 'athlete', pirate: 'pirate', deep: 'senior', grillz: 'rapper',
 };
 
 /** Pick `n` present teeth from `pool`, spread over both arches. */
@@ -71,7 +95,7 @@ function pickTeeth(rng: Rng, pool: number[], n: number): number[] {
 }
 
 /** The spawn contract of DESIGN 5.5 as a pure function (the sim does the same for real patients). */
-export function caseSpawn(caseType: CaseType, level: number, archetype: ArchetypeId, missing: number[], rng: Rng, tutorial = false): {
+export function caseSpawn(caseType: CaseType, level: number, archetype: ArchetypeId, missing: number[], rng: Rng, tutorial = false, grill: { gems?: number; showcase?: boolean } = {}): {
   dirt: DirtProfile; problemTeeth: number[]; special: CaseSpecial;
 } {
   const L = Math.max(1, level);
@@ -113,6 +137,15 @@ export function caseSpawn(caseType: CaseType, level: number, archetype: Archetyp
       special.seaweed = rng.int(2, 3);
       special.treasure = rng.chance(0.7);
       special.startShade = 9;
+      break;
+    }
+    case 'grillz': {
+      // the upper front six sit under the grill and are always marked; the rest of the count spreads elsewhere
+      const under = GRILL_TEETH.filter(present);
+      problemTeeth = [...under, ...pickTeeth(rng, all.filter((i) => !under.includes(i)), Math.max(0, n - under.length))].sort((x, y) => x - y);
+      dirt = { tartarCount: rng.int(2, 4), tartarSize: 1.1, plaque: 0.8, stain: 0.3, debrisCount: 1 };
+      special.showcase = !!grill.showcase;
+      special.grillGems = clamp(Math.round(grill.gems ?? (grill.showcase ? SHOWCASE_GEMS : rng.int(GRILL_GEMS[0], GRILL_GEMS[1]))), 0, 12);
       break;
     }
     case 'deep':
@@ -164,7 +197,7 @@ export function buildSetup(o: SetupOptions = {}): CleanSetup {
     if (!missing.includes(t)) missing.push(t);
   }
   const mods = modsFromSkills(o.skills ?? []);
-  const spawn = caseSpawn(caseType, o.level ?? 1, archetype, missing, rng, !!o.tutorial);
+  const spawn = caseSpawn(caseType, o.level ?? 1, archetype, missing, rng, !!o.tutorial, { gems: o.gems, showcase: o.showcase });
   const first = o.name ?? a.firstNames[rng.int(0, a.firstNames.length - 1)];
   const setup: CleanSetup = {
     seed,
@@ -189,6 +222,7 @@ export function buildSetup(o: SetupOptions = {}): CleanSetup {
     tutorial: !!o.tutorial,
     parSeconds: 0,
     lines: a.lines.slice(),
+    rules: { ...(o.rules ?? NO_RULES) },
   };
   setup.parSeconds = Math.round(parFor(setup));
   return setup;

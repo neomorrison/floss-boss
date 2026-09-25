@@ -12,8 +12,9 @@ import { toolTier } from '../data/tools';
 import { audio, type LoopHandle } from '../audio';
 import {
   applyGel, applyLamp, gelAllowed, lampTeeth, applyPocket, applyPolisher, applyRinse, applyScaler, applySuction, applyWaterFloss, bitsLeft, bonusState, cellCenterU,
-  cellCenterV, cheat, cleanScore, createModel, flossStroke, gelCoverage, goldProgress, meanShade, messState, reassure, scoreClean, tickModel,
-  lastBits, toothBlocked, toothDirtLeft, twistList, wrapRate, type CleanEvent, type CleanModel, type Debris, type FlossTarget,
+  cellCenterV, cheat, cleanScore, createModel, flossStroke, gelCoverage, gelNeed, gelReady, goldProgress, meanShade, messState, reassure, scoreClean, tickModel,
+  lastBits, toothBlocked, toothDirtLeft, twistList, wrapRate, applyGemBuff, applyGrillHold, liveStars, snapAt, GRILL_TEETH,
+  type CleanEvent, type CleanModel, type Debris, type FlossTarget,
 } from './dirt';
 import { flossHook, flossMove, flossRelease, flossTick, FLOSS, newFloss, type FlossEvent, type FlossState } from './floss';
 import { GEL_PURPLE, MouthScene, makeHit, type Hit, type Models } from './scene';
@@ -150,6 +151,11 @@ export class CleanController {
   private disclose = false;
   private useOut = { working: false, molar: false, gum: false, gumRisk: 0, scaling: false };
   private toolAt = { tooth: -1, u: 0, v: 0 };
+  // grillz
+  private grillHeld = false;       // the pointer held the grill this frame (the fill ring shows)
+  private grillRing = false;
+  private gleamDone = false;
+  private buffSfxT = 0;
 
   constructor(private container: HTMLElement, private setup: CleanSetup, resolve: (r: CleanResult) => void) {
     this.resolveDone = resolve;
@@ -185,6 +191,9 @@ export class CleanController {
     this.hud.setObjectives(this.model.objectives);
     if (setup.bonus) this.hud.setBonus('open');
     if (this.model.caseType === 'whitening') this.hud.setShade(meanShade(this.model));
+    if (this.model.grill) this.hud.setGrillMap(this.model.grill.state === 'in');
+    if (this.model.crowd >= 0) this.hud.setCrowd(this.model.crowd);
+    this.hud.setStars(liveStars(this.model, 0));
     this.hud.loading(true);
     this.installDebug();
     this.init().catch((e) => {
@@ -211,6 +220,7 @@ export class CleanController {
       lowQuality: low, headlamp: this.setup.tools.extras.includes('headlamp'), procedural: cleanOptions.procedural,
       slots: this.slots, slotModels,
     });
+    this.scene.onGrillLand = (where) => this.grillLanded(where);
     this.scene.shared.uDisclose.value = this.disclose ? 1 : 0;
     this.scene.shared.uPlaqueBoost.value = this.setup.tools.extras.includes('headlamp') ? 1 : 0;
     if (this.setup.tools.extras.includes('loupes')) this.cam.minDist = 3.8;
@@ -238,6 +248,8 @@ export class CleanController {
     if (this.disposed) return;
     this.introPaused = false;
     if (this.setup.patient.archetype === 'pirate') this.sfx('arr', 0.8);
+    if (this.model.grill?.state === 'in') this.hud.tip('Hold on the grill to take it out', 4200);
+    if (this.model.crowd >= 0) this.sfx('crowd_cheer', 0.35, 0.9);
     window.setTimeout(() => { if (!this.disposed && !this.finished) this.hud.say(this.greeting(), 2400); }, 400);
   }
 
@@ -288,6 +300,32 @@ export class CleanController {
       if (bottom > top) sy = THREE.MathUtils.clamp((top + bottom) / 2 - h / 2, -h * 0.12, h * 0.12);
     }
     this.cam.setShift(-sx, -sy);
+    this.placeTray();
+  }
+
+  /** grillz: park the grill tray in a free spot of the view (under the case card, above the tool bar). */
+  private placeTray() {
+    const sc = this.scene;
+    if (!sc || !this.model.grill) return;
+    const host = this.root.getBoundingClientRect();
+    const w = this.width, h = this.height;
+    const caseR = this.hud.caseEl.getBoundingClientRect();
+    const bottomTop = (this.root.querySelector('.fbc-bottom') as HTMLElement | null)?.getBoundingClientRect().top ?? host.bottom;
+    const bar = bottomTop - host.top;
+    let x: number, y: number;
+    if (w / h > 1.25) {
+      x = caseR.left - host.left + 124;
+      y = THREE.MathUtils.clamp((caseR.bottom - host.top + bar) / 2, caseR.bottom - host.top + 80, bar - 70);
+    } else {
+      // portrait: on the left under the top cards (the map and views sit above the tool bar)
+      const tl = (this.root.querySelector('.fbc-top-left') as HTMLElement).getBoundingClientRect();
+      const phone = w < 560;
+      const top = Math.max(tl.bottom, phone ? caseR.bottom : tl.bottom) - host.top;
+      x = w * (phone ? 0.16 : 0.2);
+      y = Math.min(bar - 90, top + (phone ? 58 : 110));
+    }
+    sc.trayNdc.set((x / w) * 2 - 1, -((y / h) * 2 - 1));
+    sc.trayScale = THREE.MathUtils.clamp((w / h) / 1.3, 0.5, 1);
   }
 
   private on(t: EventTarget, type: string, fn: EventListener, opts?: AddEventListenerOptions) {
@@ -323,7 +361,17 @@ export class CleanController {
   private ndcX(x: number) { return (x / this.width) * 2 - 1; }
   private ndcY(y: number) { return -(y / this.height) * 2 + 1; }
   private pickAt(x: number, y: number, slot: SlotId | null): Hit {
-    return this.scene!.pick(this.ndcX(x), this.ndcY(y), this.cam.camera, this.hit, slot === 'suction' || slot === 'rinse');
+    const sc = this.scene!;
+    const hit = sc.pick(this.ndcX(x), this.ndcY(y), this.cam.camera, this.hit, slot === 'suction' || slot === 'rinse');
+    // grab assist: while the grill is on, a press on a tooth under it or in a gap of the band takes the grill
+    const g = this.model.grill;
+    if (g && g.state === 'in' && hit.kind !== 'grill' && hit.kind !== 'none' && hit.kind !== 'face' && slot !== 'rinse' && slot !== 'suction'
+      && ((hit.kind === 'tooth' && GRILL_TEETH.includes(hit.tooth)) || sc.grillUnder(this.ndcX(x), this.ndcY(y), this.cam.camera))) {
+      hit.kind = 'grill';
+      hit.gem = -1;
+      hit.tooth = -1;
+    }
+    return hit;
   }
 
   private onDown(e: PointerEvent) {
@@ -342,16 +390,17 @@ export class CleanController {
     this.hoverX = p.x; this.hoverY = p.y - off; this.hoverIn = true;
     if (e.button === 2 || e.button === 1) { this.mode = 'orbit'; return; }
     const slot = this.slot;
-    if (!slot) { this.mode = 'orbit'; return; }
     const hit = this.pickAt(p.x, p.y - off, slot);
     const k = hit.kind;
+    // an empty hand only takes the grill out; anything else orbits
+    if (!slot && k !== 'grill') { this.mode = 'orbit'; return; }
     if (k === 'none' || k === 'face') { this.mode = 'orbit'; return; }
     this.mode = 'tool';
     this.toolPtr = e.pointerId;
     this.lastTooth = -1;
     this.strokeAcc = 0;
     this.lastMoveT = performance.now();
-    if (slot === 'floss' && this.setup.tools.floss < 3) this.tryHook(p.x, p.y - off, hit);
+    if (slot === 'floss' && this.setup.tools.floss < 3 && k !== 'grill') this.tryHook(p.x, p.y - off, hit);
   }
 
   private onMove(e: PointerEvent) {
@@ -551,9 +600,10 @@ export class CleanController {
     this.ptrSpeed *= Math.exp(-dt * 10);
     this.toolAt.tooth = -1;
 
+    this.grillHeld = false;
     if (running) {
       this.elapsed += dt;
-      if (this.mode === 'tool' && this.slot && this.model.jawClosed <= 0) this.useTool(simDt);
+      if (this.mode === 'tool' && (this.slot || this.model.grill) && this.model.jawClosed <= 0) this.useTool(simDt);
       else this.toolTouching = false;
       if (this.slot === 'floss' && this.fl.phase !== 'idle') this.flossFrame(dt);
       const mods = this.setup.tools;
@@ -613,6 +663,13 @@ export class CleanController {
     this.updateMarkers(dt);
     this.poseTool(dt);
     this.cam.update(dt, this.settings.reducedMotion);
+    if (m.grill) {
+      this.cam.camera.updateMatrixWorld();
+      sc.updateGrill(simDt, this.elapsed, this.cam.camera);
+      // the hold ring on the grill shows only while it is held
+      if (this.grillRing && !this.grillHeld) { this.grillRing = false; this.hud.setThread(0, 0, -1); }
+    }
+    if (m.crowd >= 0) this.hud.setCrowd(m.crowd);
 
     // HUD (cheap updates every frame, heavier ones throttled)
     this.hud.setTimer(this.elapsed);
@@ -651,6 +708,8 @@ export class CleanController {
     const allDone = m.objectives.every((o) => o.done);
     const ready = this.tut >= 0 ? clean >= 0.7 : allDone;
     this.hud.setClean(clean, ready);
+    // the stars it would get now: the same function and rules as the result and the sim
+    this.hud.setStars(liveStars(m, this.elapsed));
     if (allDone && !this.readyGlow) { this.readyGlow = true; if (!this.setup.tutorial) this.hud.showCombo('All done'); }
     this.hud.setObjectives(m.objectives);
     let t = 0, d = 0;
@@ -676,15 +735,18 @@ export class CleanController {
     this.hud.setDozing(m.dozing);
   }
 
-  /** Whitening: the front teeth that still need gel glow purple (brighter with the gel brush in hand) and are marked on the mini-map. */
+  /**
+   * Whitening: the front teeth that still need gel glow purple (brighter with the gel brush in hand) and are
+   * marked on the mini-map. One threshold (gelReady) decides the outline, the checklist and the lamp; a partial
+   * coat dims the outline as it grows (gelNeed).
+   */
   private refreshGelNeed() {
     const m = this.model;
     if (m.caseType !== 'whitening') return;
     const k = this.slot === 'gel' ? 1 : 0.45;
     for (let i = 0; i < TOOTH_COUNT; i++) {
-      const t = m.teeth[i];
-      const need = t.present && t.gelTarget && !t.gelled ? 1 : 0;
-      this.gelNeed[i] = need;
+      const need = gelNeed(m, i);
+      this.gelNeed[i] = need > 0 ? 1 : 0;
       this.scene?.setGelNeed(i, need * k);
     }
     this.hud.setGelMap(this.gelNeed);
@@ -757,13 +819,16 @@ export class CleanController {
 
   private useTool(dt: number) {
     const sc = this.scene!;
-    const slot = this.slot!;
     const out = this.useOut;
     const ptr = this.ptrs.get(this.toolPtr);
     if (!ptr) return;
-    const hit = this.pickAt(ptr.x, ptr.y - ptr.off, slot);
+    const hit = this.pickAt(ptr.x, ptr.y - ptr.off, this.slot);
     this.toolTouching = hit.kind !== 'none' && hit.kind !== 'face';
     const m = this.model;
+    // grillz: the grill itself (rinse and suction just spray and slurp over it)
+    if (hit.kind === 'grill' && this.slot !== 'rinse' && this.slot !== 'suction') { this.useGrill(hit, dt); return; }
+    if (!this.slot) return;
+    const slot = this.slot;
     // gum-edge assist: the polisher cup reaches plaque right at the gumline (the gum is soft, only scalers slip)
     if (slot === 'polisher' && hit.kind === 'gum') {
       const ge = sc.gumEdgeTooth(hit.point);
@@ -918,7 +983,7 @@ export class CleanController {
           sc.setLamp(hit.point, hit.tooth, this.toolNozzleWorld(this.v4), beam);
           this.loopVol.lamp_loop = 0.45;
           const t = m.teeth[hit.tooth];
-          if (t.gelTarget && gelCoverage(m, hit.tooth) < 0.45) this.hint('gel', 'Paint gel first', hit.point);
+          if (t.gelTarget && !gelReady(m, hit.tooth)) this.hint('gel', 'Paint gel first', hit.point);
           else if (!lampTeeth(hit.tooth, beam).some((n) => m.teeth[n].gelTarget)) this.hint('lampFront', 'Front teeth only', hit.point);
         } else this.loopVol.lamp_loop = 0.15;
         break;
@@ -935,6 +1000,92 @@ export class CleanController {
     this.sfx('coin_clink', 0.3, 1.7 + Math.random() * 0.2);
     this.scene!.fx.sparkle(this.rootLocal(hit.point, this.v2), 2, 0.08, 0.14, '#FFFFFF', 0.3);
     this.hint('bracket', 'Brackets block that spot', hit.point);
+  }
+
+  // ---------------------------------------------------------------- grillz (DESIGN 11.6)
+
+  /** A pointer held on the grill: hold to take it out (any tool or an empty hand); once it is back in, the polisher buffs the diamonds. */
+  private useGrill(hit: Hit, dt: number) {
+    const sc = this.scene!;
+    const m = this.model;
+    const g = m.grill;
+    const out = this.useOut;
+    if (!g || !sc.grillInMouth) return;
+    if (g.state === 'in') {
+      const f = applyGrillHold(m, dt);
+      if (f < 0) return;
+      out.working = true;
+      this.grillHeld = true;
+      this.grillRing = true;
+      this.project(hit.point, this.s2);
+      this.hud.setThread(this.s2.x, this.s2.y, f);
+      if (Math.random() < dt * 6) sc.fx.sparkle(this.rootLocal(hit.point, this.v2), 1, 0.15, 0.2, '#FFF6D0', 0.5);
+      return;
+    }
+    if (g.state !== 'back') return;
+    if (this.slot === 'polisher') {
+      const id = hit.gem >= 0 ? hit.gem : sc.gemNear(hit.point, 0.55);
+      const moving = Math.min(1, this.ptrSpeed / 350);
+      this.loopVol.polish_loop = 0.4 + 0.25 * moving;
+      if (id < 0) return;
+      const added = applyGemBuff(m, id, dt, moving);
+      out.working = true;
+      if (added > 0) {
+        const w = sc.gemWorld(id, this.v1);
+        if (w && Math.random() < dt * 14) sc.fx.sparkle(this.rootLocal(w, this.v2), 1, 0.2, 0.22, '#E8F6FF', 0.6);
+        this.buffSfxT -= dt;
+        if (this.buffSfxT <= 0) { this.buffSfxT = 0.28; this.sfx('sparkle', 0.18, 1.5 + Math.random() * 0.3); }
+      }
+      return;
+    }
+    // other tools only clink on the metal
+    if (this.slot) {
+      if (m.time - this.clinkT >= 0.22) {
+        this.clinkT = m.time;
+        this.sfx('coin_clink', 0.3, 1.8 + Math.random() * 0.2);
+        sc.fx.sparkle(this.rootLocal(hit.point, this.v2), 2, 0.08, 0.14, '#FFFFFF', 0.3);
+      }
+      this.hint('gems', 'Buff the diamonds with the polisher', hit.point);
+    }
+  }
+
+  /** The grill landed on the tray, or clicked back onto the teeth. */
+  private grillLanded(where: 'tray' | 'mouth') {
+    if (this.disposed || this.finished) return;
+    if (where === 'tray') { this.sfx('coin_clink', 0.55, 0.75); return; }
+    this.sfx('grill_pop', 0.7, 1.25);
+    this.sfx('bling', 0.55, 1.1);
+    const w = this.scene?.grillWorld(this.v1);
+    if (w) { this.project(w, this.s1); this.hud.float(this.s1.x, this.s1.y - 30, 'Back in', 'gold'); }
+    if (this.model.grill?.gems.some((x) => !x.done)) this.hud.tip('Polish every diamond until it glints', 3600);
+  }
+
+  /** Every diamond buffed: the grill gleams, a sparkle sweep runs across the stones and the star says ayy. */
+  private grillFinale() {
+    const sc = this.scene;
+    const g = this.model.grill;
+    if (!sc || !g || this.gleamDone) return;
+    this.gleamDone = true;
+    sc.grillGleam();
+    this.hud.showCombo('Iced out');
+    this.wowUntil = this.model.time + 2.2;
+    this.vibe(20);
+    const order = g.gems.map((x) => ({ id: x.id, x: sc.gemWorld(x.id, new THREE.Vector3())?.x ?? 0 })).sort((a, b) => a.x - b.x);
+    order.forEach((o, k) => {
+      window.setTimeout(() => {
+        if (this.disposed || !this.scene) return;
+        this.scene.gemPop(o.id);
+        const w = this.scene.gemWorld(o.id, this.v1);
+        if (w) this.scene.fx.sparkle(this.rootLocal(w, this.v3), 6, 0.35, 0.34, k % 2 ? '#FFF6D0' : '#E8F6FF', 1.2);
+        if (k % 2 === 0) this.sfx('sparkle', 0.4, 1 + k * 0.06);
+      }, 70 * k);
+    });
+    window.setTimeout(() => {
+      if (this.disposed) return;
+      this.sfx('ayy', 0.9);
+      this.sfx('bling', 0.6, 1.3);
+      if (!this.finished) this.hud.say('Ayy! Look at that ice.', 2000);
+    }, 70 * order.length + 60);
   }
 
   /** A short floating hint, at most once per 5 s per kind. */
@@ -1063,7 +1214,7 @@ export class CleanController {
   private updateMarkers(dt: number) {
     const sc = this.scene!;
     const show = this.slot === 'floss' && !this.finished;
-    if (!show) { sc.setMarkers([], this.elapsed); sc.setFloss(null); this.hud.setThread(0, 0, -1); return; }
+    if (!show) { sc.setMarkers([], this.elapsed); sc.setFloss(null); if (!this.grillHeld) this.hud.setThread(0, 0, -1); return; }
     const targets = this.flossTargets();
     while (this.markerPts.length < targets.length) this.markerPts.push(new THREE.Vector3());
     this.markerClock -= dt;
@@ -1409,6 +1560,53 @@ export class CleanController {
         this.sfx('check', 0.9);
         this.hud.setObjectives(this.model.objectives);
         if (e.obj.id === 'cure') this.hollywood();
+        if (e.obj.id === 'gems') this.grillFinale();
+        break;
+      }
+      case 'grillOut': {
+        sc.grillOut();
+        this.grillRing = false;
+        this.hud.setThread(0, 0, -1);
+        this.releaseTool();
+        this.sfx('grill_pop', 0.95);
+        window.setTimeout(() => { if (!this.disposed) this.sfx('bling', 0.6); }, 120);
+        const w = sc.grillWorld(this.v1);
+        if (w) {
+          sc.fx.sparkle(this.rootLocal(w, this.v3), 18, 0.8, 0.4, '#FFF6D0', 1.2);
+          this.project(w, this.s1);
+          this.hud.float(this.s1.x, this.s1.y - 20, 'Grill out', 'gold');
+        }
+        if (motion) this.cam.shake(0.06, 0.16);
+        this.wowUntil = this.model.time + 1;
+        this.vibe(16);
+        this.hud.setGrillMap(false);
+        this.hud.tip('Clean the teeth that were under the grill', 3600);
+        break;
+      }
+      case 'grillBack': {
+        sc.grillBack();
+        this.releaseTool();
+        this.hud.showCombo('Grill back in');
+        break;
+      }
+      case 'gemDone': {
+        sc.gemPop(e.gem.id);
+        const w = sc.gemWorld(e.gem.id, this.v1);
+        if (w) {
+          sc.fx.sparkle(this.rootLocal(w, this.v3), 12, 0.4, 0.36, '#E8F6FF', 1.3);
+          this.project(w, this.s1);
+          this.hud.float(this.s1.x, this.s1.y - 18, 'Shine', 'gold');
+        }
+        // the bling climbs with every diamond finished this clean
+        const total = Math.max(1, this.model.grill?.gems.length ?? 1);
+        this.sfx('bling', 0.75, 0.85 + 0.75 * ((e.n - 1) / Math.max(1, total - 1)));
+        this.wowUntil = this.model.time + 0.8;
+        this.vibe(10);
+        break;
+      }
+      case 'crowdCheer': {
+        this.sfx('crowd_cheer', 0.25 + 0.1 * e.level, 0.95 + 0.05 * e.level);
+        this.hud.crowdCheer();
         break;
       }
       case 'ow': {
@@ -1619,6 +1817,11 @@ export class CleanController {
     this.endTutorial();
     const result = scoreClean(this.model, quit, this.elapsed);
     if (quit === 'abort' || !this.scene) { this.resolve(result); return; }
+    // the gala: 4 stars or more and the hall erupts
+    if (this.setup.special?.showcase && result.stars >= 4) {
+      this.sfx('fanfare_gala', 1);
+      window.setTimeout(() => { if (!this.disposed) this.sfx('crowd_cheer', 0.85); }, 250);
+    }
     // the after shot is rendered on the next frame, then the finale (if perfect) or the result
     this.needAfter = result;
   }
@@ -1634,7 +1837,9 @@ export class CleanController {
     this.cam.view('front');
     this.hud.setView('front');
     this.sfx('perfect', 0.9);
-    this.hud.finale('Sparkling Smile', 'Perfect clean');
+    const grill = this.model.caseType === 'grillz';
+    this.hud.finale(this.setup.special?.showcase ? 'Showstopper' : grill ? 'Iced Out' : 'Sparkling Smile', 'Perfect clean');
+    if (grill) { sc.grillGleam(); window.setTimeout(() => { if (!this.disposed) this.sfx('ayy', 0.8); }, 500); }
     let n = 0;
     const burst = () => {
       if (this.disposed) return;
@@ -1691,6 +1896,13 @@ export class CleanController {
           combo: m.combo, bestCombo: m.bestCombo, gumHits: m.gumHits, gags: m.gags, doze: +m.doze.toFixed(2),
           floss: { phase: self.fl.phase, s: +self.fl.s.toFixed(3), pressure: +self.fl.pressure.toFixed(2), bend: +self.fl.bend.toFixed(2), strokes: self.fl.strokes, target: self.flAim?.debId ?? null },
           zings: self.zings, ready: !!self.scene, intro: self.introPaused, tutorialStep: self.tut, par: self.setup.parSeconds,
+          rules: self.setup.rules ?? null, snapAt: snapAt(m), stars: liveStars(m, self.elapsed), quality: f.quality,
+          grill: m.grill ? {
+            state: m.grill.state, hold: +m.grill.hold.toFixed(2), inMouth: !!self.scene?.grillInMouth,
+            gems: m.grill.gems.length, gemsDone: m.grill.gems.filter((x) => x.done).length,
+            shine: m.grill.gems.map((x) => +x.shine.toFixed(2)),
+          } : null,
+          crowd: m.crowd >= 0 ? +m.crowd.toFixed(3) : null,
         };
       },
       cheat(fraction: number) { cheat(self.model, fraction); },
@@ -1814,7 +2026,10 @@ export class CleanController {
         const bugs = m.bugs.filter((b) => b.alive).map((b) => { const w = sc.bugWorld(b.id, new THREE.Vector3()); return w ? { id: b.id, tooth: b.tooth, ...P(w) } : null; }).filter(Boolean);
         const pockets = m.pockets.filter((p) => !p.opened).map((p) => { const w = sc.pocketWorld(p.id, new THREE.Vector3()); return w ? { id: p.id, tooth: p.tooth, ...P(w) } : null; }).filter(Boolean);
         const bits = m.bits.filter((b) => b.state !== 'gone').map((b) => { const w = sc.lower.localToWorld(new THREE.Vector3(b.x, b.y, b.z)); return { id: b.id, state: b.state, ...P(w) }; });
-        return { deposits: dep, debris: deb, teeth, bugs, pockets, bits };
+        const gw = m.grill ? sc.grillWorld(new THREE.Vector3()) : null;
+        const grill = gw ? { state: m.grill!.state, inMouth: sc.grillInMouth, ...P(gw) } : null;
+        const gems = m.grill ? m.grill.gems.map((x) => { const w = sc.gemWorld(x.id, new THREE.Vector3()); return w ? { id: x.id, tooth: x.tooth, done: x.done, shine: +x.shine.toFixed(2), ...P(w) } : null; }).filter(Boolean) : [];
+        return { deposits: dep, debris: deb, teeth, bugs, pockets, bits, grill, gems };
       },
     };
   }

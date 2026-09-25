@@ -57,7 +57,7 @@ export const CASES: Record<CaseType, CaseDef> = {
   },
   grillz: {
     id: 'grillz', name: 'Grill Glow-Up', blurb: 'Diamonds up top, plaque underneath.',
-    tip: 'Hold on the grill to take it out, clean underneath, then buff every diamond until it glints. It snaps back in at the end.',
+    tip: 'Hold on the grill to take it out, then clean the teeth under it. The grill snaps back in: buff every diamond until it glints, then rinse and suction.',
     minLevel: 4, payMult: 2.5,
     weight: { rapper: 10 },
     requires: null,

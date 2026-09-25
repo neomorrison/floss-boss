@@ -1,5 +1,9 @@
 // Clean scene test bed. URL params:
-//   case=routine|candy|whitening|braces|pirate|deep   case type (default routine)
+//   case=routine|candy|whitening|braces|pirate|deep|grillz   case type (default routine)
+//   gems=10           grillz: diamonds on the grill (default 6 to 10 from the seed)
+//   showcase=1        grillz: the Golden Molar Gala stage (12 gems, crowd meter, level 8, chatty, comfort 75, spotless)
+//   diff=standard     difficulty rules (relaxed, standard, veteran; default: none, the v3 stars)
+//   titles=3          titles above Staff Hygienist for the star shift (with diff)
 //   lvl=3             player level (problem teeth and amounts, DESIGN 5.5)
 //   tw=chatty,hiccups twists (chatty, fidget, gagger, sensitive, hiccups, sleepy)
 //   bonus=combo       bonus objective (noSlips, fast, combo, spotless, treasure)
@@ -12,12 +16,12 @@
 //   extras=disclosing,loupes    extras owned
 //   gel=1 proc=1 (force procedural models, ignore GLBs) low=1 (low quality)
 import { startClean, preloadClean } from '../src/clean';
-import { buildSetup } from '../src/clean/setup';
+import { buildSetup, rulesFor } from '../src/clean/setup';
 import { cleanOptions } from '../src/clean/session';
 import { audio } from '../src/audio';
 import { getRenderer } from '../src/core/renderer';
 import { loadSettings, saveSettings } from '../src/core/save';
-import type { ArchetypeId, BonusId, CaseType, ExtraId, SkillId, TwistId } from '../src/core/types';
+import type { ArchetypeId, BonusId, CaseType, Difficulty, ExtraId, SkillId, TwistId } from '../src/core/types';
 
 const q = new URLSearchParams(location.search);
 const stage = document.getElementById('stage')!;
@@ -26,17 +30,23 @@ cleanOptions.procedural = q.get('proc') === '1';
 if (q.has('low')) saveSettings({ ...loadSettings(), quality: q.get('low') === '1' ? 'low' : 'high' });
 try { audio.init(); } catch { /* audio module may still be a stub */ }
 
-const CASES: CaseType[] = ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep'];
+const CASES: CaseType[] = ['routine', 'candy', 'whitening', 'braces', 'pirate', 'deep', 'grillz'];
 
 function run(seed: number) {
   result.style.display = 'none';
   const tiers = (q.get('tools') || '1,1,1,1,1').split(',').map((x) => Math.max(1, Number(x) || 1));
   const c = q.get('case') as CaseType | null;
+  const showcase = q.get('showcase') === '1';
+  const caseType: CaseType = showcase ? 'grillz' : c && CASES.includes(c) ? c : 'routine';
+  const diff = q.get('diff') as Difficulty | null;
   const setup = buildSetup({
-    caseType: c && CASES.includes(c) ? c : 'routine',
-    level: Number(q.get('lvl') || 1),
-    twists: (q.get('tw') || '').split(',').filter(Boolean) as TwistId[],
-    bonus: (q.get('bonus') || null) as BonusId | null,
+    caseType,
+    level: Number(q.get('lvl') || (showcase ? 8 : caseType === 'grillz' ? 4 : 1)),
+    twists: (q.get('tw') ?? (showcase ? 'chatty' : '')).split(',').filter(Boolean) as TwistId[],
+    bonus: (q.get('bonus') || (showcase ? 'spotless' : null)) as BonusId | null,
+    gems: q.has('gems') ? Number(q.get('gems')) : undefined,
+    showcase,
+    rules: diff && ['relaxed', 'standard', 'veteran'].includes(diff) ? rulesFor(diff, Number(q.get('titles') || 0)) : undefined,
     firstOfCase: q.get('first') === '1',
     archetype: (q.get('a') || undefined) as ArchetypeId | undefined,
     seed,
@@ -46,6 +56,8 @@ function run(seed: number) {
     skills: (q.get('skills') || '').split(',').filter(Boolean) as SkillId[],
     gel: q.get('gel') === '1',
   });
+  // the gala starts the rap star warmer (DESIGN 11.3: comfort 75)
+  if (showcase) setup.traits = { ...setup.traits, comfortStart: 75 };
   (window as any).__setup = setup;
   (window as any).__result = null;
   const session = startClean(stage, setup);

@@ -10,7 +10,7 @@ import type { ToothKind } from '../core/types';
 import { LOWER_GUM_Y, TEETH_PER_ARCH, TOOTH_DIMS, UPPER_GUM_Y, type ToothPlacement } from '../core/mouth';
 import { makeRng } from '../core/rng';
 import type { CleanModel, Debris, LooseBit, Pocket, SugarBug, TartarDeposit } from './dirt';
-import { lampTeeth, MAX_BITS, sideU } from './dirt';
+import { GEM_TEETH, GRILL_TEETH, lampTeeth, MAX_BITS, MAX_GEMS, sideU } from './dirt';
 import {
   barnacleGeometry, bracketGeometry, cavityGeometry, debrisGeometry, flatRingGeometry, gumGeometry, lipsGeometry, normalizeToothGeometry,
   palateGeometry, pocketGeometry, skinGeometry, skirtGeometry, sugarBugModel, tartarGeometry, throatGeometry, toolModel, toothGeometry,
@@ -25,17 +25,37 @@ import type { SlotId } from './slots';
 
 export type Models = Record<string, THREE.Object3D | null>;
 
-export type HitKind = 'tooth' | 'gum' | 'tongue' | 'water' | 'soft' | 'face' | 'bracket' | 'pocket' | 'none';
+export type HitKind = 'tooth' | 'gum' | 'tongue' | 'water' | 'soft' | 'face' | 'bracket' | 'pocket' | 'grill' | 'none';
 export interface Hit {
   kind: HitKind;
   tooth: number;           // tooth index for 'tooth' and 'bracket' hits
   u: number; v: number;
   pocket: number;          // pocket id for 'pocket' hits
+  gem: number;             // gem id for a 'grill' hit right on a diamond, else -1
   point: THREE.Vector3;    // world
   normal: THREE.Vector3;   // world
   local: THREE.Vector3;    // mouth-root space
 }
-export const makeHit = (): Hit => ({ kind: 'none', tooth: -1, u: 0, v: 0, pocket: -1, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 0, 1), local: new THREE.Vector3() });
+export const makeHit = (): Hit => ({ kind: 'none', tooth: -1, u: 0, v: 0, pocket: -1, gem: -1, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 0, 1), local: new THREE.Vector3() });
+
+interface GemView { id: number; mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial; color: THREE.Color; emissive: THREE.Color; pop: number; phase: number }
+/** grillz: the grill on the teeth, flying to the tray and back (DESIGN 11.6). */
+interface GrillView {
+  holder: THREE.Group;     // moved as one piece (upper arch, scene while flying, tray seat on the tray)
+  pick: THREE.Object3D[];  // the band and the gems
+  gems: Map<number, GemView>;
+  bodyMat: THREE.MeshStandardMaterial | null;   // an owned clone of the band material (for the gleam)
+  center: THREE.Vector3;   // bounding-box centre in holder space
+  mode: 'mouth' | 'lift' | 'toTray' | 'tray' | 'toMouth' | 'press';
+  t: number;
+  from: { p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 };
+  gleam: number;
+  onPick: boolean;
+}
+/** Where the grill rests on the tray (holder scale, the seat tilt). */
+const TRAY_SCALE = 0.35;
+const GEM_ICE = new THREE.Color('#BFE6FF');
+const LIFT = { y: -0.6, z: 1.6 };
 
 export interface ToothView {
   index: number;
@@ -165,6 +185,20 @@ export class MouthScene {
   private splats: { mesh: THREE.Mesh; t: number }[] = [];
   private splatGeo: THREE.BufferGeometry;
   private coinSpin: THREE.Object3D | null = null;
+  // grillz: the grill, the tray it parks on at the side of the view, the tray's own little light
+  private grill: GrillView | null = null;
+  private tray: THREE.Group | null = null;
+  private traySeat: THREE.Group | null = null;
+  private trayShow = 0;
+  private grillCovers = false;
+  /** Where the tray sits on screen (NDC); the controller keeps it clear of the HUD. */
+  readonly trayNdc = new THREE.Vector2(-0.72, -0.3);
+  /** Tray size factor (smaller on narrow portrait screens). */
+  trayScale = 1;
+  /** Called when the grill lands on the tray or clicks back onto the teeth. */
+  onGrillLand: ((where: 'tray' | 'mouth') => void) | null = null;
+  /** Showcase: the stage spotlight on the mouth. */
+  readonly stage: boolean;
   waterLevel = 0;
   jaw = 0;
 
@@ -177,12 +211,17 @@ export class MouthScene {
     this.root.add(this.upper, this.lower);
     const own = <T extends { dispose(): void }>(x: T): T => { this.owned.add(x); return x; };
 
-    // --- lights: soft ambient plus the dental lamp
-    const hemi = new THREE.HemisphereLight('#FFF6EE', '#F7A8B6', 1.1);
+    // --- lights: soft ambient plus the dental lamp (showcase: a dark hall and a warm stage spotlight on the mouth)
+    this.stage = !!model.setup.special?.showcase;
+    const stage = this.stage;
+    if (stage) { s.background = new THREE.Color('#1C0F22'); s.environmentIntensity = 0.32; }
+    const hemi = stage ? new THREE.HemisphereLight('#FFD9B8', '#5A1E3A', 0.42) : new THREE.HemisphereLight('#FFF6EE', '#F7A8B6', 1.1);
     s.add(hemi);
-    this.key = new THREE.SpotLight('#FFF8EC', opts.headlamp ? 3.3 : 2.6, 0, 0.62, 0.75, 0);
-    this.key.position.set(1.2, 6.5, 15);
-    this.key.target.position.set(0, -0.3, 0);
+    this.key = stage
+      ? new THREE.SpotLight('#FFD39A', 5.2, 0, 0.33, 0.62, 0)
+      : new THREE.SpotLight('#FFF8EC', opts.headlamp ? 3.3 : 2.6, 0, 0.62, 0.75, 0);
+    this.key.position.set(stage ? 0.4 : 1.2, stage ? 9 : 6.5, stage ? 14 : 15);
+    this.key.target.position.set(0, stage ? 0.1 : -0.3, 0);
     s.add(this.key, this.key.target);
     if (!opts.lowQuality) {
       this.key.castShadow = true;
@@ -192,9 +231,15 @@ export class MouthScene {
       this.key.shadow.camera.near = 6;
       this.key.shadow.camera.far = 30;
     }
-    const fill = new THREE.DirectionalLight('#FFE4EA', 0.55);
+    const fill = new THREE.DirectionalLight(stage ? '#B98CFF' : '#FFE4EA', stage ? 0.28 : 0.55);
     fill.position.set(-6, -3, 8);
     s.add(fill);
+    if (stage) {
+      // a cool rim from the other side of the stage
+      const rim = new THREE.DirectionalLight('#7FB4FF', 0.35);
+      rim.position.set(8, 2, 6);
+      s.add(rim);
+    }
     const inner = new THREE.PointLight('#FFD9D2', 3.5, 9, 1.6);
     inner.position.set(0, 0, 1.5);
     this.root.add(inner);
@@ -355,6 +400,9 @@ export class MouthScene {
       this.teeth.push({ index: p.index, p, group, flip, mesh, tm, h: dims.h, ring, ringFade: -1, sore, gelShell });
     }
     this.scene.updateMatrixWorld(true);
+
+    // --- grillz: the diamond grill over the upper front six, and the tray it parks on
+    if (model.grill) this.buildGrill(opts.procedural ? null : models.grill_diamond ?? null, own);
 
     // --- tartar deposits and barnacles
     const tartarGeo: THREE.BufferGeometry[] = [];
@@ -690,6 +738,370 @@ export class MouthScene {
     }
   }
 
+  // ---------------------------------------------------------------- grillz (DESIGN 11.6)
+
+  /**
+   * The grill: the grill_diamond GLB at (0, UPPER_GUM_Y, 0) like gum_upper (root mesh 'Grill', 12 gem children
+   * Gem_00..Gem_11 sharing one 'Gem' material, cloned per gem so each can glint on its own; the two metals are
+   * vertex colours, kept), or a procedural platinum band with gold bezels over upper teeth 4 to 9. Only the
+   * model's gems are shown. Plus the tray at the side of the view.
+   */
+  private buildGrill(src: THREE.Object3D | null, own: <T extends { dispose(): void }>(x: T) => T) {
+    const m = this.model;
+    const g = m.grill!;
+    const holder = new THREE.Group();
+    holder.name = 'grill';
+    const gems = new Map<number, GemView>();
+    const pick: THREE.Object3D[] = [];
+    const want = new Map(g.gems.map((x) => [x.slot, x.id]));
+    let bodyMat: THREE.MeshStandardMaterial | null = null;
+    const addGem = (mesh: THREE.Mesh, slot: number, srcMat: THREE.MeshStandardMaterial) => {
+      const id = want.get(slot);
+      if (id === undefined) { mesh.visible = false; return; }
+      const mat = own(srcMat.clone());
+      mesh.material = mat;
+      mesh.castShadow = false;
+      mesh.userData = { kind: 'grill', gem: id };
+      pick.push(mesh);
+      gems.set(id, { id, mesh, mat, color: mat.color.clone(), emissive: mat.emissive.clone(), pop: 0, phase: slot * 1.7 });
+    };
+    const found: { body: THREE.Mesh | null } = { body: null };
+    if (src) {
+      const o = src.clone(true);
+      this.markShared(o);
+      o.position.y = UPPER_GUM_Y;
+      o.traverse((c) => {
+        const mesh = c as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const gm = /^Gem_(\d+)/.exec(c.name);
+        if (gm) { addGem(mesh, Number(gm[1]), mesh.material as THREE.MeshStandardMaterial); return; }
+        if (!found.body || /^Grill$/.test(c.name)) found.body = mesh;
+      });
+      const b = found.body;
+      if (b) {
+        bodyMat = own((b.material as THREE.MeshStandardMaterial).clone());
+        bodyMat.emissive = new THREE.Color('#FFF1C2');
+        bodyMat.emissiveIntensity = 0;
+        b.material = bodyMat;
+        b.castShadow = true;
+        b.userData = { kind: 'grill', gem: -1 };
+        pick.push(b);
+      }
+      holder.add(o);
+    }
+    if (!found.body) {
+      // procedural: a platinum plate on each tooth, gold bezels, a gold bar between the plates, bright gems
+      holder.clear();
+      pick.length = 0;
+      gems.clear();
+      const plat = own(new THREE.MeshStandardMaterial({ color: '#D9DEE3', metalness: 0.85, roughness: 0.22 }));
+      const gold = own(new THREE.MeshStandardMaterial({ color: '#E8B83A', metalness: 0.9, roughness: 0.25 }));
+      bodyMat = plat;
+      plat.emissive = new THREE.Color('#FFF1C2');
+      plat.emissiveIntensity = 0;
+      const gemMat = own(new THREE.MeshStandardMaterial({ color: '#CFEBFF', metalness: 0.05, roughness: 0.06, emissive: '#4A5560', flatShading: true }));
+      const plateGeo = own(new THREE.BoxGeometry(1, 1, 0.07, 1, 1, 1));
+      const bezelGeo = own(new THREE.TorusGeometry(0.1, 0.026, 6, 16));
+      const gemGeo = own(new THREE.OctahedronGeometry(0.1, 0));
+      gemGeo.scale(1, 1, 0.6);
+      const barPts: THREE.Vector3[] = [];
+      const bodyGroup = new THREE.Group();
+      holder.add(bodyGroup);
+      const frame = (tv: ToothView, u: number, v: number, lift: number, target: THREE.Object3D) => {
+        const sp = this.surfacePoint(tv, u, v);
+        target.position.copy(this.upper.worldToLocal(sp.point.clone())).addScaledVector(sp.normal, lift);
+        target.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), sp.normal);
+      };
+      for (const i of GRILL_TEETH) {
+        const tv = this.teeth[i];
+        if (!tv) continue;
+        const plate = new THREE.Mesh(plateGeo, plat);
+        frame(tv, 0.5, 0.48, 0.05, plate);
+        plate.scale.set(tv.p.width * 0.86, tv.h * 0.62, 1);
+        plate.userData = { kind: 'grill', gem: -1 };
+        plate.castShadow = true;
+        bodyGroup.add(plate);
+        pick.push(plate);
+        barPts.push(plate.position.clone().add(new THREE.Vector3(0, -0.05, 0.02)));
+      }
+      if (barPts.length >= 2) {
+        const bar = new THREE.Mesh(own(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(barPts), barPts.length * 6, 0.035, 6, false)), gold);
+        bodyGroup.add(bar);
+      }
+      for (let slot = 0; slot < MAX_GEMS; slot++) {
+        const tv = this.teeth[GEM_TEETH[slot]];
+        if (!tv || !want.has(slot)) continue;
+        const v = slot < 6 ? 0.64 : 0.34;
+        const bezel = new THREE.Mesh(bezelGeo, gold);
+        frame(tv, 0.5, v, 0.1, bezel);
+        bodyGroup.add(bezel);
+        const gem = new THREE.Mesh(gemGeo, gemMat);
+        frame(tv, 0.5, v, 0.13, gem);
+        gem.scale.setScalar(slot < 6 ? 1.15 : 0.85);
+        holder.add(gem);
+        addGem(gem, slot, gemMat);
+      }
+    }
+    this.upper.add(holder);
+    holder.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(holder);
+    const center = holder.worldToLocal(box.getCenter(new THREE.Vector3()));
+    for (const p of pick) this.pickSmall.push(p);
+    this.grill = {
+      holder, pick, gems, bodyMat, center, mode: 'mouth', t: 0,
+      from: { p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3(1, 1, 1) }, gleam: 0, onPick: true,
+    };
+    // the tray: a small steel dish at the side of the view (placed from the camera every frame)
+    const tray = new THREE.Group();
+    tray.name = 'tray';
+    tray.visible = false;
+    // a kidney-ish steel dish seen a little from above: a light floor, a darker lip
+    const dish = new THREE.Mesh(own(new THREE.CylinderGeometry(1, 0.86, 0.16, 48)), own(new THREE.MeshStandardMaterial({ color: '#E3EBF0', metalness: 0.45, roughness: 0.32 })));
+    dish.scale.set(1.12, 1, 0.66);
+    dish.position.set(0, -0.5, 0);
+    dish.rotation.x = 0.78;
+    const rim = new THREE.Mesh(own(new THREE.TorusGeometry(1, 0.07, 10, 48)), own(new THREE.MeshStandardMaterial({ color: '#9FB1BC', metalness: 0.7, roughness: 0.25 })));
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.08;
+    dish.add(rim);
+    const light = new THREE.PointLight('#FFF4E6', 3, 4, 1.5);
+    light.position.set(0.4, 1.2, 1.4);
+    const seat = new THREE.Group();
+    seat.position.set(0, -0.22, 0.2);
+    seat.rotation.x = 0.5;
+    seat.scale.setScalar(TRAY_SCALE);
+    tray.add(dish, light, seat);
+    this.scene.add(tray);
+    this.tray = tray;
+    this.traySeat = seat;
+  }
+
+  /** grillz: the grill comes out (lift, then a flight to the tray). */
+  grillOut() {
+    const gv = this.grill;
+    if (!gv || gv.mode !== 'mouth') return;
+    this.setGrillPick(false);
+    gv.mode = 'lift';
+    gv.t = 0;
+  }
+
+  /** grillz: the grill flies back from the tray and clicks onto the teeth. */
+  grillBack() {
+    const gv = this.grill;
+    if (!gv || !this.traySeat) return;
+    if (gv.mode === 'lift' || gv.mode === 'toTray') this.landOnTray();
+    gv.mode = 'toMouth';
+    gv.t = 0;
+    gv.holder.updateMatrixWorld(true);
+    gv.holder.matrixWorld.decompose(gv.from.p, gv.from.q, gv.from.s);
+    this.scene.attach(gv.holder);
+  }
+
+  /** grillz: the finale gleam across the band (0..1, decays). */
+  grillGleam() { if (this.grill) this.grill.gleam = 1; }
+
+  /** Is the grill resting on the teeth right now (not flying, not on the tray)? */
+  get grillInMouth(): boolean { return !!this.grill && this.grill.mode === 'mouth'; }
+
+  private setGrillPick(on: boolean) {
+    const gv = this.grill;
+    if (!gv || gv.onPick === on) return;
+    gv.onPick = on;
+    for (const p of gv.pick) {
+      const i = this.pickSmall.indexOf(p);
+      if (on && i < 0) this.pickSmall.push(p);
+      else if (!on && i >= 0) this.pickSmall.splice(i, 1);
+    }
+  }
+
+  private landOnTray() {
+    const gv = this.grill!;
+    this.traySeat!.add(gv.holder);
+    gv.holder.position.copy(gv.center).multiplyScalar(-1);
+    gv.holder.quaternion.identity();
+    gv.holder.scale.setScalar(1);
+    gv.mode = 'tray';
+  }
+
+  /** World pose the holder has when resting on the tray seat, or on the teeth (`mouth`, lifted by k of LIFT). */
+  private grillPose(where: 'tray' | 'mouth', lift: number, p: THREE.Vector3, q: THREE.Quaternion, s: THREE.Vector3) {
+    const gv = this.grill!;
+    if (where === 'tray') {
+      const seat = this.traySeat!;
+      seat.updateMatrixWorld(true);
+      this.tmpM.makeTranslation(-gv.center.x, -gv.center.y, -gv.center.z).premultiply(seat.matrixWorld);
+    } else {
+      this.upper.updateMatrixWorld(true);
+      this.tmpM.makeTranslation(0, LIFT.y * lift, LIFT.z * lift).premultiply(this.upper.matrixWorld);
+    }
+    this.tmpM.decompose(p, q, s);
+  }
+
+  /** Per frame (grillz): place the tray beside the view, fly the grill, glint the gems. */
+  updateGrill(dt: number, time: number, camera: THREE.Camera) {
+    const gv = this.grill, tray = this.tray;
+    if (!gv || !tray) return;
+    const m = this.model;
+    // the tray rides with the camera at trayNdc, 7 units out, facing the viewer
+    const onTray = gv.mode !== 'mouth' && gv.mode !== 'press';
+    this.trayShow = onTray ? Math.min(1, this.trayShow + dt * 5) : Math.max(0, this.trayShow - dt * 4);
+    tray.visible = this.trayShow > 0.01;
+    if (tray.visible) {
+      const cam = camera as THREE.PerspectiveCamera;
+      const dir = this.tmpV.set(this.trayNdc.x, this.trayNdc.y, 0.5).unproject(cam).sub(cam.position).normalize();
+      tray.position.copy(cam.position).addScaledVector(dir, 7);
+      tray.quaternion.copy(cam.quaternion);
+      tray.scale.setScalar(0.5 * this.trayScale * (0.35 + 0.65 * easeOut(this.trayShow)));
+      tray.updateMatrixWorld(true);
+    }
+    const P = this.tmpV2, Q = this.tmpQ, S = this.tmpV3;
+    switch (gv.mode) {
+      case 'lift': {
+        gv.t = Math.min(1, gv.t + dt / 0.22);
+        const k = easeOut(gv.t);
+        gv.holder.position.set(0, LIFT.y * k, LIFT.z * k);
+        if (gv.t >= 1) {
+          gv.holder.updateMatrixWorld(true);
+          gv.holder.matrixWorld.decompose(gv.from.p, gv.from.q, gv.from.s);
+          this.scene.attach(gv.holder);
+          gv.mode = 'toTray';
+          gv.t = 0;
+        }
+        break;
+      }
+      case 'toTray':
+      case 'toMouth': {
+        gv.t = Math.min(1, gv.t + dt / 0.6);
+        const k = gv.t * gv.t * (3 - 2 * gv.t);
+        this.grillPose(gv.mode === 'toTray' ? 'tray' : 'mouth', 1, P, Q, S);
+        gv.holder.position.lerpVectors(gv.from.p, P, k);
+        gv.holder.position.y += Math.sin(Math.PI * k) * 1.2;
+        gv.holder.quaternion.slerpQuaternions(gv.from.q, Q, k);
+        gv.holder.scale.lerpVectors(gv.from.s, S, k);
+        gv.holder.rotation.z += Math.sin(Math.PI * k) * 0.35 * (gv.mode === 'toTray' ? 1 : -1);
+        if (gv.t >= 1) {
+          if (gv.mode === 'toTray') { this.landOnTray(); this.onGrillLand?.('tray'); }
+          else {
+            this.upper.add(gv.holder);
+            gv.holder.position.set(0, LIFT.y, LIFT.z);
+            gv.holder.quaternion.identity();
+            gv.holder.scale.setScalar(1);
+            gv.mode = 'press';
+            gv.t = 0;
+          }
+        }
+        break;
+      }
+      case 'press': {
+        gv.t = Math.min(1, gv.t + dt / 0.16);
+        const k = 1 - gv.t * gv.t;
+        gv.holder.position.set(0, LIFT.y * k, LIFT.z * k);
+        if (gv.t >= 1) {
+          gv.holder.position.set(0, 0, 0);
+          gv.mode = 'mouth';
+          this.setGrillPick(true);
+          this.onGrillLand?.('mouth');
+        }
+        break;
+      }
+      default: break;
+    }
+    // the teeth under the grill hide their marker rings and their tartar while it sits on them
+    const covered = (gv.mode === 'mouth' || gv.mode === 'lift') && m.grill!.state !== 'back';
+    if (covered !== this.grillCovers) {
+      this.grillCovers = covered;
+      for (const i of GRILL_TEETH) {
+        const tv = this.teeth[i];
+        if (tv?.ring && tv.ringFade < 0) tv.ring.visible = !covered;
+        if (tv?.sore) tv.sore.visible = !covered && !!tv.ring;
+      }
+      for (const dv of this.deposits.values()) {
+        if (!GRILL_TEETH.includes(dv.dep.tooth) || dv.dep.popped || dv.dep.hidden) continue;
+        dv.mesh.visible = !covered;
+        const k = this.pickSmall.indexOf(dv.mesh);
+        if (covered && k >= 0) this.pickSmall.splice(k, 1);
+        else if (!covered && k < 0) this.pickSmall.push(dv.mesh);
+      }
+    }
+    // gems: cloudy until buffed, then bright; a finished gem glints now and then
+    const byId = new Map(m.grill!.gems.map((x) => [x.id, x]));
+    for (const gw of gv.gems.values()) {
+      const gem = byId.get(gw.id);
+      if (!gem) continue;
+      const s = gem.shine;
+      // cloudy: a dull smoky grey stone; buffed: the ice-white GLB colour with a glow
+      const cloudy = this.tmpC.setRGB(0.3, 0.3, 0.31);
+      gw.mat.color.copy(gw.color).lerp(cloudy, (1 - s) * 0.85);
+      gw.mat.roughness = 0.62 - 0.56 * s;
+      const buffing = m.time - gem.lastBuff < 0.12 ? 0.5 : 0;
+      const glint = gem.done ? Math.pow(Math.max(0, Math.sin(time * 2.2 + gw.phase)), 12) * 2.6 : 0;
+      gw.mat.emissive.copy(gw.emissive).lerp(GEM_ICE, s);
+      gw.mat.emissiveIntensity = 0.05 + 1.25 * s * s + buffing + glint + gw.pop * 2.4;
+      if (gw.pop > 0) gw.pop = Math.max(0, gw.pop - dt * 3);
+      gw.mesh.scale.setScalar((gw.mesh.userData.base ?? (gw.mesh.userData.base = gw.mesh.scale.x)) * (1 + gw.pop * 0.45));
+    }
+    if (gv.bodyMat) {
+      gv.gleam = Math.max(0, gv.gleam - dt * 0.8);
+      gv.bodyMat.emissiveIntensity = gv.gleam * 0.55 * (0.6 + 0.4 * Math.sin(time * 18));
+    }
+  }
+
+  /** A gem was finished: it pops. */
+  gemPop(id: number) { const gw = this.grill?.gems.get(id); if (gw) gw.pop = 1; }
+
+  /** World position of a gem. */
+  gemWorld(id: number, out: THREE.Vector3): THREE.Vector3 | null {
+    const gw = this.grill?.gems.get(id);
+    return gw ? gw.mesh.getWorldPosition(out) : null;
+  }
+
+  /** Centre of the grill, world space (for labels and the hold ring). */
+  grillWorld(out: THREE.Vector3): THREE.Vector3 | null {
+    const gv = this.grill;
+    if (!gv) return null;
+    return gv.holder.localToWorld(out.copy(gv.center));
+  }
+
+  /**
+   * Grab assist: does the pointer ray through (ndcX, ndcY) cross the grill's footprint (its bounding box in holder
+   * space, grown by `pad`)? The gaps between the plates and the tooth edges peeking out count as the grill.
+   */
+  grillUnder(ndcX: number, ndcY: number, camera: THREE.Camera, pad = 0.1): boolean {
+    const gv = this.grill;
+    if (!gv || gv.mode !== 'mouth') return false;
+    if (!this.grillBox) {
+      gv.holder.updateMatrixWorld(true);
+      const inv = this.tmpM.copy(gv.holder.matrixWorld).invert();
+      const box = new THREE.Box3();
+      for (const o of gv.pick) {
+        const m = o as THREE.Mesh;
+        if (!m.geometry) continue;
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        box.union(m.geometry.boundingBox!.clone().applyMatrix4(this.tmpQM.multiplyMatrices(inv, m.matrixWorld)));
+      }
+      this.grillBox = box;
+    }
+    this.raycaster.setFromCamera(this.ndc.set(ndcX, ndcY), camera);
+    const ray = this.raycaster.ray.clone().applyMatrix4(this.tmpQM.copy(gv.holder.matrixWorld).invert());
+    return ray.intersectsBox(this.grillBox.clone().expandByScalar(pad));
+  }
+  private grillBox: THREE.Box3 | null = null;
+  private tmpQM = new THREE.Matrix4();
+
+  /** The gem to buff near a world point on the grill: the nearest unfinished one within `radius`, else the nearest. */
+  gemNear(p: THREE.Vector3, radius: number): number {
+    const gv = this.grill;
+    if (!gv) return -1;
+    const byId = new Map(this.model.grill!.gems.map((x) => [x.id, x]));
+    let best = -1, bd = radius * radius, any = -1, ad = radius * radius;
+    for (const gw of gv.gems.values()) {
+      const d = gw.mesh.getWorldPosition(this.tmpV3).distanceToSquared(p);
+      if (d < ad) { ad = d; any = gw.id; }
+      if (!byId.get(gw.id)?.done && d < bd) { bd = d; best = gw.id; }
+    }
+    return best >= 0 ? best : any;
+  }
+
   // ---------------------------------------------------------------- building helpers
 
   /** Remember a GLB clone's geometry and materials: they belong to the loader cache and are never disposed here. */
@@ -915,6 +1327,7 @@ export class MouthScene {
     hit.kind = 'none';
     hit.tooth = -1;
     hit.pocket = -1;
+    hit.gem = -1;
     this.hits.length = 0;
     this.raycaster.intersectObjects(this.pickSmall, false, this.hits);
     let best: THREE.Intersection | undefined;
@@ -941,6 +1354,7 @@ export class MouthScene {
     const kind = (obj.userData.kind || 'soft') as HitKind;
     hit.kind = kind;
     if (kind === 'pocket') { hit.pocket = obj.userData.pocket as number; hit.tooth = obj.userData.index as number; return hit; }
+    if (kind === 'grill') { hit.gem = (obj.userData.gem as number) ?? -1; return hit; }
     if (kind === 'bracket') {
       const owners = obj.userData.owners as number[] | undefined;
       hit.tooth = owners && best.instanceId !== undefined ? owners[best.instanceId] ?? -1 : (obj.userData.index as number);
@@ -1471,6 +1885,7 @@ export class MouthScene {
   /** Render the current state with `camera` and return a small JPEG (in the same task, since the buffer is not preserved). */
   snapshot(renderer: THREE.WebGLRenderer, camera: THREE.Camera, width = 480): string | null {
     const hide: THREE.Object3D[] = [this.toolRoot, this.fx.group, this.wrapRing, ...this.markers];
+    if (this.tray) hide.push(this.tray);
     for (const tv of this.teeth) { if (tv?.ring) hide.push(tv.ring); if (tv?.gelShell) hide.push(tv.gelShell); }
     const was = hide.map((o) => o.visible);
     try {
