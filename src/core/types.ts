@@ -182,6 +182,8 @@ export interface CleanSetup {
   tutorial: boolean;        // guided steps (school phase)
   parSeconds: number;
   lines: string[];          // chatty / flavour lines the patient can say
+  /** Difficulty rules for this clean (DESIGN 11.5), filled by the sim from state.difficulty and the player's title. */
+  rules: { snapAt: number; starShift: number; fiveStarPar: number };
 }
 
 export interface CleanResult {
