@@ -8,15 +8,62 @@
 // the cookie copy is a compact backup with a hard budget of MAX_CHUNKS chunks (~7.6 KB): history and
 // today's patients are dropped from it, and if it still does not fit, no cookie is written at all.
 // The loader prefers localStorage and only falls back to the cookie when localStorage is empty.
+//
+// Save slots (3): each slot is its own localStorage entry; slot 1 keeps the original key, so a save made
+// before slots existed simply shows up as slot 1. The compact cookie backup covers only the slot written
+// last (its slot number is in fb_meta), because three cookie copies would approach the header limit.
+// Each localStorage entry also carries a small `head` summary so the title screen can list slots without
+// decoding whole saves.
 import LZString from 'lz-string';
 import type { GameState } from './types';
+import { DISTRICTS } from '../data/city';
 
 export const SAVE_VERSION = 1;
 const PREFIX = 'fb_s';
 const META = 'fb_meta';
 const CHUNK = 3800;
 const MAX_CHUNKS = 2;          // ~7.6 KB: Node/Vite reject > 16 KB of headers (431), so stay far below
-const LS_KEY = 'flossboss.save';
+const LS_KEY = 'flossboss.save';          // slot 1 (the original single-save key)
+const LS_SLOT = 'flossboss.slot';         // the active slot
+export const SLOT_COUNT = 3;
+export type SlotId = 1 | 2 | 3;
+export const SLOT_IDS: SlotId[] = [1, 2, 3];
+const lsKey = (slot: SlotId) => (slot === 1 ? LS_KEY : `${LS_KEY}.${slot}`);
+
+/** What the slot picker shows without decoding the whole save. */
+export interface SlotHead {
+  name: string; avatar: number; title: string; phase: GameState['phase'];
+  day: number; cash: number; cityPct: number | null; difficulty: string;
+  goldenMolar: boolean;
+}
+export interface SlotInfo { slot: SlotId; exists: boolean; savedAt: number; head: SlotHead | null }
+
+export function activeSlot(): SlotId {
+  try {
+    const v = Number(localStorage.getItem(LS_SLOT));
+    if (v === 1 || v === 2 || v === 3) return v;
+  } catch { /* ignore */ }
+  return 1;
+}
+export function setActiveSlot(slot: SlotId): void {
+  try { localStorage.setItem(LS_SLOT, String(slot)); } catch { /* ignore */ }
+}
+
+function headOf(state: GameState): SlotHead {
+  let cityPct: number | null = null;
+  const city = (state as Partial<GameState>).city;
+  if (Array.isArray(city) && city.length) {
+    let num = 0, den = 0;
+    for (const d of city) { const pop = DISTRICTS[d.id]?.population ?? 1; num += d.index * pop; den += pop; }
+    cityPct = den ? Math.round((num / den) * 100) : null;
+  }
+  return {
+    name: state.player?.name ?? 'Hygienist', avatar: state.player?.avatar ?? 0, title: state.player?.title ?? '',
+    phase: state.phase, day: state.day, cash: Math.round(state.cash), cityPct,
+    difficulty: (state as Partial<GameState>).difficulty ?? 'standard',
+    goldenMolar: !!(state as Partial<GameState>).finale?.won,
+  };
+}
 const LS_SETTINGS = 'flossboss.settings';
 const TEN_YEARS = 60 * 60 * 24 * 365 * 10;
 
@@ -80,7 +127,7 @@ function clearCookieSave(): void {
   for (const k of Object.keys(c)) if (k.startsWith(PREFIX) || k === META) setCookie(k, '', 0);
 }
 
-function writeCookies(data: string, savedAt: number): boolean {
+function writeCookies(data: string, savedAt: number, slot: SlotId): boolean {
   const chunks: string[] = [];
   for (let i = 0; i < data.length; i += CHUNK) chunks.push(data.slice(i, i + CHUNK));
   if (chunks.length > MAX_CHUNKS) return false;
@@ -90,15 +137,15 @@ function writeCookies(data: string, savedAt: number): boolean {
     if (old[PREFIX + i] === undefined) break;
     setCookie(PREFIX + i, '', 0);
   }
-  setCookie(META, `${chunks.length}|${savedAt}|${checksum(data)}`);
+  setCookie(META, `${chunks.length}|${savedAt}|${checksum(data)}|${slot}`);
   return true;
 }
 
-function readCookies(): { data: string; savedAt: number } | null {
+function readCookies(): { data: string; savedAt: number; slot: SlotId } | null {
   const c = getCookies();
   const meta = c[META];
   if (!meta) return null;
-  const [n, at, sum] = meta.split('|');
+  const [n, at, sum, sl] = meta.split('|');
   const count = Number(n);
   if (!count || count > 64) return null;
   let data = '';
@@ -108,25 +155,26 @@ function readCookies(): { data: string; savedAt: number } | null {
     data += part;
   }
   if (checksum(data) !== sum) return null;
-  return { data, savedAt: Number(at) || 0 };
+  const slot = (Number(sl) === 2 || Number(sl) === 3 ? Number(sl) : 1) as SlotId;
+  return { data, savedAt: Number(at) || 0, slot };
 }
 
 export interface SaveInfo { ok: boolean; bytes: number; cookie: boolean; local: boolean }
 
-export function saveGame(state: GameState): SaveInfo {
+export function saveGame(state: GameState, slot: SlotId = activeSlot()): SaveInfo {
   const savedAt = Date.now();
   let cookie = false;
   let local = false;
   const full = encodeSave(state);
   try {
     const compact = trimmedForCookie(state);
-    if (compact) cookie = writeCookies(compact, savedAt);
+    if (compact) cookie = writeCookies(compact, savedAt, slot);
     else clearCookieSave();
   } catch (e) {
     console.warn('cookie save failed', e);
   }
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ savedAt, data: full }));
+    localStorage.setItem(lsKey(slot), JSON.stringify({ savedAt, data: full, head: headOf(state) }));
     local = true;
   } catch {
     /* private mode or quota */
@@ -134,11 +182,11 @@ export function saveGame(state: GameState): SaveInfo {
   return { ok: cookie || local, bytes: full.length, cookie, local };
 }
 
-export function loadGame(): GameState | null {
-  const fromCookie = (() => { try { return readCookies(); } catch { return null; } })();
+export function loadGame(slot: SlotId = activeSlot()): GameState | null {
+  const fromCookie = (() => { try { const c = readCookies(); return c && c.slot === slot ? c : null; } catch { return null; } })();
   const fromLocal = (() => {
     try {
-      const raw = localStorage.getItem(LS_KEY);
+      const raw = localStorage.getItem(lsKey(slot));
       if (!raw) return null;
       const o = JSON.parse(raw) as { savedAt: number; data: string };
       return o && o.data ? o : null;
@@ -156,14 +204,50 @@ export function loadGame(): GameState | null {
   return null;
 }
 
-export function hasSave(): boolean {
-  return loadGame() !== null;
+export function hasSave(slot: SlotId = activeSlot()): boolean {
+  return loadGame(slot) !== null;
 }
 
-export function deleteSave(): void {
-  const c = getCookies();
-  for (const k of Object.keys(c)) if (k.startsWith(PREFIX) || k === META) setCookie(k, '', 0);
-  try { localStorage.removeItem(LS_KEY); } catch { /* ignore */ }
+/** True when any slot holds a save. */
+export function anySave(): boolean {
+  return SLOT_IDS.some((s) => listSlots()[s - 1].exists);
+}
+
+export function deleteSave(slot: SlotId = activeSlot()): void {
+  try {
+    const cookie = readCookies();
+    if (!cookie || cookie.slot === slot) clearCookieSave();
+  } catch { /* ignore */ }
+  try { localStorage.removeItem(lsKey(slot)); } catch { /* ignore */ }
+}
+
+/** Every slot with its summary (decodes a slot only when its head is missing, for saves made before slots). */
+export function listSlots(): SlotInfo[] {
+  return SLOT_IDS.map((slot) => {
+    try {
+      const raw = localStorage.getItem(lsKey(slot));
+      if (raw) {
+        const o = JSON.parse(raw) as { savedAt: number; data: string; head?: SlotHead };
+        if (o && o.data) {
+          let head = o.head ?? null;
+          if (!head) { const st = decodeSave(o.data); head = st ? headOf(st) : null; }
+          if (head) return { slot, exists: true, savedAt: o.savedAt || 0, head };
+        }
+      }
+    } catch { /* fall through */ }
+    // localStorage empty for this slot: the cookie backup may still hold it
+    try {
+      const c = readCookies();
+      if (c && c.slot === slot) { const st = decodeSave(c.data); if (st) return { slot, exists: true, savedAt: c.savedAt, head: headOf(st) }; }
+    } catch { /* ignore */ }
+    return { slot, exists: false, savedAt: 0, head: null };
+  });
+}
+
+/** The first slot without a save, or null when all three are used. */
+export function firstEmptySlot(): SlotId | null {
+  const s = listSlots().find((x) => !x.exists);
+  return s ? s.slot : null;
 }
 
 // Export and import as a copyable text code (Settings screen).
