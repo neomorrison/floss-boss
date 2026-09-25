@@ -1,6 +1,7 @@
 // New game: name, one of four avatars, the difficulty (Relaxed / Standard / Veteran, DESIGN 11.5) and,
 // after a retirement, the Legacy shop and the perks to bring into the run (DESIGN 11.4). Then hygiene school.
 import { loadLegacy } from '../../core/legacy';
+import type { SlotId } from '../../core/save';
 import type { Difficulty } from '../../core/types';
 import { AVATAR_COUNT } from '../../data/assets';
 import { DIFFICULTIES, DIFFICULTY_ORDER } from '../../data/difficulty';
@@ -18,7 +19,9 @@ const NAME_IDEAS = ['Alex', 'Sam', 'Jordan', 'Riley', 'Casey', 'Morgan', 'Quinn'
 
 const DIFF_ICON: Record<Difficulty, string> = { relaxed: 'heart', standard: 'target', veteran: 'bolt' };
 
-export function newGameScreen(): Screen {
+export function newGameScreen(params: Record<string, unknown> = {}): Screen {
+  // the title screen picks the slot this run saves into (an empty one, or the one a retired career just left)
+  const targetSlot = params.slot as SlotId | undefined;
   let avatar = 0;
   let difficulty: Difficulty = 'standard';
   const legacy = loadLegacy();
@@ -63,7 +66,7 @@ export function newGameScreen(): Screen {
   const begin = () => {
     const name = input.value.trim().replace(/\s+/g, ' ').slice(0, 16) || NAME_IDEAS[Math.floor(Math.random() * NAME_IDEAS.length)];
     start.disabled = true;
-    startNewGame(name, avatar, { difficulty, legacyPerks: shop?.perks() ?? [] });
+    startNewGame(name, avatar, { difficulty, legacyPerks: shop?.perks() ?? [], slot: targetSlot });
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); begin(); } });
 

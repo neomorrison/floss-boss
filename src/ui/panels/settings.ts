@@ -1,6 +1,6 @@
 // Settings: volumes, quality, reduced motion, haptics, hints, game options (auto-pause, huddle, auto-raise),
 // save export/import, reset.
-import { deleteSave, exportSave, importSave, saveGame } from '../../core/save';
+import { activeSlot, deleteSave, exportSave, importSave, saveGame } from '../../core/save';
 import { store } from '../../core/store';
 import { go } from '../app';
 import { h } from '../dom';
@@ -63,7 +63,8 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
     go(state.phase === 'school' ? 'school' : 'hub');
   };
   const doReset = async () => {
-    const ok = await confirmModal({ title: 'Delete your save?', text: 'Your practice, team and cash are gone for good. This cannot be undone.', confirm: 'Delete save', danger: true, icon: 'trash' });
+    // Reset only ever touches the slot on screen: the other two saves are untouched
+    const ok = await confirmModal({ title: 'Delete your save?', text: `Save slot ${activeSlot()}, your practice, team and cash, is gone for good. This cannot be undone.`, confirm: 'Delete save', danger: true, icon: 'trash' });
     if (!ok) return;
     deleteSave();
     store.set(null);
@@ -96,7 +97,7 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
       row('hand', 'Haptics', 'Small buzzes on supported devices', toggle(st.haptics, (v) => updateSettings({ haptics: v }), 'Haptics')),
       row('bulb', 'Hints', 'Tip line under the clock', toggle(st.showHints, (v) => updateSettings({ showHints: v }), 'Hints')),
     ),
-    sectionTitle('Save', 'export', h('span.small.muted', 'Saved on this device automatically')),
+    sectionTitle('Save', 'export', h('span.small.muted', inGame ? `Save slot ${activeSlot()}  ·  saved automatically` : 'Saved on this device automatically')),
     h('div.list',
       inGame ? h('div.list-row.list-col',
         h('div.row.row-between.row-wrap', h('div.list-label', h('b', 'Export'), h('span', 'Copy a code to move your game to another device')), btn('Show code', { variant: 'ghost', size: 'sm', icon: 'export', onClick: doExport })),
@@ -109,7 +110,7 @@ export function settingsContent(inGame: boolean, rerender: () => void): HTMLElem
       ),
     ),
     inGame ? h('div.settings-actions',
-      btn('Title screen', { variant: 'ghost', icon: 'home', onClick: () => { persist(); go('title'); } }),
+      btn('Back to title', { variant: 'ghost', icon: 'home', onClick: () => { persist(); go('title'); } }),
       btn('Delete save', { variant: 'danger', icon: 'trash', onClick: doReset }),
     ) : null,
     h('div.settings-foot.tiny.faint', 'Floss Boss v1.0  ·  Made with three.js'),

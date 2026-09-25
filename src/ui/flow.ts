@@ -1,5 +1,6 @@
 // Game lifecycle flows: new game, continue (with offline earnings), import.
 import { duration, money } from '../core/format';
+import { loadGame, setActiveSlot, type SlotId } from '../core/save';
 import { store } from '../core/store';
 import type { Difficulty, GameState, LegacyPerkId, OfflineReport } from '../core/types';
 import { newGameWith } from './endgame';
@@ -15,7 +16,10 @@ import { attempt, tryRun } from './safe';
 import { toast } from './toasts';
 import { btn } from './widgets';
 
-export function startNewGame(name: string, avatar: number, opts: { difficulty?: Difficulty; legacyPerks?: LegacyPerkId[] } = {}): void {
+export function startNewGame(name: string, avatar: number, opts: { difficulty?: Difficulty; legacyPerks?: LegacyPerkId[]; slot?: SlotId } = {}): void {
+  // the target slot (an empty one picked on the title, or the slot a retired career just left) is set
+  // before the state exists, so the first autosave below lands in it rather than whatever was active
+  if (opts.slot) setActiveSlot(opts.slot);
   const r = tryRun(() => newGameWith({ name, avatar, difficulty: opts.difficulty ?? 'standard', legacyPerks: opts.legacyPerks ?? [] }));
   if (!r.ok) {
     sfx('error');
@@ -47,6 +51,21 @@ export function continueGame(): void {
   store.commit({ saveNow: true });
   go('hub');
   if (off && off.credit > 0) showOffline(off, cashBefore);
+}
+
+/** Slot picker "Load": make the slot active, install its save and run the same startup as Continue
+ * (migrate, then offline earnings). Returns false when the slot turned out to be empty or corrupt. */
+export function loadSlot(slot: SlotId): boolean {
+  setActiveSlot(slot);
+  const state = loadGame(slot);
+  if (!state) {
+    sfx('error');
+    toast({ text: 'That save could not be loaded', kind: 'bad' });
+    return false;
+  }
+  loadState(state);
+  continueGame();
+  return true;
 }
 
 export function showOffline(off: OfflineReport, cashBefore: number): void {

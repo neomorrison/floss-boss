@@ -1,6 +1,7 @@
 // Pure UI helpers (no DOM): labels, summaries, chart geometry. Unit tested in tests/ui.test.ts.
 import type { CaseType, Clinic, DayPatient, DayReport, SimEvent, ToolSlot } from '../core/types';
 import type { Mood } from '../data/assets';
+import type { SlotId, SlotInfo } from '../core/save';
 import { CASES, MASTERY_NAMES, MASTERY_PERKS, MASTERY_TIERS } from '../data/cases';
 import { TOOLS, type ToolTier } from '../data/tools';
 
@@ -227,4 +228,45 @@ export function plural(n: number, one: string, many = one + 's'): string {
 /** Remove em dashes from any string that reaches the screen (sim text included). */
 export function noDash(s: string): string {
   return s.replace(/\s*\u2014\s*/g, ', ');
+}
+
+// ---------------------------------------------------------------- save slots (title screen)
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Short relative time for a slot's "last played" line ("2 h ago", "Yesterday"). */
+export function relativeTime(savedAt: number, now: number = Date.now()): string {
+  if (!savedAt) return '';
+  const ms = Math.max(0, now - savedAt);
+  const min = ms / 60000;
+  if (min < 1) return 'Just now';
+  if (min < 60) return `${Math.floor(min)} min ago`;
+  const hr = min / 60;
+  if (hr < 24) return `${Math.floor(hr)} h ago`;
+  if (hr < 48) return 'Yesterday';
+  const day = hr / 24;
+  if (day < 7) return `${Math.floor(day)} d ago`;
+  const d = new Date(savedAt);
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+export interface TitleButtons {
+  showContinue: boolean;      // "Continue": load the active slot straight in
+  showLoadGame: boolean;      // active slot is empty but another slot has a save: open the picker instead
+  showSaves: boolean;         // a secondary way into the picker (hidden when Load game already covers it)
+  newGameSlot: SlotId | null; // the slot New Game should jump straight into; null when all three are full
+}
+
+/** Which title buttons show, from the three slots' state. Pure so it is unit testable without the DOM. */
+export function titleButtonState(slots: SlotInfo[], active: SlotId, loaded: boolean): TitleButtons {
+  const activeExists = slots.find((s) => s.slot === active)?.exists ?? false;
+  const anyExists = slots.some((s) => s.exists);
+  const showContinue = loaded && activeExists;
+  const showLoadGame = !showContinue && anyExists;
+  return {
+    showContinue,
+    showLoadGame,
+    showSaves: anyExists && !showLoadGame,
+    newGameSlot: slots.find((s) => !s.exists)?.slot ?? null,
+  };
 }

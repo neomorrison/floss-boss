@@ -3,7 +3,6 @@
 // Gala (card, showcase clean, result), the credits, the Legacy page and the Retire / Keep running choice.
 // `checkCeremonies` runs from the hub frame and queues whatever the save says was not celebrated yet.
 import { EMPLOYER_BOSS } from '../core/constants';
-import { deleteSave } from '../core/save';
 import { money } from '../core/format';
 import { store } from '../core/store';
 import type { DistrictId, GameState, OfficeTierId } from '../core/types';
@@ -522,7 +521,8 @@ export async function retireFlow(): Promise<void> {
     sfx('level_up');
     requestAnimationFrame(() => confetti(m.el, 80));
   });
-  deleteSave();
+  // the retired career stays saved in its slot (a reload on the New Game screen must not lose it): the
+  // next run overwrites it there once it actually starts (src/ui/flow.ts startNewGame)
   store.set(null);
   go('newgame');
 }

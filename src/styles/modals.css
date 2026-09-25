@@ -348,3 +348,34 @@
   .shade-strip { gap: 2px; }
   .mastery-note { padding-left: 0; }
 }
+
+/* ------------------------------------------------------------ Saves picker (title screen) */
+.modal-saves .modal-body { padding-top: 6px; }
+.slot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.slot-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border-radius: var(--r-lg);
+  background: var(--surface-2); border: 2px solid var(--line);
+}
+.slot-card-top { display: flex; align-items: center; gap: 10px; }
+.slot-card-top .portrait { flex: none; }
+.slot-name { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-weight: 800; font-size: 17px; line-height: 1.15; }
+.slot-gold { display: inline-flex; color: var(--gold-d); }
+.slot-gold .icon { width: 16px; height: 16px; }
+.slot-sub { margin-top: 2px; }
+.slot-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.slot-stat { display: flex; flex-direction: column; gap: 1px; }
+.slot-stat-label { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
+.slot-stat .num { font-size: 14.5px; }
+.slot-played { display: flex; align-items: center; gap: 6px; }
+.slot-played .icon { width: 14px; height: 14px; }
+.slot-actions { margin-top: auto; }
+.slot-actions .btn { flex: 1; }
+.slot-card-empty { align-items: center; justify-content: center; text-align: center; min-height: 230px; border-style: dashed; background: transparent; }
+.slot-empty-mark { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--mint-l); color: var(--teal-d); }
+.slot-empty-mark .icon { width: 24px; height: 24px; }
+.slot-empty-label { font-family: var(--font-display); font-weight: 800; font-size: 15px; color: var(--ink-2); }
+@media (max-width: 640px) {
+  .slot-grid { grid-template-columns: 1fr; }
+  .slot-card-empty { min-height: 160px; }
+}
