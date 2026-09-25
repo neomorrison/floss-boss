@@ -27,21 +27,7 @@ export function cleanRules(state: GameState): CleanSetup['rules'] {
 /** Stars of a clean under the rules: the 5-star and 4-star thresholds rise by starShift (5 stars never above
  * 0.99; 3 stars and below stay put, so case mastery and Quick clean stay in reach), and 5 stars also needs
  * seconds <= fiveStarPar x par when both are known. */
-export function starsWith(quality: number, rules: CleanSetup['rules'] | null | undefined, seconds = 0, par = 0): number {
-  const sh = rules?.starShift ?? 0;
-  const r6 = (x: number) => Math.round(x * 1e6) / 1e6;   // 0.92 + 0.03 is exactly 0.95
-  const five = Math.min(0.99, r6(STAR_STEPS[0] + sh));
-  const t = STAR_STEPS.map((x, i) => (i === 0 ? five : i === 1 ? Math.min(five, r6(x + sh)) : x));
-  let stars = quality >= t[0] ? 5 : quality >= t[1] ? 4 : quality >= t[2] ? 3 : quality >= t[3] ? 2 : 1;
-  if (stars === 5 && rules && seconds > 0 && par > 0 && seconds > rules.fiveStarPar * par) stars = 4;
-  return stars;
-}
-
-/** What 5 stars needs: the quality and, when the difficulty has a time limit, the seconds. */
-export function fiveStarNeeds(rules: CleanSetup['rules'], parSeconds: number): { quality: number; seconds: number | null } {
-  const q = Math.min(0.99, STAR_STEPS[0] + rules.starShift);
-  return { quality: Math.round(q * 1000) / 1000, seconds: rules.fiveStarPar < 20 ? Math.round(rules.fiveStarPar * parSeconds) : null };
-}
+export { starsWith, fiveStarNeeds } from '../core/stars';
 
 /** Passive comfort drain multiplier of a clean: grows past level 3, capped. */
 export function comfortDrainMult(state: GameState, level: number): number {
